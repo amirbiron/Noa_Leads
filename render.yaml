@@ -11,6 +11,13 @@ envVarGroups:
         sync: false
       - key: ANTHROPIC_API_KEY
         sync: false
+  - name: noa-leads-python
+    # ננעל Python ל-3.12.7 — ברירת המחדל של Render (כיום 3.14) היא beta
+    # שאין לה prebuilt wheels ל-pydantic-core; הbuild נופל ב-Rust compile.
+    # קיים גם backend/.python-version כ-fallback.
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.7
 
 databases:
   - name: noa-leads-db
@@ -45,6 +52,7 @@ services:
       - key: CORS_ORIGINS
         sync: false
       - fromGroup: noa-leads-shared
+      - fromGroup: noa-leads-python
 
   # ===== Frontend (Next.js) =====
   - type: web
@@ -75,6 +83,7 @@ services:
           name: noa-leads-db
           property: connectionString
       - fromGroup: noa-leads-shared
+      - fromGroup: noa-leads-python
 
   # זיהוי הצעות תקועות + יצירת משימת פולואפ — כל שעה
   - type: cron
@@ -91,6 +100,7 @@ services:
           name: noa-leads-db
           property: connectionString
       - fromGroup: noa-leads-shared
+      - fromGroup: noa-leads-python
 
   # זיהוי לידים רדומים — פעם ביום ב-03:00 ישראל (00:00 UTC)
   - type: cron
@@ -107,6 +117,7 @@ services:
           name: noa-leads-db
           property: connectionString
       - fromGroup: noa-leads-shared
+      - fromGroup: noa-leads-python
 
   # סיכום יומי לטלגרם — 19:00 ישראל (16:00 UTC, IDT קיץ)
   - type: cron
@@ -123,6 +134,7 @@ services:
           name: noa-leads-db
           property: connectionString
       - fromGroup: noa-leads-shared
+      - fromGroup: noa-leads-python
 
   # סיכום שבועי — יום ראשון 08:00 ישראל (05:00 UTC)
   - type: cron
@@ -139,3 +151,4 @@ services:
           name: noa-leads-db
           property: connectionString
       - fromGroup: noa-leads-shared
+      - fromGroup: noa-leads-python

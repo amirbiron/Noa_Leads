@@ -30,11 +30,6 @@ _PATTERNS = {
     "star": re.compile(r"^\*\d{4,6}$"),
 }
 
-# קידומות שמתאימות למבנה הנייד אבל הן פלסטיניות — מסומנות בנפרד
-# אם נצטרך לוגיקה שדורשת SIM ישראלי בלבד (לא צריך כיום).
-_NON_ISRAELI_MOBILE_PREFIXES = {"056", "059"}
-
-
 def _clean(phone: str) -> str:
     """הסר רווחים, מקפים, סוגריים, נקודות. ננרמל +972/972 ל-0 מוביל."""
     cleaned = re.sub(r"[\s\-\(\)\.]", "", phone)
@@ -126,21 +121,3 @@ def normalize_for_storage(phone: str | None) -> str | None:
 
     # לא ישראלי — מקבלים כפי שהוא אחרי ניקוי
     return _clean(s)
-
-
-def to_e164(phone: str) -> str | None:
-    """
-    המרה ל-E.164 לאינטגרציות חיצוניות (WhatsApp, Twilio, Telegram links).
-    מחזיר None עבור 1-800, 1-700, *XXXX — אין להם מקבילה בינלאומית.
-    מספרי חו"ל מוחזרים כפי שהם אם הם כבר מתחילים ב-+.
-    """
-    s = phone.strip() if phone else ""
-    if not s:
-        return None
-    phone_type = classify_israeli(s)
-    if phone_type in (None, "toll_free", "premium", "star"):
-        # לא ישראלי או לא ניתן לחיוג בינלאומי
-        cleaned = re.sub(r"[\s\-\(\)\.]", "", s)
-        return cleaned if cleaned.startswith("+") else None
-    cleaned = _clean(s)
-    return "+972" + cleaned[1:]
