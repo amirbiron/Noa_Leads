@@ -26,12 +26,22 @@ logger = logging.getLogger("jobs.daily_summary")
 def _day_bounds_israel(
     now_utc: datetime,
 ) -> tuple[datetime, datetime, datetime]:
-    """מחזיר (start_of_today_utc, start_of_tomorrow_utc, end_of_tomorrow_utc)."""
+    """
+    מחזיר (start_of_today_utc, start_of_tomorrow_utc, end_of_tomorrow_utc).
+
+    כל boundary נבנה עצמאית כ-midnight של ה-date המתאים, ולא כ-start+1d.
+    הסיבה: datetime+timedelta מוסיף שעות אבסולוטיות (24/48), ובימי מעבר
+    שעון (אביב/סתיו) זה היה גורם לגבול ליפול ב-01:00 או 23:00 במקום חצות,
+    ומשימות היו נספרות ביום הלא נכון בסיכום. אותו פתרון כמו ב-
+    services/dashboard._current_week_bounds.
+    """
     local = to_israel_tz(now_utc)
     today = local.date()
+    tomorrow = today + timedelta(days=1)
+    day_after = today + timedelta(days=2)
     start_today = datetime.combine(today, time(0, 0, tzinfo=ISRAEL_TZ))
-    start_tomorrow = start_today + timedelta(days=1)
-    end_tomorrow = start_today + timedelta(days=2)
+    start_tomorrow = datetime.combine(tomorrow, time(0, 0, tzinfo=ISRAEL_TZ))
+    end_tomorrow = datetime.combine(day_after, time(0, 0, tzinfo=ISRAEL_TZ))
     return (
         start_today.astimezone(timezone.utc),
         start_tomorrow.astimezone(timezone.utc),
