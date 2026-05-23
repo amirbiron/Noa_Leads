@@ -153,12 +153,19 @@ async def list_leads(
         # "נועה תזכור לפעמים רק 'הבחור מאינטל' או 'הטלפון שמסתיים ב-4821'".
         term = search.strip()
         digits = "".join(c for c in term if c.isdigit())
-        pattern = f"%{term}%"
+        # escape תווי ILIKE wildcard בתוך הקלט — אחרת "50%" היה תופס כל
+        # מי שמתחיל ב-50, ו-"test_name" היה מתאים ל-"testXname".
+        # backslash ראשון בסדר ה-replacement כדי לא לדפוק את ה-escapes הבאים.
+        escaped_term = (
+            term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        )
+        pattern = f"%{escaped_term}%"
         filters = [
-            Lead.full_name.ilike(pattern),
-            Lead.organization_name.ilike(pattern),
+            Lead.full_name.ilike(pattern, escape="\\"),
+            Lead.organization_name.ilike(pattern, escape="\\"),
         ]
         if digits:
+            # ספרות בלבד — אין בהן % או _, אז אין צורך ב-escape
             digit_pattern = f"%{digits}%"
             # התאמה ישירה (אם הטלפון לא מנורמל) — לדוגמה "050-1234567" יכיל "1234"
             filters.append(Lead.phone.ilike(digit_pattern))

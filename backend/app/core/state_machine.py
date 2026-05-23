@@ -7,7 +7,7 @@ State machine ללידים — לפי tech-spec סעיף 5.
 הקובץ הזה רק *מגדיר* את חוקי המעבר. הביצוע נעשה ב-services/lead_actions.py.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from app.constants import (
     CLOSED_LEAD_STATUSES,
