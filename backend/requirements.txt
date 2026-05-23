@@ -1,0 +1,39 @@
+# ===== Web framework =====
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-multipart==0.0.20
+
+# ===== DB =====
+sqlalchemy[asyncio]==2.0.36
+asyncpg==0.30.0
+alembic==1.14.0
+
+# ===== Validation & settings =====
+pydantic==2.10.4
+pydantic-settings==2.7.1
+email-validator==2.2.0
+
+# ===== Auth =====
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+
+# ===== HTTP & external APIs =====
+httpx==0.28.1
+anthropic==0.42.0
+
+# ===== Google integrations (פאזה 2) =====
+google-api-python-client==2.157.0
+google-auth==2.37.0
+google-auth-oauthlib==1.2.1
+
+# ===== Telegram =====
+python-telegram-bot==21.9
+
+# ===== Misc =====
+python-dateutil==2.9.0.post0
+pytz==2024.2
+
+# ===== Dev/Test =====
+pytest==8.3.4
+pytest-asyncio==0.25.0
+ruff==0.8.4
