@@ -54,9 +54,11 @@ async def perform_action(
     now = datetime.now(timezone.utc)
 
     # ===== הכנת UPDATE statement =====
-    # updated_at חייב להיכתב במפורש — onupdate של ORM לא מופעל ב-Core update().
-    # זה משפיע ישירות על מיון הדשבורד (Lead.updated_at.desc()).
-    values: dict[str, Any] = {"updated_at": func.now()}
+    # שלב א': בונים values בלי updated_at — כדי לזהות פעולות "סטריליות"
+    # כמו add_internal_note שלא צריכות לבמפ את מיון הדשבורד.
+    # שלב ב' (בהמשך): אם יש לפחות שדה אחד אחר, מוסיפים updated_at=NOW()
+    # כי onupdate של ORM לא מופעל ב-Core update().
+    values: dict[str, Any] = {}
     if action.set_last_outbound:
         values["last_outbound_at"] = now
     if action.set_last_inbound:
@@ -159,8 +161,12 @@ async def _perform_with_optional_progress(
     2. אם rowcount=0 — UPDATE רגיל בלי שינוי סטטוס, מוגבל לסטטוסים פתוחים.
     """
     # ניסיון 1 — אם הליד עוד ב-NEW, מעבירים ל-IN_PROGRESS אטומית.
-    # values כבר מכיל updated_at=now (נקבע ב-caller).
-    values_with_progress = {**values, "status": LeadStatus.IN_PROGRESS.value}
+    # updated_at חובה (Core update לא מפעיל onupdate).
+    values_with_progress = {
+        **values,
+        "status": LeadStatus.IN_PROGRESS.value,
+        "updated_at": func.now(),
+    }
     stmt = (
         update(Lead)
         .where(Lead.id == lead_id, Lead.status == LeadStatus.NEW.value)
@@ -214,7 +220,7 @@ async def _perform_with_optional_progress(
     stmt2 = (
         update(Lead)
         .where(Lead.id == lead_id, Lead.status.in_(allowed_from))
-        .values(**values)
+        .values(**values, updated_at=func.now())
         .returning(Lead.id)
     )
     result2 = await db.execute(stmt2)
@@ -245,10 +251,13 @@ async def _atomic_update_with_status_guard(
     action: ActionDefinition,
 ) -> None:
     """UPDATE אטומי עם בדיקת rowcount. זורק InvalidStateTransitionError אם נכשל."""
+    # updated_at חייב להיכתב במפורש — onupdate ב-ORM לא מופעל ב-Core update().
+    # מוסיפים פה בנקודה היחידה שבאמת מבצעת UPDATE, אחרי שווידאנו ש-values אינו ריק.
+    final_values = {**values, "updated_at": func.now()}
     stmt = update(Lead).where(Lead.id == lead_id)
     if allowed_from is not None:
         stmt = stmt.where(Lead.status.in_(allowed_from))
-    stmt = stmt.values(**values).returning(Lead.id)
+    stmt = stmt.values(**final_values).returning(Lead.id)
 
     result = await db.execute(stmt)
     if result.scalar_one_or_none() is None:

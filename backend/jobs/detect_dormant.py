@@ -32,10 +32,16 @@ async def detect_dormant() -> None:
                 Lead.status.notin_(closed),
                 Lead.dormant_flag.is_(False),
                 Lead.created_at <= threshold,
-                # אין אינטראקציה — או שמעולם לא היה inbound, או שזה מזמן
+                # ליד נחשב רדום רק אם אין אינטראקציה בשני הכיוונים.
+                # אם נועה שלחה outbound לאחרונה (גם בלי תגובה) זה לא רדום —
+                # היא בעיצומו של ניסיון יצירת קשר.
                 or_(
                     Lead.last_inbound_at.is_(None),
                     Lead.last_inbound_at <= threshold,
+                ),
+                or_(
+                    Lead.last_outbound_at.is_(None),
+                    Lead.last_outbound_at <= threshold,
                 ),
             )
             .values(dormant_flag=True, updated_at=func.now())

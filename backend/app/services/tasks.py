@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import and_, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import get_settings
 from app.constants import TaskStatus, TaskType
 from app.core.exceptions import (
     InvalidStateTransitionError,
@@ -29,15 +30,19 @@ from app.utils.work_hours import (
 
 def _next_working_morning_from(d: date) -> datetime:
     """
-    מחפש את יום העבודה הקרוב מ-d והלאה — מחזיר 09:00 באותו יום ב-TZ ישראל.
-    מדלג על שבת ועל חגים. נועה לא תקבל snooze שנוחת על שבת/חג.
+    מחפש את יום העבודה הקרוב מ-d והלאה — מחזיר את שעת תחילת היום של נועה
+    (WORK_DAY_START_HOUR מההגדרות) ב-TZ ישראל. מדלג על שבת ועל חגים.
+    משתמש באותה הגדרה כמו next_working_day_start כדי להישאר עקבי.
     """
+    start_hour = get_settings().work_day_start_hour
     candidate = d
     for _ in range(14):  # safety bound
         if not is_saturday(candidate) and not is_holiday(candidate):
-            return datetime.combine(candidate, time(9, 0, tzinfo=ISRAEL_TZ))
+            return datetime.combine(
+                candidate, time(start_hour, 0, tzinfo=ISRAEL_TZ)
+            )
         candidate += timedelta(days=1)
-    return datetime.combine(candidate, time(9, 0, tzinfo=ISRAEL_TZ))
+    return datetime.combine(candidate, time(start_hour, 0, tzinfo=ISRAEL_TZ))
 
 
 # ===================== יצירה אוטומטית =====================

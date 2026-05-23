@@ -16,7 +16,6 @@ from app.schemas.template import (
 )
 from app.services.leads import get_lead_or_404
 from app.utils.template_render import (
-    SUPPORTED_VARIABLES,
     build_variable_context,
     extract_placeholders,
     render_template,
@@ -96,11 +95,15 @@ async def render_template_for_lead(
     context = build_variable_context(lead)
     rendered = render_template(template.body, context)
 
-    # זיהוי משתנים שהוזכרו ב-body אבל ה-context לא מספק להם ערך
+    # missing = כל placeholder ב-body שלא יתמלא כראוי בליד הזה:
+    # - placeholder לא נתמך בכלל (טעות איות)
+    # - placeholder נתמך אבל הליד חסר את הערך (למשל {organization} בלי ארגון)
+    # שניהם פוגעים בטקסט הסופי ושווה להציג ל-UI לפני שליחה.
     found = set(extract_placeholders(template.body))
-    supported = set(SUPPORTED_VARIABLES.keys())
-    # missing = placeholders שהיו אבל לא נתמכים בכלל
-    missing = sorted(found - supported)
+    missing = sorted(
+        p for p in found
+        if p not in context or not context[p]
+    )
 
     return TemplateRenderResponse(
         template_id=template.id,

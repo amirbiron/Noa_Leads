@@ -79,7 +79,7 @@ async def notify_new_lead(lead: Lead) -> None:
     )
     source = _SOURCE_CHANNEL_HE.get(lead.source_channel, lead.source_channel)
 
-    lines = [f"🔔 <b>ליד חדש</b>", f"<b>{name}</b>"]
+    lines = ["🔔 <b>ליד חדש</b>", f"<b>{name}</b>"]
     if lead.organization_name:
         lines[-1] += f" — {escape_telegram_html(lead.organization_name)}"
     lines.append(f"📋 {escape_telegram_html(category)}")
