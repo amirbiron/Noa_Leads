@@ -32,6 +32,7 @@ python-telegram-bot==21.9
 # ===== Misc =====
 python-dateutil==2.9.0.post0
 pytz==2024.2
+holidays==0.62
 
 # ===== Dev/Test =====
 pytest==8.3.4

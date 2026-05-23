@@ -36,8 +36,16 @@ from app.services.activities import log_activity
 # ===================== יצירה =====================
 
 async def create_lead(
-    db: AsyncSession, payload: LeadCreate, current_user_id: UUID | None
+    db: AsyncSession,
+    payload: LeadCreate,
+    current_user_id: UUID | None,
+    *,
+    create_first_response_task: bool = True,
 ) -> Lead:
+    """
+    יוצרת ליד חדש + רישום ב-audit log + (כברירת מחדל) משימת first_response.
+    הכל בטרנזקציה אחת — אם משהו נכשל, שום דבר לא נשמר.
+    """
     # אם לא צוין owner מפורש, מקצים לפי המשתמש שיצר
     owner_id = payload.owner_id or current_user_id
 
@@ -70,6 +78,11 @@ async def create_lead(
         performed_by=current_user_id,
         metadata={"source_channel": lead.source_channel},
     )
+
+    if create_first_response_task:
+        # local import — מונע circular import בין leads ↔ tasks
+        from app.services import tasks as tasks_service
+        await tasks_service.create_first_response_task(db, lead)
 
     await db.commit()
     await db.refresh(lead)
