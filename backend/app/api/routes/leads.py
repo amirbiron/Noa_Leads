@@ -14,6 +14,7 @@ from app.schemas.lead import (
     LeadCreate,
     LeadListItem,
     LeadRead,
+    LeadTransferRequest,
     LeadUpdate,
 )
 from app.services import leads as leads_service
@@ -41,6 +42,7 @@ async def list_leads(
     owner_id: UUID | None = Query(default=None),
     source_channel: str | None = Query(default=None),
     needs_attention: bool | None = Query(default=None),
+    search: str | None = Query(default=None, max_length=200),
 ) -> PaginatedResponse[LeadListItem]:
     items, total = await leads_service.list_leads(
         db,
@@ -51,6 +53,7 @@ async def list_leads(
         owner_id=owner_id,
         source_channel=source_channel,
         needs_attention=needs_attention,
+        search=search,
     )
     return PaginatedResponse[LeadListItem](
         items=[LeadListItem.model_validate(x) for x in items],
@@ -90,6 +93,17 @@ async def perform_action(
         content=payload.content,
         metadata=payload.metadata,
     )
+    return LeadRead.model_validate(lead)
+
+
+@router.post("/{lead_id}/transfer", response_model=LeadRead)
+async def transfer_lead(
+    lead_id: UUID,
+    payload: LeadTransferRequest,
+    db: DbSession,
+    user: CurrentUser,
+) -> LeadRead:
+    lead = await leads_service.transfer_lead(db, lead_id, payload, user.id)
     return LeadRead.model_validate(lead)
 
 

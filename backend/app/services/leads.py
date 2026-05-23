@@ -29,7 +29,12 @@ from app.core.state_machine import (
     REOPEN_ALLOWED_FROM,
 )
 from app.models.lead import Lead
-from app.schemas.lead import LeadCloseRequest, LeadCreate, LeadUpdate
+from app.schemas.lead import (
+    LeadCloseRequest,
+    LeadCreate,
+    LeadTransferRequest,
+    LeadUpdate,
+)
 from app.services.activities import log_activity
 
 
@@ -119,8 +124,11 @@ async def list_leads(
     owner_id: UUID | None = None,
     source_channel: str | None = None,
     needs_attention: bool | None = None,
+    search: str | None = None,
 ) -> tuple[list[Lead], int]:
     """מחזיר (items, total)."""
+    from sqlalchemy import or_
+
     base = select(Lead)
     if status:
         base = base.where(Lead.status == status)
@@ -132,6 +140,25 @@ async def list_leads(
         base = base.where(Lead.source_channel == source_channel)
     if needs_attention is not None:
         base = base.where(Lead.needs_attention == needs_attention)
+
+    if search and search.strip():
+        # חיפוש מקיף לפי האפיון: שם, ארגון, טלפון מלא, ו-4 ספרות אחרונות.
+        # "נועה תזכור לפעמים רק 'הבחור מאינטל' או 'הטלפון שמסתיים ב-4821'".
+        term = search.strip()
+        digits = "".join(c for c in term if c.isdigit())
+        pattern = f"%{term}%"
+        filters = [
+            Lead.full_name.ilike(pattern),
+            Lead.organization_name.ilike(pattern),
+        ]
+        if digits:
+            digit_pattern = f"%{digits}%"
+            # התאמה ישירה (אם הטלפון לא מנורמל) — לדוגמה "050-1234567" יכיל "1234"
+            filters.append(Lead.phone.ilike(digit_pattern))
+            # התאמה אחרי הסרת תווים שאינם ספרות — תופס "+972 50-1234567" → "972501234567"
+            normalized_phone = func.regexp_replace(Lead.phone, r"\D", "", "g")
+            filters.append(normalized_phone.ilike(digit_pattern))
+        base = base.where(or_(*filters))
 
     # ספירה
     count_stmt = select(func.count()).select_from(base.subquery())
@@ -258,6 +285,67 @@ async def close_lead(
         },
     )
 
+    await db.commit()
+    return await get_lead_or_404(db, lead_id)
+
+
+# ===================== העברה לעוזרת / בחזרה =====================
+
+async def transfer_lead(
+    db: AsyncSession,
+    lead_id: UUID,
+    payload: LeadTransferRequest,
+    current_user_id: UUID | None,
+) -> Lead:
+    """
+    מעבירה ליד למשתמש אחר (בעיקר נועה → עוזרת).
+    מעדכנת owner_id, waiting_on לפי תפקיד היעד, ומתעדת ב-activity.
+    """
+    from app.models.user import User  # local import למניעת circular
+
+    # ולידציה: היעד קיים
+    target_user = await db.execute(
+        select(User).where(User.id == payload.target_user_id)
+    )
+    target = target_user.scalar_one_or_none()
+    if target is None:
+        raise ValidationError("משתמש יעד לא נמצא.")
+
+    # waiting_on לפי תפקיד היעד: אם מעבירים לעוזרת — הכדור אצלה
+    new_waiting_on = "ASSISTANT" if target.role == "assistant" else "NOAH"
+
+    # מעבר אטומי — אסור להעביר ליד סגור
+    open_statuses = [s.value for s in OPEN_LEAD_STATUSES]
+    stmt = (
+        update(Lead)
+        .where(Lead.id == lead_id, Lead.status.in_(open_statuses))
+        .values(
+            owner_id=payload.target_user_id,
+            waiting_on=new_waiting_on,
+            updated_at=func.now(),
+        )
+        .returning(Lead.id)
+    )
+    result = await db.execute(stmt)
+    if result.scalar_one_or_none() is None:
+        existing = await db.execute(select(Lead.id).where(Lead.id == lead_id))
+        if existing.scalar_one_or_none() is None:
+            raise NotFoundError("ליד לא נמצא.")
+        raise InvalidStateTransitionError(
+            "לא ניתן להעביר ליד סגור. יש לפתוח אותו מחדש קודם."
+        )
+
+    await log_activity(
+        db,
+        lead_id=lead_id,
+        activity_type=ActivityType.OWNER_CHANGED,
+        performed_by=current_user_id,
+        content=payload.handoff_note,
+        metadata={
+            "target_user_id": str(payload.target_user_id),
+            "target_role": target.role,
+        },
+    )
     await db.commit()
     return await get_lead_or_404(db, lead_id)
 

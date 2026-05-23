@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Search } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
@@ -29,13 +29,22 @@ export default function LeadsPage() {
   const [total, setTotal] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState("");
+  const [searchInput, setSearchInput] = useState("");
+  const [search, setSearch] = useState(""); // debounced
   const [statusFilter, setStatusFilter] = useState<string>("");
+
+  // debounce כדי לא להציף את ה-API בכל הקלדה
+  useEffect(() => {
+    const t = setTimeout(() => setSearch(searchInput.trim()), 300);
+    return () => clearTimeout(t);
+  }, [searchInput]);
 
   useEffect(() => {
     setLoading(true);
+    setError(null);
     const params: Record<string, string | number> = { page: 1, page_size: 100 };
     if (statusFilter) params.status = statusFilter;
+    if (search) params.search = search;
     api
       .listLeads(params)
       .then((d) => {
@@ -46,17 +55,7 @@ export default function LeadsPage() {
         setError(err instanceof ApiError ? err.message : "שגיאה בטעינה"),
       )
       .finally(() => setLoading(false));
-  }, [statusFilter]);
-
-  const filtered = useMemo(() => {
-    if (!search.trim()) return items;
-    const q = search.trim().toLowerCase();
-    return items.filter((l) => {
-      if (l.full_name.toLowerCase().includes(q)) return true;
-      if (l.organization_name?.toLowerCase().includes(q)) return true;
-      return false;
-    });
-  }, [items, search]);
+  }, [statusFilter, search]);
 
   return (
     <AppShell title={`לידים${total ? ` (${total})` : ""}`}>
@@ -69,9 +68,9 @@ export default function LeadsPage() {
             aria-hidden
           />
           <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="חיפוש לפי שם או ארגון…"
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+            placeholder="שם, ארגון, או 4 ספרות אחרונות של טלפון…"
             className="w-full ps-9 pe-3 py-2.5 bg-white border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-gray-900"
           />
         </div>
@@ -99,7 +98,7 @@ export default function LeadsPage() {
           {error}
         </div>
       )}
-      {!loading && !error && filtered.length === 0 && (
+      {!loading && !error && items.length === 0 && (
         <EmptyState
           title={search ? "לא נמצאו התאמות" : "אין לידים עדיין"}
           hint="לחיצה על הכפתור הכחול בפינה לפתיחת ליד חדש."
@@ -107,7 +106,7 @@ export default function LeadsPage() {
       )}
 
       <ul className="space-y-2">
-        {filtered.map((lead) => {
+        {items.map((lead) => {
           const color = inferColor(lead);
           const cls = STATE_COLORS[color];
           return (

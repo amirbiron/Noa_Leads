@@ -196,6 +196,32 @@ export interface Task {
   completed_at: string | null;
 }
 
+export interface User {
+  id: string;
+  email: string;
+  name: string;
+  role: string;
+  created_at: string;
+}
+
+export interface TemplateCreate {
+  name: string;
+  channel: "whatsapp" | "email";
+  target_audience?: "private" | "organization" | "dormant" | null;
+  body: string;
+  variables?: string[] | null;
+  is_active?: boolean;
+}
+
+export interface TemplateUpdate {
+  name?: string;
+  channel?: "whatsapp" | "email";
+  target_audience?: "private" | "organization" | "dormant" | null;
+  body?: string;
+  variables?: string[] | null;
+  is_active?: boolean;
+}
+
 export type SnoozePreset =
   | "today_afternoon"
   | "tomorrow_morning"

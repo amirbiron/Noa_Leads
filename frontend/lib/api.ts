@@ -14,9 +14,12 @@ import type {
   SnoozePreset,
   Task,
   Template,
+  TemplateCreate,
   TemplateRenderResponse,
+  TemplateUpdate,
   TodayActionItem,
   TokenResponse,
+  User,
   WeeklyInsights,
 } from "./types";
 
@@ -153,6 +156,19 @@ export const api = {
   reopenLead: (leadId: string) =>
     fetcher<Lead>(`/leads/${leadId}/reopen`, { method: "POST" }),
 
+  transferLead: (
+    leadId: string,
+    payload: { target_user_id: string; handoff_note?: string },
+  ) =>
+    fetcher<Lead>(`/leads/${leadId}/transfer`, {
+      method: "POST",
+      body: payload,
+    }),
+
+  // ----- Users -----
+  getMe: () => fetcher<User>("/users/me"),
+  listUsers: () => fetcher<User[]>("/users"),
+
   // ----- Tasks -----
   listOpenTasks: () => fetcher<Task[]>("/tasks/open"),
 
@@ -168,6 +184,17 @@ export const api = {
   // ----- Templates -----
   listTemplates: (activeOnly = false) =>
     fetcher<Template[]>(`/templates?active_only=${activeOnly}`),
+
+  getTemplate: (id: string) => fetcher<Template>(`/templates/${id}`),
+
+  createTemplate: (payload: TemplateCreate) =>
+    fetcher<Template>("/templates", { method: "POST", body: payload }),
+
+  updateTemplate: (id: string, payload: TemplateUpdate) =>
+    fetcher<Template>(`/templates/${id}`, { method: "PATCH", body: payload }),
+
+  deleteTemplate: (id: string) =>
+    fetcher<void>(`/templates/${id}`, { method: "DELETE" }),
 
   renderTemplate: (templateId: string, leadId: string) =>
     fetcher<TemplateRenderResponse>(

@@ -4,20 +4,21 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   CalendarClock,
+  FileText,
   Home,
   Inbox,
-  Send,
   Users,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 // ניווט תחתון מובייל-first — 5 כפתורים גדולים, נגישים לאגודל.
+// "הצעות" נגישות מדף הבית; "ממתין" מקבל מקום קבוע כי שם הולכים פולואפים.
 const ITEMS = [
   { href: "/", label: "בית", icon: Home },
   { href: "/today", label: "היום", icon: CalendarClock },
   { href: "/leads", label: "לידים", icon: Users },
   { href: "/pending", label: "ממתין", icon: Inbox },
-  { href: "/proposals", label: "הצעות", icon: Send },
+  { href: "/templates", label: "תבניות", icon: FileText },
 ];
 
 export function BottomNav() {

@@ -100,6 +100,13 @@ class LeadUpdate(BaseModel):
 
 # ===================== סגירה / פתיחה מחדש =====================
 
+class LeadTransferRequest(BaseModel):
+    """העברת ליד לבעלים אחר (לדוגמה: נועה → עוזרת)."""
+
+    target_user_id: UUID
+    handoff_note: str | None = Field(default=None, max_length=1000)
+
+
 class LeadCloseRequest(BaseModel):
     """סגירת ליד כ-WON / LOST / ARCHIVED."""
 

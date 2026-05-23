@@ -2,13 +2,24 @@
 
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import { Phone, MessageCircle, Mail, FileText } from "lucide-react";
+import {
+  ArrowRightLeft,
+  FileText,
+  Mail,
+  MessageCircle,
+  Phone,
+  Send,
+  XCircle,
+} from "lucide-react";
 import { AppShell } from "@/components/AppShell";
+import { CloseLeadModal } from "@/components/CloseLeadModal";
 import { DynamicActionButton } from "@/components/DynamicActionButton";
 import { QuickActions } from "@/components/QuickActions";
 import { SectionHeader } from "@/components/SectionHeader";
 import { StateBadge } from "@/components/StateBadge";
+import { TemplatePickerSheet } from "@/components/TemplatePickerSheet";
 import { Timeline } from "@/components/Timeline";
+import { TransferLeadModal } from "@/components/TransferLeadModal";
 import { api, ApiError } from "@/lib/api";
 import {
   labelCategory,
@@ -39,8 +50,13 @@ export default function LeadDetailPage() {
   const [activities, setActivities] = useState<Activity[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [templateOpen, setTemplateOpen] = useState(false);
+  const [closeOpen, setCloseOpen] = useState(false);
+  const [transferOpen, setTransferOpen] = useState(false);
+  const [reopening, setReopening] = useState(false);
 
   async function load() {
+    setError(null);
     try {
       const [l, t] = await Promise.all([api.getLead(id), api.getTimeline(id)]);
       setLead(l);
@@ -49,6 +65,19 @@ export default function LeadDetailPage() {
       setError(err instanceof ApiError ? err.message : "שגיאה בטעינה");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handleReopen() {
+    setReopening(true);
+    setError(null);
+    try {
+      await api.reopenLead(id);
+      await load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "שגיאה בפתיחה מחדש");
+    } finally {
+      setReopening(false);
     }
   }
 
@@ -138,8 +167,30 @@ export default function LeadDetailPage() {
             )}
           </div>
 
-          {/* כפתור "מה עכשיו?" */}
-          <DynamicActionButton lead={lead} onActionDone={load} />
+          {/* כפתור "מה עכשיו?" — רק לליד פתוח */}
+          {!["WON", "LOST", "ARCHIVED"].includes(lead.status) && (
+            <DynamicActionButton lead={lead} onActionDone={load} />
+          )}
+
+          {/* כפתורי תבנית + העברה — רק לליד פתוח */}
+          {!["WON", "LOST", "ARCHIVED"].includes(lead.status) && (
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                onClick={() => setTemplateOpen(true)}
+                className="rounded-lg bg-white border border-gray-200 py-2.5 text-sm font-medium flex items-center justify-center gap-1.5"
+              >
+                <Send size={15} aria-hidden />
+                בחירת תבנית
+              </button>
+              <button
+                onClick={() => setTransferOpen(true)}
+                className="rounded-lg bg-white border border-gray-200 py-2.5 text-sm font-medium flex items-center justify-center gap-1.5"
+              >
+                <ArrowRightLeft size={15} aria-hidden />
+                העברה
+              </button>
+            </div>
+          )}
 
           {/* צ'יפים לסיכום שיחה */}
           <div>
@@ -147,12 +198,54 @@ export default function LeadDetailPage() {
             <QuickActions leadId={lead.id} onActionDone={load} />
           </div>
 
+          {/* סגירה / פתיחה מחדש */}
+          {!["WON", "LOST", "ARCHIVED"].includes(lead.status) ? (
+            <button
+              onClick={() => setCloseOpen(true)}
+              className="w-full rounded-lg bg-white border border-state-red/40 text-state-red py-2.5 text-sm font-medium flex items-center justify-center gap-1.5"
+            >
+              <XCircle size={15} aria-hidden />
+              סגירת ליד
+            </button>
+          ) : (
+            <button
+              onClick={handleReopen}
+              disabled={reopening}
+              className="w-full rounded-lg bg-white border border-gray-300 text-gray-700 py-2.5 text-sm font-medium disabled:opacity-50"
+            >
+              {reopening ? "פותחת…" : "פתיחה מחדש"}
+            </button>
+          )}
+
           {/* Timeline */}
           <div>
             <SectionHeader title="היסטוריה" count={activities.length} />
             <Timeline activities={activities} />
           </div>
         </div>
+      )}
+
+      {lead && (
+        <>
+          <TemplatePickerSheet
+            lead={lead}
+            open={templateOpen}
+            onClose={() => setTemplateOpen(false)}
+            onSent={load}
+          />
+          <CloseLeadModal
+            leadId={lead.id}
+            open={closeOpen}
+            onClose={() => setCloseOpen(false)}
+            onClosed={load}
+          />
+          <TransferLeadModal
+            lead={lead}
+            open={transferOpen}
+            onClose={() => setTransferOpen(false)}
+            onTransferred={load}
+          />
+        </>
       )}
     </AppShell>
   );
