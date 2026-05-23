@@ -3,10 +3,11 @@
 """
 
 from datetime import datetime
+from decimal import Decimal
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from sqlalchemy import Boolean, ForeignKey, Index, String, Text
+from sqlalchemy import Boolean, ForeignKey, Index, Numeric, String, Text
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy import DateTime
@@ -106,6 +107,20 @@ class Lead(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     # ===== סגירה =====
     closure_reason: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    # מתמלא ע"י close_lead כשהסטטוס עובר ל-WON/LOST/ARCHIVED
+    closed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    # ===== כלכלת עסקה (לחישוב רווחיות) =====
+    # ערך כספי של ה-deal — נמלא בעת סגירה כ-WON.
+    # תוכניות מתמשכות עם total_price/actual_hours מנהלות זאת בנפרד דרך Program.
+    closed_value: Mapped[Decimal | None] = mapped_column(
+        Numeric(10, 2), nullable=True
+    )
+    actual_hours: Mapped[Decimal | None] = mapped_column(
+        Numeric(6, 2), nullable=True
+    )
 
     # ===== הערה אישית =====
     personal_note: Mapped[str | None] = mapped_column(Text, nullable=True)

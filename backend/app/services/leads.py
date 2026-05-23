@@ -251,8 +251,18 @@ async def close_lead(
         "closure_reason": (
             str(payload.closure_reason) if payload.closure_reason else None
         ),
+        "closed_at": func.now(),
         "updated_at": func.now(),
     }
+    # כלכלת ה-deal — רק כשסוגרים כ-WON. ב-LOST/ARCHIVED אין הכנסה.
+    if target == LeadStatus.WON:
+        values["closed_value"] = payload.closed_value
+        values["actual_hours"] = payload.actual_hours
+    else:
+        # מאפסים — אם הליד היה WON קודם ונסגר עכשיו כ-LOST, הערכים הישנים
+        # היו מטעים את חישוב הרווחיות.
+        values["closed_value"] = None
+        values["actual_hours"] = None
 
     stmt = (
         update(Lead)
@@ -369,6 +379,10 @@ async def reopen_lead(
         .values(
             status=LeadStatus.IN_PROGRESS.value,
             closure_reason=None,
+            # מנקים נתוני סגירה — הליד שוב פתוח, ה-deal לא קרה
+            closed_at=None,
+            closed_value=None,
+            actual_hours=None,
             waiting_on="NOAH",
             updated_at=func.now(),
         )

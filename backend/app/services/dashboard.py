@@ -6,6 +6,7 @@
 """
 
 from datetime import datetime, time, timedelta, timezone
+from decimal import Decimal
 from uuid import UUID
 
 from sqlalchemy import and_, case, func, or_, select
@@ -16,6 +17,7 @@ from app.models.lead import Lead
 from app.models.task import Task
 from app.schemas.dashboard import (
     LeadCard,
+    ProfitableServiceInsight,
     ProposalCard,
     TodayActionItem,
     WeeklyInsights,
@@ -301,12 +303,58 @@ async def get_open_proposals(
 
 # ===================== תובנות שבועיות =====================
 
+async def _get_most_profitable_service_this_week(
+    db: AsyncSession,
+    week_start_utc: datetime,
+    week_end_utc: datetime,
+) -> ProfitableServiceInsight | None:
+    """
+    מחשב את "השעה הרווחית שלך השבוע": לכל קטגוריית שירות, סוכם הכנסה
+    ושעות מעסקאות שנסגרו השבוע כ-WON, ומחזיר את הקטגוריה עם התעריף
+    השעתי האפקטיבי הגבוה ביותר.
+
+    דורש closed_value + actual_hours > 0; ליד WON בלי נתונים אלה לא נספר
+    (פשוט לא מספיק מידע — לא דחיפה לנועה להמציא ערכים).
+    """
+    stmt = (
+        select(
+            Lead.service_category,
+            func.sum(Lead.closed_value).label("total_revenue"),
+            func.sum(Lead.actual_hours).label("total_hours"),
+            func.count().label("deals_count"),
+        )
+        .where(
+            Lead.status == LeadStatus.WON.value,
+            Lead.closed_at >= week_start_utc,
+            Lead.closed_at < week_end_utc,
+            Lead.closed_value.is_not(None),
+            Lead.actual_hours.is_not(None),
+            Lead.actual_hours > 0,
+        )
+        .group_by(Lead.service_category)
+    )
+    result = await db.execute(stmt)
+    best: ProfitableServiceInsight | None = None
+    for row in result.all():
+        rate = Decimal(row.total_revenue) / Decimal(row.total_hours)
+        if best is None or rate > best.hourly_rate:
+            best = ProfitableServiceInsight(
+                service_category=row.service_category,
+                hourly_rate=rate.quantize(Decimal("0.01")),
+                total_revenue=Decimal(row.total_revenue),
+                total_hours=Decimal(row.total_hours),
+                deals_count=int(row.deals_count),
+            )
+    return best
+
+
 async def get_weekly_insights(db: AsyncSession) -> WeeklyInsights:
     """
     3 התובנות לפי האפיון:
     - new_leads_count: כמה לידים נכנסו השבוע
     - responded_in_time_count: כמה קיבלו מענה outbound באותו יום העבודה
     - stuck_count: כמה לידים פתוחים בלי next_action_due_at מוגדר
+    - most_profitable_service: השעה הרווחית של השבוע (אם יש נתונים)
 
     בנוסף total_open לקונטקסט.
     """
@@ -354,6 +402,10 @@ async def get_weekly_insights(db: AsyncSession) -> WeeklyInsights:
     )
     total_open = (await db.execute(open_stmt)).scalar_one()
 
+    profitable = await _get_most_profitable_service_this_week(
+        db, week_start_utc, week_end_utc
+    )
+
     return WeeklyInsights(
         week_start=week_start_utc,
         week_end=week_end_utc,
@@ -361,4 +413,5 @@ async def get_weekly_insights(db: AsyncSession) -> WeeklyInsights:
         responded_in_time_count=responded_in_time_count,
         stuck_count=stuck_count,
         total_open=total_open,
+        most_profitable_service=profitable,
     )

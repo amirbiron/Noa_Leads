@@ -96,6 +96,9 @@ export interface Lead {
   is_duplicate_suspected: boolean;
   is_returning_customer: boolean;
   closure_reason: string | null;
+  closed_at: string | null;
+  closed_value: string | null;
+  actual_hours: string | null;
   personal_note: string | null;
   created_at: string;
   updated_at: string;
@@ -165,6 +168,14 @@ export interface TodayActionItem {
   service_category: string;
 }
 
+export interface ProfitableServiceInsight {
+  service_category: string;
+  hourly_rate: string; // Decimal as string
+  total_revenue: string;
+  total_hours: string;
+  deals_count: number;
+}
+
 export interface WeeklyInsights {
   week_start: string;
   week_end: string;
@@ -172,6 +183,16 @@ export interface WeeklyInsights {
   responded_in_time_count: number;
   stuck_count: number;
   total_open: number;
+  most_profitable_service: ProfitableServiceInsight | null;
+}
+
+export interface ServiceRate {
+  subtype: string;
+  label: string;
+  category: string;
+  default_price: string | null;
+  default_hours: string | null;
+  hourly_rate: string | null;
 }
 
 export interface HomeDashboard {

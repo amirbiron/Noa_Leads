@@ -17,6 +17,7 @@ import type {
   ProgramCreate,
   ProgramUpdate,
   ProgramWithLead,
+  ServiceRate,
   Template,
   TemplateCreate,
   TemplateRenderResponse,
@@ -158,7 +159,13 @@ export const api = {
 
   closeLead: (
     leadId: string,
-    payload: { target_status: string; closure_reason?: string; note?: string },
+    payload: {
+      target_status: string;
+      closure_reason?: string;
+      note?: string;
+      closed_value?: number | null;
+      actual_hours?: number | null;
+    },
   ) =>
     fetcher<Lead>(`/leads/${leadId}/close`, { method: "POST", body: payload }),
 
@@ -226,4 +233,8 @@ export const api = {
 
   cancelProgram: (id: string) =>
     fetcher<Program>(`/programs/${id}/cancel`, { method: "POST" }),
+
+  // ----- Settings -----
+  listServiceRates: () =>
+    fetcher<ServiceRate[]>("/settings/service-rates"),
 };

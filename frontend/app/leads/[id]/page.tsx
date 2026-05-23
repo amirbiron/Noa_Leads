@@ -283,7 +283,7 @@ export default function LeadDetailPage() {
             onSent={load}
           />
           <CloseLeadModal
-            leadId={lead.id}
+            lead={lead}
             open={closeOpen}
             onClose={() => setCloseOpen(false)}
             onClosed={load}

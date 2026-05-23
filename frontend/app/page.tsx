@@ -1,13 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Sparkles } from "lucide-react";
+import { Sparkles, TrendingUp } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
 import { EmptyState } from "@/components/EmptyState";
 import { LeadCardRow } from "@/components/LeadCardRow";
 import { SectionHeader } from "@/components/SectionHeader";
 import { TodayActionRow } from "@/components/TodayActionRow";
 import { api, ApiError } from "@/lib/api";
+import { labelCategory } from "@/lib/hebrew";
 import type { HomeDashboard } from "@/lib/types";
 
 export default function HomePage() {
@@ -122,6 +123,49 @@ export default function HomePage() {
               />
             </div>
           </div>
+
+          {/* "השעה הרווחית שלך השבוע" — תובנה עסקית מהאפיון */}
+          {data.weekly_insights.most_profitable_service && (
+            <div className="mt-3 bg-gradient-to-bl from-state-green/10 to-state-green/5 border border-state-green/30 rounded-xl p-4">
+              <div className="flex items-start gap-3">
+                <TrendingUp
+                  size={20}
+                  className="text-state-green shrink-0 mt-0.5"
+                  aria-hidden
+                />
+                <div className="min-w-0">
+                  <div className="text-xs text-gray-600 mb-0.5">
+                    השעה הרווחית שלך השבוע
+                  </div>
+                  <div className="font-semibold text-base">
+                    {labelCategory(
+                      data.weekly_insights.most_profitable_service
+                        .service_category,
+                    )}
+                  </div>
+                  <div className="text-2xl font-bold text-state-green tabular-nums mt-1">
+                    {Math.round(
+                      Number(
+                        data.weekly_insights.most_profitable_service
+                          .hourly_rate,
+                      ),
+                    ).toLocaleString("he-IL")}{" "}
+                    <span className="text-sm font-normal text-gray-500">
+                      ₪/שעה
+                    </span>
+                  </div>
+                  <div className="text-xs text-gray-500 mt-1">
+                    {data.weekly_insights.most_profitable_service.deals_count}{" "}
+                    עסקאות ·{" "}
+                    {Number(
+                      data.weekly_insights.most_profitable_service.total_hours,
+                    ).toLocaleString("he-IL")}{" "}
+                    שעות עבודה
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
         </>
       )}
     </AppShell>

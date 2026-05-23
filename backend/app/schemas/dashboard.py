@@ -3,6 +3,7 @@
 """
 
 from datetime import datetime
+from decimal import Decimal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
@@ -65,8 +66,25 @@ class ProposalCard(LeadCard):
 
 # ===== תובנות שבועיות =====
 
+class ProfitableServiceInsight(BaseModel):
+    """
+    "השעה הרווחית שלך השבוע" — הקטגוריה שהניבה את התעריף השעתי האפקטיבי
+    הגבוה ביותר השבוע (לפי עסקאות WON שנסגרו).
+    """
+
+    service_category: str
+    hourly_rate: Decimal
+    total_revenue: Decimal
+    total_hours: Decimal
+    deals_count: int
+
+
 class WeeklyInsights(BaseModel):
-    """3 התובנות מהאפיון: כניסות / מענה בזמן / נתקעו ללא צעד הבא."""
+    """3 התובנות מהאפיון: כניסות / מענה בזמן / נתקעו ללא צעד הבא.
+
+    בנוסף: most_profitable_service — אם היו עסקאות WON השבוע עם נתוני
+    רווחיות מספיקים (closed_value + actual_hours > 0).
+    """
 
     week_start: datetime
     week_end: datetime
@@ -74,6 +92,7 @@ class WeeklyInsights(BaseModel):
     responded_in_time_count: int
     stuck_count: int
     total_open: int
+    most_profitable_service: ProfitableServiceInsight | None = None
 
 
 # ===== מסך הבית =====

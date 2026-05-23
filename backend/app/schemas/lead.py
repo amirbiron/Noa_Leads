@@ -3,6 +3,7 @@
 """
 
 from datetime import datetime
+from decimal import Decimal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
@@ -113,6 +114,9 @@ class LeadCloseRequest(BaseModel):
     target_status: LeadStatus
     closure_reason: ClosureReason | None = None
     note: str | None = None
+    # רלוונטי רק ב-WON — שדות הרווחיות. ניתן להשאיר None אם לא יודעים.
+    closed_value: Decimal | None = Field(default=None, ge=0, decimal_places=2)
+    actual_hours: Decimal | None = Field(default=None, ge=0, decimal_places=2)
 
     @field_validator("target_status")
     @classmethod
@@ -165,6 +169,9 @@ class LeadRead(BaseModel):
     is_returning_customer: bool
 
     closure_reason: str | None
+    closed_at: datetime | None
+    closed_value: Decimal | None
+    actual_hours: Decimal | None
     personal_note: str | None
 
     created_at: datetime
