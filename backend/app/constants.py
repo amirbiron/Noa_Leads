@@ -132,6 +132,11 @@ class ActivityType(StrEnum):
     LEAD_REOPENED = "lead_reopened"
     INBOUND_MESSAGE_LOGGED = "inbound_message_logged"
     OUTBOUND_MESSAGE_LOGGED = "outbound_message_logged"
+    # === Programs (תוכניות מתמשכות) ===
+    PROGRAM_CREATED = "program_created"
+    PROGRAM_SESSION_DONE = "program_session_done"
+    PROGRAM_COMPLETED = "program_completed"
+    PROGRAM_CANCELED = "program_canceled"
 
 
 # ===== סוגי משימות (tasks) =====

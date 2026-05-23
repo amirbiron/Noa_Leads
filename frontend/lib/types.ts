@@ -196,6 +196,48 @@ export interface Task {
   completed_at: string | null;
 }
 
+// ===== Programs =====
+
+export type ProgramType =
+  | "voice_rehab_8"
+  | "public_speaking_8"
+  | "stage_arts_4"
+  | "production_3months"
+  | "digital_course_12";
+
+export interface Program {
+  id: string;
+  lead_id: string;
+  program_type: string;
+  total_sessions: number;
+  completed_sessions: number;
+  total_price: string | null; // Decimal as string
+  actual_hours: string;
+  started_at: string;
+  estimated_end_at: string | null;
+  status: string; // active | completed | canceled
+}
+
+export interface ProgramWithLead extends Program {
+  lead_name: string;
+  lead_organization: string | null;
+}
+
+export interface ProgramCreate {
+  lead_id: string;
+  program_type: ProgramType;
+  total_sessions: number;
+  total_price?: number | null;
+  estimated_end_at?: string | null;
+}
+
+export interface ProgramUpdate {
+  completed_sessions?: number;
+  actual_hours?: number;
+  total_price?: number;
+  estimated_end_at?: string | null;
+}
+
 export interface User {
   id: string;
   email: string;

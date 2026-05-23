@@ -82,7 +82,35 @@ export const ACTIVITY_TYPE_LABELS: Record<string, string> = {
   lead_reopened: "ליד נפתח מחדש",
   inbound_message_logged: "הודעה נכנסת",
   outbound_message_logged: "הודעה יוצאת",
+  program_created: "תוכנית חדשה",
+  program_session_done: "מפגש בוצע",
+  program_completed: "תוכנית הסתיימה",
+  program_canceled: "תוכנית בוטלה",
 };
+
+// ===== תרגומי תוכניות =====
+
+export const PROGRAM_TYPE_LABELS: Record<string, string> = {
+  voice_rehab_8: "שיקום קול (8 מפגשים)",
+  public_speaking_8: "עמידה מול קהל (8 מפגשים)",
+  stage_arts_4: "אומניות הבמה",
+  production_3months: "ליווי הפקה",
+  digital_course_12: "קורס דיגיטלי (12 מפגשים)",
+};
+
+export const PROGRAM_STATUS_LABELS: Record<string, string> = {
+  active: "פעילה",
+  completed: "הסתיימה",
+  canceled: "בוטלה",
+};
+
+export function labelProgramType(s: string): string {
+  return PROGRAM_TYPE_LABELS[s] ?? s;
+}
+
+export function labelProgramStatus(s: string): string {
+  return PROGRAM_STATUS_LABELS[s] ?? s;
+}
 
 export function labelStatus(s: string): string {
   return STATUS_LABELS[s] ?? s;

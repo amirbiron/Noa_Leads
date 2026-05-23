@@ -8,12 +8,15 @@ import {
   Mail,
   MessageCircle,
   Phone,
+  Plus,
   Send,
   XCircle,
 } from "lucide-react";
+import { AddProgramModal } from "@/components/AddProgramModal";
 import { AppShell } from "@/components/AppShell";
 import { CloseLeadModal } from "@/components/CloseLeadModal";
 import { DynamicActionButton } from "@/components/DynamicActionButton";
+import { ProgramCard } from "@/components/ProgramCard";
 import { QuickActions } from "@/components/QuickActions";
 import { SectionHeader } from "@/components/SectionHeader";
 import { StateBadge } from "@/components/StateBadge";
@@ -29,7 +32,7 @@ import {
   labelSubtype,
   labelWaiting,
 } from "@/lib/hebrew";
-import type { Activity, Lead, StateColor } from "@/lib/types";
+import type { Activity, Lead, Program, StateColor } from "@/lib/types";
 
 function inferStateColor(lead: Lead): StateColor {
   if (["WON", "LOST", "ARCHIVED"].includes(lead.status)) return "gray";
@@ -48,19 +51,26 @@ export default function LeadDetailPage() {
   const id = params.id;
   const [lead, setLead] = useState<Lead | null>(null);
   const [activities, setActivities] = useState<Activity[]>([]);
+  const [programs, setPrograms] = useState<Program[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [templateOpen, setTemplateOpen] = useState(false);
   const [closeOpen, setCloseOpen] = useState(false);
   const [transferOpen, setTransferOpen] = useState(false);
+  const [programOpen, setProgramOpen] = useState(false);
   const [reopening, setReopening] = useState(false);
 
   async function load() {
     setError(null);
     try {
-      const [l, t] = await Promise.all([api.getLead(id), api.getTimeline(id)]);
+      const [l, t, p] = await Promise.all([
+        api.getLead(id),
+        api.getTimeline(id),
+        api.listProgramsForLead(id),
+      ]);
       setLead(l);
       setActivities(t);
+      setPrograms(p);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "שגיאה בטעינה");
     } finally {
@@ -192,6 +202,45 @@ export default function LeadDetailPage() {
             </div>
           )}
 
+          {/* תוכניות מתמשכות */}
+          {(programs.length > 0 ||
+            !["WON", "LOST", "ARCHIVED"].includes(lead.status)) && (
+            <div>
+              <div className="flex items-center justify-between mt-5 mb-2">
+                <h2 className="text-sm font-semibold text-gray-700">
+                  תוכניות
+                  {programs.length > 0 && (
+                    <span className="text-gray-400 font-normal me-1">
+                      ({programs.length})
+                    </span>
+                  )}
+                </h2>
+                {!["WON", "LOST", "ARCHIVED"].includes(lead.status) && (
+                  <button
+                    onClick={() => setProgramOpen(true)}
+                    className="inline-flex items-center gap-1 text-xs text-gray-600 hover:text-gray-900"
+                  >
+                    <Plus size={14} aria-hidden />
+                    הוספה
+                  </button>
+                )}
+              </div>
+              {programs.length === 0 ? (
+                <div className="bg-white rounded-xl border border-dashed border-gray-200 px-4 py-4 text-center text-xs text-gray-400">
+                  אין תוכנית מתמשכת. אפשר להוסיף אם זה לקוח קבוע.
+                </div>
+              ) : (
+                <ul className="space-y-2">
+                  {programs.map((p) => (
+                    <li key={p.id}>
+                      <ProgramCard program={p} onChanged={load} />
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+
           {/* צ'יפים לסיכום שיחה */}
           <div>
             <SectionHeader title="פעולות מהירות" />
@@ -244,6 +293,12 @@ export default function LeadDetailPage() {
             open={transferOpen}
             onClose={() => setTransferOpen(false)}
             onTransferred={load}
+          />
+          <AddProgramModal
+            leadId={lead.id}
+            open={programOpen}
+            onClose={() => setProgramOpen(false)}
+            onCreated={load}
           />
         </>
       )}

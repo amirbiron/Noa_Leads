@@ -13,6 +13,10 @@ import type {
   ProposalCard,
   SnoozePreset,
   Task,
+  Program,
+  ProgramCreate,
+  ProgramUpdate,
+  ProgramWithLead,
   Template,
   TemplateCreate,
   TemplateRenderResponse,
@@ -201,4 +205,20 @@ export const api = {
       `/templates/${templateId}/render?lead_id=${leadId}`,
       { method: "POST" },
     ),
+
+  // ----- Programs -----
+  listActivePrograms: () =>
+    fetcher<ProgramWithLead[]>("/programs/active"),
+
+  listProgramsForLead: (leadId: string) =>
+    fetcher<Program[]>(`/programs/lead/${leadId}`),
+
+  createProgram: (payload: ProgramCreate) =>
+    fetcher<Program>("/programs", { method: "POST", body: payload }),
+
+  updateProgram: (id: string, payload: ProgramUpdate) =>
+    fetcher<Program>(`/programs/${id}`, { method: "PATCH", body: payload }),
+
+  cancelProgram: (id: string) =>
+    fetcher<Program>(`/programs/${id}/cancel`, { method: "POST" }),
 };
