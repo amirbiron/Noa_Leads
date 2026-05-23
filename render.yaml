@@ -14,7 +14,10 @@ envVarGroups:
 
 databases:
   - name: noa-leads-db
-    plan: starter
+    # plan: starter היה legacy ולא נתמך יותר ב-Render. basic_256mb הוא
+    # הזול הנוכחי (~$6/חודש, 256MB RAM, 1GB אחסון) — מספיק בקלות ל-MVP
+    # של נועה. אם תרצי לדרג למעלה — basic_1gb (~$16/חודש, 1GB RAM, 10GB).
+    plan: basic_256mb
     databaseName: noa_leads
     user: noa_leads
 

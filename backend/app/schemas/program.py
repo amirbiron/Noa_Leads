@@ -6,7 +6,7 @@ from datetime import datetime
 from decimal import Decimal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.constants import ProgramType
 
@@ -30,6 +30,16 @@ class ProgramUpdate(BaseModel):
     actual_hours: Decimal | None = Field(default=None, ge=0, decimal_places=2)
     total_price: Decimal | None = Field(default=None, ge=0, decimal_places=2)
     estimated_end_at: datetime | None = None
+
+    @field_validator("completed_sessions", "actual_hours")
+    @classmethod
+    def reject_explicit_null(cls, v):
+        # שני השדות הללו הם NOT NULL ב-DB. אם הקוראת משתמשת ב-PATCH
+        # רק לשדות אחרים, היא צריכה להשמיט את אלה (לא לשלוח null).
+        # null מפורש היה גורם ל-TypeError (None > int) ול-IntegrityError.
+        if v is None:
+            raise ValueError("שדה חובה — לא ניתן לאפס. אפשר להשמיט מה-payload.")
+        return v
 
 
 # ===================== קריאה =====================
