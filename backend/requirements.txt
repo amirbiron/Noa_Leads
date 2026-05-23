@@ -15,7 +15,11 @@ email-validator==2.2.0
 
 # ===== Auth =====
 python-jose[cryptography]>=3.4.0
-passlib[bcrypt]==1.7.4
+# passlib (יצא 2020) לא תואם ל-bcrypt 4.x. ב-deploy זה נופל על:
+# 1) AttributeError: module 'bcrypt' has no attribute '__about__'
+# 2) ValueError ב-detect_wrap_bug עם > 72 bytes.
+# הוחלף בשימוש ישיר ב-bcrypt (ראה app/core/security.py).
+bcrypt>=4.1.0,<5.0
 
 # ===== HTTP & external APIs =====
 httpx==0.28.1
