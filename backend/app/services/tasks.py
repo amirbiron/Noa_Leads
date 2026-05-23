@@ -45,6 +45,42 @@ def _next_working_morning_from(d: date) -> datetime:
     return datetime.combine(candidate, time(start_hour, 0, tzinfo=ISRAEL_TZ))
 
 
+def _after_next_holiday(from_date: date) -> datetime:
+    """
+    משמש ל-AFTER_HOLIDAY snooze: מאתר את החג הקרוב מ-from_date והלאה,
+    ומחזיר את היום הראשון אחרי שהחג הסתיים (מדלג גם על חוה"מ פסח/סוכות
+    ועל שבת אם נופלת באותו טווח).
+
+    מבדיל מ-TOMORROW_MORNING בכך שהוא קופץ מעבר לבלוק שלם של חגים.
+    אם אין חג בטווח 30 ימים — fallback ל-_next_working_morning_from.
+    """
+    start_hour = get_settings().work_day_start_hour
+
+    # שלב א': איתור היום הראשון של בלוק החג הקרוב
+    candidate = from_date
+    holiday_start: date | None = None
+    for _ in range(60):
+        if is_holiday(candidate):
+            holiday_start = candidate
+            break
+        candidate += timedelta(days=1)
+
+    if holiday_start is None:
+        # אין חג קרוב — מתנהג כמו TOMORROW_MORNING
+        return _next_working_morning_from(from_date + timedelta(days=1))
+
+    # שלב ב': דילוג על כל הבלוק הרצוף של חגים + שבתות שבדרך
+    candidate = holiday_start
+    for _ in range(30):
+        if not is_holiday(candidate) and not is_saturday(candidate):
+            return datetime.combine(
+                candidate, time(start_hour, 0, tzinfo=ISRAEL_TZ)
+            )
+        candidate += timedelta(days=1)
+
+    return datetime.combine(candidate, time(start_hour, 0, tzinfo=ISRAEL_TZ))
+
+
 # ===================== יצירה אוטומטית =====================
 
 async def create_first_response_task(
@@ -95,10 +131,14 @@ async def snooze_task(
     """דחיית משימה לפי קיצור דרך או תאריך מותאם."""
     new_due_at = _resolve_snooze_target(payload)
 
-    # אטומי: רק משימות פתוחות ניתנות ל-snooze
+    # אטומי: ניתן ל-snooze גם משימה שכבר ב-SNOOZED (re-snooze אחרי שהמועד עבר).
+    # הדשבורד מציג snoozed-expired כפתוחות, אז משתמש מצפה לדחות אותן שוב.
     stmt = (
         update(Task)
-        .where(Task.id == task_id, Task.status == TaskStatus.OPEN.value)
+        .where(
+            Task.id == task_id,
+            Task.status.in_([TaskStatus.OPEN.value, TaskStatus.SNOOZED.value]),
+        )
         .values(
             status=TaskStatus.SNOOZED.value,
             snoozed_until=new_due_at,
@@ -108,13 +148,12 @@ async def snooze_task(
     )
     result = await db.execute(stmt)
     if result.scalar_one_or_none() is None:
-        # ייתכן: המשימה לא קיימת או שכבר נסגרה
         existing = await db.execute(select(Task.status).where(Task.id == task_id))
         status = existing.scalar_one_or_none()
         if status is None:
             raise NotFoundError("משימה לא נמצאה.")
         raise InvalidStateTransitionError(
-            "ניתן לדחות רק משימות פתוחות."
+            "ניתן לדחות רק משימות פתוחות או דחויות."
         )
 
     await db.commit()
@@ -159,10 +198,9 @@ def _resolve_snooze_target(payload: SnoozeRequest) -> datetime:
         return target_local.astimezone(timezone.utc)
 
     if payload.preset == SnoozePreset.AFTER_HOLIDAY:
-        # מחפש את היום הראשון אחרי החג הנוכחי/הקרוב.
-        # _next_working_morning_from כבר עושה בדיוק את זה ומכבד
-        # work_day_start_hour מההגדרות.
-        target_local = _next_working_morning_from(today + timedelta(days=1))
+        # שונה מ-TOMORROW_MORNING: קופץ מעבר לבלוק החג הקרוב, לא רק
+        # יום אחד קדימה. אם היום שלפני פסח — נחזור אחרי שמיני של פסח.
+        target_local = _after_next_holiday(today)
         return target_local.astimezone(timezone.utc)
 
     raise ValidationError(f"קיצור snooze לא נתמך: {payload.preset}")

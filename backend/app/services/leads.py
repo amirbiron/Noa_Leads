@@ -107,7 +107,14 @@ async def create_lead(
 # ===================== קריאה =====================
 
 async def get_lead_or_404(db: AsyncSession, lead_id: UUID) -> Lead:
-    result = await db.execute(select(Lead).where(Lead.id == lead_id))
+    # populate_existing מאלץ overwrite של identity-map cache במידה והליד
+    # נטען קודם באותו session. חיוני אחרי Core update() שעקף את ה-ORM —
+    # אחרת היה מוחזר instance עם שדות ישנים (expire_on_commit=False).
+    result = await db.execute(
+        select(Lead)
+        .where(Lead.id == lead_id)
+        .execution_options(populate_existing=True)
+    )
     lead = result.scalar_one_or_none()
     if lead is None:
         raise NotFoundError("ליד לא נמצא.")

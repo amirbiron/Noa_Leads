@@ -94,7 +94,7 @@ export function ProgramCard({
             </div>
           )}
         </div>
-        {program.total_price && (
+        {program.total_price !== null && program.total_price !== undefined && (
           <div className="text-xs text-gray-500 shrink-0">
             {Number(program.total_price).toLocaleString("he-IL")} ₪
           </div>

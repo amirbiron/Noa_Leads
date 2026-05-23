@@ -53,6 +53,9 @@ export function TodayActionRow({ item, onChanged }: Props) {
       onChanged();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "שגיאה");
+    } finally {
+      // משחררים busy גם בהצלחה — onChanged לא בהכרח unmount את הרכיב
+      // (אם ה-component משתמש חוזר עם נתונים מעודכנים), והכפתור היה נשאר מושבת.
       setBusy(false);
     }
   }

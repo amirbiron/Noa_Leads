@@ -58,9 +58,15 @@ export function AddProgramModal({ leadId, open, onClose, onCreated }: Props) {
     setBusy(true);
     setError(null);
     try {
-      const priceNum = price.trim() ? parseFloat(price) : null;
-      if (priceNum !== null && (Number.isNaN(priceNum) || priceNum < 0)) {
-        throw new Error("מחיר לא תקין");
+      // ולידציה מחמירה — parseFloat("12abc") מחזיר 12 ולא NaN, אז
+      // נדרש regex כדי לחסום קלט חלקית מספרי
+      const trimmed = price.trim();
+      let priceNum: number | null = null;
+      if (trimmed) {
+        if (!/^\d+(\.\d+)?$/.test(trimmed)) {
+          throw new Error("מחיר חייב להיות מספר חיובי");
+        }
+        priceNum = parseFloat(trimmed);
       }
       await api.createProgram({
         lead_id: leadId,
@@ -123,9 +129,13 @@ export function AddProgramModal({ leadId, open, onClose, onCreated }: Props) {
                 min={1}
                 max={100}
                 value={sessions}
-                onChange={(e) =>
-                  setSessions(Math.max(1, parseInt(e.target.value) || 1))
-                }
+                onChange={(e) => {
+                  const parsed = parseInt(e.target.value);
+                  const clamped = Number.isNaN(parsed)
+                    ? 1
+                    : Math.min(100, Math.max(1, parsed));
+                  setSessions(clamped);
+                }}
                 className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-base focus:border-gray-900 focus:outline-none"
               />
             </label>

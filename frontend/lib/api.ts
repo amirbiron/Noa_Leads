@@ -66,6 +66,11 @@ async function fetcher<T>(path: string, opts: FetcherOpts = {}): Promise<T> {
       return fetcher<T>(path, { ...opts, retryAuth: false });
     }
     clearTokens();
+    // ה-refresh נכשל — מנווטים ל-login. בלי זה הדף נשאר במצב שבור
+    // (כל קריאה הבאה תיכשל גם היא ב-401).
+    if (typeof window !== "undefined" && window.location.pathname !== "/login") {
+      window.location.href = "/login";
+    }
   }
 
   if (!res.ok) {

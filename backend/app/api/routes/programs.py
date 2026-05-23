@@ -26,20 +26,20 @@ async def list_active(
     items = await programs_service.list_active_programs(db)
     return [
         ProgramWithLeadRead(
-            id=p.id,
-            lead_id=p.lead_id,
-            program_type=p.program_type,
-            total_sessions=p.total_sessions,
-            completed_sessions=p.completed_sessions,
-            total_price=p.total_price,
-            actual_hours=p.actual_hours,
-            started_at=p.started_at,
-            estimated_end_at=p.estimated_end_at,
-            status=p.status,
+            id=program.id,
+            lead_id=program.lead_id,
+            program_type=program.program_type,
+            total_sessions=program.total_sessions,
+            completed_sessions=program.completed_sessions,
+            total_price=program.total_price,
+            actual_hours=program.actual_hours,
+            started_at=program.started_at,
+            estimated_end_at=program.estimated_end_at,
+            status=program.status,
             lead_name=lead.full_name,
             lead_organization=lead.organization_name,
         )
-        for p, lead in items
+        for program, lead in items
     ]
 
 

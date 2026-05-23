@@ -69,7 +69,7 @@ async def list_active_programs(
         )
     )
     result = await db.execute(stmt)
-    return [(p, l) for p, l in result.all()]
+    return [(program, lead) for program, lead in result.all()]
 
 
 # ===================== יצירה =====================

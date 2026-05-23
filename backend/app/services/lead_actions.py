@@ -277,7 +277,12 @@ async def _ensure_lead_exists(db: AsyncSession, lead_id: UUID) -> None:
 
 
 async def _get_lead(db: AsyncSession, lead_id: UUID) -> Lead:
-    res = await db.execute(select(Lead).where(Lead.id == lead_id))
+    # populate_existing — חובה אחרי Core update(). ראה הסבר ב-leads.get_lead_or_404.
+    res = await db.execute(
+        select(Lead)
+        .where(Lead.id == lead_id)
+        .execution_options(populate_existing=True)
+    )
     lead = res.scalar_one_or_none()
     if lead is None:
         raise NotFoundError("ליד לא נמצא.")
