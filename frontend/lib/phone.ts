@@ -39,11 +39,3 @@ export function toWhatsAppDigits(phone: string | null): string | null {
   // שעברו את הניקוי הראשוני (למשל phone שלא עבר את ה-backend validator).
   return E164_DIGITS_ONLY.test(candidate) ? candidate : null;
 }
-
-export function toTelHref(phone: string | null): string | null {
-  if (!phone) return null;
-  // tel: מקבל גם פורמט מקומי וגם בינלאומי. נחזיר עם + לבינלאומי.
-  const cleaned = phone.replace(/[\s\-().]/g, "");
-  if (!cleaned) return null;
-  return cleaned;
-}
