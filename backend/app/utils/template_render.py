@@ -10,6 +10,7 @@ import re
 from typing import Mapping
 
 from app.models.lead import Lead
+from app.utils.labels import SERVICE_CATEGORY_HE, SERVICE_SUBTYPE_HE
 
 
 # שמות משתנים נתמכים → מה שולפים מהליד.
@@ -21,28 +22,6 @@ SUPPORTED_VARIABLES: dict[str, str] = {
     "organization": "ארגון",
     "phone": "טלפון",
     "email": "מייל",
-}
-
-
-# תרגום קטגוריות לעברית — להצגה אנושית בתבניות
-_SERVICE_CATEGORY_HE: dict[str, str] = {
-    "clinic": "קליניקה",
-    "workshops": "סדנאות והרצאות",
-    "production": "ליווי והפקות",
-    "digital_course": "קורס דיגיטלי",
-}
-
-_SERVICE_SUBTYPE_HE: dict[str, str] = {
-    "voice_development": "פיתוח קול",
-    "public_speaking": "עמידה מול קהל",
-    "voice_rehab": "שיקום קול",
-    "workshop_speaking": "סדנת דיבור/הופעה",
-    "stage_arts": "אומניות הבמה",
-    "lecture_organization": "הרצאה לארגון",
-    "lecture_academic": "הרצאה אקדמית",
-    "production_guidance": "ליווי הפקה אישית",
-    "production_directing": "בימוי הפקה",
-    "digital_course": "קורס דיגיטלי",
 }
 
 
@@ -59,10 +38,10 @@ def build_variable_context(lead: Lead) -> dict[str, str]:
     """בונה את ה-context לרינדור — כל הערכים כ-str (גם כשחסרים)."""
     return {
         "customer_name": lead.full_name or "",
-        "service_category": _SERVICE_CATEGORY_HE.get(
+        "service_category": SERVICE_CATEGORY_HE.get(
             lead.service_category, lead.service_category or ""
         ),
-        "service_subtype": _SERVICE_SUBTYPE_HE.get(
+        "service_subtype": SERVICE_SUBTYPE_HE.get(
             lead.service_subtype or "", lead.service_subtype or ""
         ),
         "organization": lead.organization_name or "",
