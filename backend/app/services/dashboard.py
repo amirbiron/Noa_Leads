@@ -282,14 +282,17 @@ async def get_open_proposals(
     cards: list[ProposalCard] = []
     for lead in result.scalars().all():
         base = _lead_to_card(lead, now_utc).model_dump()
+        # proposal_sent_at שדה ייעודי שלא מתאפס בפולואפ outbound.
+        # fallback ל-last_outbound_at לטובת לידים ישנים שנוצרו לפני המיגרציה.
+        sent_at = lead.proposal_sent_at or lead.last_outbound_at
         days = None
-        if lead.last_outbound_at is not None:
-            delta = now_utc - lead.last_outbound_at
+        if sent_at is not None:
+            delta = now_utc - sent_at
             days = max(0, delta.days)
         cards.append(
             ProposalCard(
                 **base,
-                proposal_sent_at=lead.last_outbound_at,
+                proposal_sent_at=sent_at,
                 days_since_proposal=days,
             )
         )

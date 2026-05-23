@@ -30,6 +30,7 @@ export function TemplatePickerSheet({ lead, open, onClose, onSent }: Props) {
     setSelected(null);
     setRendered(null);
     setError(null);
+    setTemplates([]); // ניקוי תוצאה ישנה כדי שלא יראו רגעית רשימה אחרת
     api
       .listTemplates(true)
       .then((items) =>
@@ -64,11 +65,21 @@ export function TemplatePickerSheet({ lead, open, onClose, onSent }: Props) {
     setSending(true);
     setError(null);
     try {
-      // פתיחת וואטסאפ עם הטקסט המוכן
       const digits = lead.phone.replace(/\D/g, "");
       const text = encodeURIComponent(rendered.rendered_body);
-      window.open(`https://wa.me/${digits}?text=${text}`, "_blank");
-      // סימון במערכת: התבנית נשלחה (סטטוס NEW → IN_PROGRESS אוטומטית)
+      // window.open יכול להחזיר null אם popup blocker חסם — במקרה כזה אסור
+      // לסמן את התבנית כנשלחה (כי הלקוחה לא קיבלה כלום).
+      const win = window.open(
+        `https://wa.me/${digits}?text=${text}`,
+        "_blank",
+      );
+      if (!win) {
+        setError(
+          "פתיחת וואטסאפ נחסמה ע\"י הדפדפן. אפשרי חוסם פופ-אפים?",
+        );
+        return;
+      }
+      // רק אחרי שהפתיחה הצליחה — סימון במערכת
       await api.performAction(lead.id, "mark_template_sent", {
         metadata: { template_id: selected?.id },
       });

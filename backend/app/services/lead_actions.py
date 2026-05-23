@@ -65,6 +65,8 @@ async def perform_action(
         values["last_inbound_at"] = now
     if action.set_reply_boost:
         values["reply_boost_until"] = now + timedelta(hours=REPLY_BOOST_HOURS)
+    if action.set_proposal_sent_at:
+        values["proposal_sent_at"] = now
     if action.set_waiting_on:
         values["waiting_on"] = action.set_waiting_on
     if action.last_activity_tag:

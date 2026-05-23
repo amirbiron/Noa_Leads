@@ -37,6 +37,9 @@ class ActionDefinition:
     set_last_outbound: bool = False
     set_last_inbound: bool = False
     set_reply_boost: bool = False
+    # תאריך שליחת ההצעה — נשמר נפרד מ-last_outbound_at כדי שפולואפ לא יאפס
+    # את ספירת הימים בכרטיס "הצעות פתוחות".
+    set_proposal_sent_at: bool = False
     # אצל מי הכדור אחרי הפעולה (None = לא משנים)
     set_waiting_on: str | None = None
     # תיוג קצר של סוג הפעולה ב-last_activity_type
@@ -88,6 +91,7 @@ ACTIONS: dict[str, ActionDefinition] = {
         ),
         transition_to=LeadStatus.PROPOSAL_SENT,
         set_last_outbound=True,
+        set_proposal_sent_at=True,
         set_waiting_on="CLIENT",
         last_activity_tag="proposal_sent",
         description="שליחת הצעת מחיר",

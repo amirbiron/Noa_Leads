@@ -159,14 +159,10 @@ def _resolve_snooze_target(payload: SnoozeRequest) -> datetime:
         return target_local.astimezone(timezone.utc)
 
     if payload.preset == SnoozePreset.AFTER_HOLIDAY:
-        # מחפש את היום הראשון אחרי החג הנוכחי/הקרוב
-        candidate = today
-        # מתחילים מהמחר (גם אם היום חג — מחפשים את היום שאחרי)
-        for _ in range(30):  # safety bound
-            candidate = candidate + timedelta(days=1)
-            if not is_holiday(candidate) and not is_saturday(candidate):
-                break
-        target_local = datetime.combine(candidate, time(9, 0, tzinfo=ISRAEL_TZ))
+        # מחפש את היום הראשון אחרי החג הנוכחי/הקרוב.
+        # _next_working_morning_from כבר עושה בדיוק את זה ומכבד
+        # work_day_start_hour מההגדרות.
+        target_local = _next_working_morning_from(today + timedelta(days=1))
         return target_local.astimezone(timezone.utc)
 
     raise ValidationError(f"קיצור snooze לא נתמך: {payload.preset}")

@@ -12,6 +12,7 @@ from app.models.lead import Lead
 from app.schemas.intake import IntakeFormRequest, IntakeResponse
 from app.schemas.lead import LeadCreate
 from app.services import leads as leads_service
+from app.services import telegram as telegram_service
 from app.services.activities import log_activity
 from app.utils.work_hours import after_hours_reply_message, is_working_time
 
@@ -96,4 +97,8 @@ async def intake_after_hours_whatsapp(
     )
     await db.commit()
     await db.refresh(lead)
+
+    # פוש לטלגרם — מסלול ה-commit=False של create_lead לא שולח אוטומטית,
+    # אז מפעילים ידנית אחרי שהליד באמת committed (source=whatsapp ≠ manual).
+    await telegram_service.notify_new_lead(lead)
     return lead

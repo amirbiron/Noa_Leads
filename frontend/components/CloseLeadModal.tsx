@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { X } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import type { ClosureReason } from "@/lib/types";
@@ -29,6 +29,16 @@ export function CloseLeadModal({ leadId, open, onClose, onClosed }: Props) {
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // איפוס מצב בכל פתיחה / החלפת ליד — מונע ערכים ישנים מסשן קודם
+  useEffect(() => {
+    if (!open) return;
+    setTarget("WON");
+    setReason("no_response");
+    setNote("");
+    setBusy(false);
+    setError(null);
+  }, [open, leadId]);
 
   if (!open) return null;
 

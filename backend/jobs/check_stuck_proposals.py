@@ -27,8 +27,11 @@ STUCK_THRESHOLD_DAYS = 3
 
 async def _stuck_proposal_leads(db: AsyncSession) -> list[Lead]:
     """
-    שולף PROPOSAL_SENT שעברו STUCK_THRESHOLD_DAYS מאז last_outbound_at,
+    שולף PROPOSAL_SENT שעברו STUCK_THRESHOLD_DAYS מאז שליחת ההצעה,
     ואין להם משימה פתוחה.
+
+    משתמש ב-proposal_sent_at במקום last_outbound_at — האחרון מתאפס
+    בכל פולואפ outbound, ויגרום לזהות כ"לא תקוע" הצעות שכבר ישנות.
     """
     threshold = datetime.now(timezone.utc) - timedelta(days=STUCK_THRESHOLD_DAYS)
 
@@ -46,8 +49,8 @@ async def _stuck_proposal_leads(db: AsyncSession) -> list[Lead]:
         select(Lead)
         .where(
             Lead.status == LeadStatus.PROPOSAL_SENT.value,
-            Lead.last_outbound_at.is_not(None),
-            Lead.last_outbound_at <= threshold,
+            Lead.proposal_sent_at.is_not(None),
+            Lead.proposal_sent_at <= threshold,
             ~has_open_task,
         )
     )

@@ -86,6 +86,12 @@ class Lead(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     reply_boost_until: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # תאריך שליחת ההצעה — שדה ייעודי כדי שפולואפ על הצעה לא יאפס את הגיל.
+    # last_outbound_at משתנה בכל פעולת outbound (פולואפ, תבנית), אבל
+    # proposal_sent_at נשמר עד שהליד נסגר או הצעה חדשה נשלחת.
+    proposal_sent_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     # ===== דגלים =====
     dormant_flag: Mapped[bool] = mapped_column(
