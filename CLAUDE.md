@@ -54,3 +54,31 @@
 
 **עקרון:** אם הוספת בקוד דפוס שמופיע ב-references, ציין בקומנט קצר
 `# ראה: docs/references/<file>.md סעיף N` כדי שמי שיקרא ידע מנין המקור.
+
+---
+
+## סקילים מקומיים — `docs/Skills/`
+
+בפרויקט מותקנים 6 סקילים — יחידות עצמאיות עם `SKILL.md` (הוראות),
+`references/` (חומרי עזר), ולעיתים `scripts/` להפעלה. שונה ממסמכי
+references: סקיל הוא best-practice עם תוכן אינסטרומנטלי שיש לפעול לפיו,
+לא רק להתייחס אליו.
+
+**מתי לפתוח כל סקיל לפני כתיבת קוד:**
+
+| סקיל | מתי לפתוח את `SKILL.md` |
+|---|---|
+| `israeli-phone-formatter` | בנגיעה ב-`_normalize_phone`, תצוגת טלפון, חיפוש לפי 4 ספרות, או intake שמכיל phone |
+| `hebrew-rtl-best-practices` | בהוספה/שינוי קומפוננטה ב-`frontend/components/` עם layout מורכב, scrolling, popovers, או modals |
+| `hebrew-tailwind-preset` | בשינוי `tailwind.config.ts`, בהוספת utility classes חדשות, או בעבודה על הקצאת פונטים |
+| `hebrew-i18n` | בהוספת טקסט דינמי עם מספר ("3 ימים"), ניסוח תאריכים, פלורליזציה ("יום/יומיים/N ימים") |
+| `gws-hebrew-email-automation` | רק בפאזה 3 — בעת מימוש `/intake/email`, סינון Gmail, ניתוח subject/body בעברית |
+| `hebrew-llm-eval-suite` | רק בפאזה 3 — בעת בחירת מודל ל-Claude API, כתיבת prompt templates, או הערכת איכות תשובות בעברית |
+
+**עקרון:** לפני כל commit שנוגע ב-area של סקיל — `cat docs/Skills/<name>/SKILL.md`.
+זה לוקח דקה ומונע re-do של דברים שכבר פתורים. אם חרגת מההמלצות של
+הסקיל, כתוב קומנט מסביר.
+
+**Code review של מה שכבר נכתב:** ראה `docs/skills-review-plan.md`
+לרשימה של areas בקוד הקיים שצריך לעבור עליהם מול הסקילים. ה-review
+ייעשה משולב בעבודה השוטפת (כל פעם שאני נוגע ב-area), לא כשלב נפרד.

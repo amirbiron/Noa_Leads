@@ -11,29 +11,9 @@ import logging
 from app.config import get_settings
 from app.models.lead import Lead
 from app.utils.escape import escape_telegram_html
+from app.utils.labels import SERVICE_CATEGORY_HE, SOURCE_CHANNEL_HE
 
 logger = logging.getLogger(__name__)
-
-
-# תרגום קטגוריות לעברית להצגה בהודעה — שכפול מינימלי מ-template_render
-# כדי להימנע מ-import מעגלי.
-_SERVICE_CATEGORY_HE: dict[str, str] = {
-    "clinic": "קליניקה",
-    "workshops": "סדנאות והרצאות",
-    "production": "ליווי והפקות",
-    "digital_course": "קורס דיגיטלי",
-}
-
-_SOURCE_CHANNEL_HE: dict[str, str] = {
-    "form": "טופס באתר",
-    "email": "מייל",
-    "manual": "הזנה ידנית",
-    "referral": "המלצה",
-    "facebook": "פייסבוק",
-    "instagram": "אינסטגרם",
-    "whatsapp": "וואטסאפ",
-    "other": "אחר",
-}
 
 
 def _is_configured() -> bool:
@@ -74,10 +54,10 @@ async def notify_new_lead(lead: Lead) -> None:
     משתמש ב-escape_telegram_html (כלל 6) על כל נתון מהמשתמש.
     """
     name = escape_telegram_html(lead.full_name)
-    category = _SERVICE_CATEGORY_HE.get(
+    category = SERVICE_CATEGORY_HE.get(
         lead.service_category, lead.service_category
     )
-    source = _SOURCE_CHANNEL_HE.get(lead.source_channel, lead.source_channel)
+    source = SOURCE_CHANNEL_HE.get(lead.source_channel, lead.source_channel)
 
     lines = ["🔔 <b>ליד חדש</b>", f"<b>{name}</b>"]
     if lead.organization_name:
