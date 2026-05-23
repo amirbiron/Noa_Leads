@@ -8,28 +8,36 @@
 // "+12125551234" → "12125551234" (חו"ל)
 // "*2421" → null (אין E.164)
 
+// פלט E.164 חייב להיות ספרות בלבד — wa.me דוחה כל דבר אחר
+const E164_DIGITS_ONLY = /^\d+$/;
+
 export function toWhatsAppDigits(phone: string | null): string | null {
   if (!phone) return null;
   const cleaned = phone.replace(/[\s\-().]/g, "");
   if (!cleaned || cleaned.startsWith("*")) return null;
 
-  // ישראלי עם +972 או 972 בהתחלה
-  if (cleaned.startsWith("+972")) return cleaned.slice(1);
-  if (cleaned.startsWith("972")) return cleaned;
-
-  // ישראלי עם 0 מוביל — להחליף ל-972
-  if (cleaned.startsWith("0")) {
-    return "972" + cleaned.slice(1);
+  let candidate: string;
+  if (cleaned.startsWith("+972")) {
+    candidate = cleaned.slice(1);
+  } else if (cleaned.startsWith("972")) {
+    candidate = cleaned;
+  } else if (cleaned.startsWith("0")) {
+    // ישראלי עם 0 מוביל — להחליף ל-972
+    candidate = "972" + cleaned.slice(1);
+  } else if (cleaned.startsWith("1800") || cleaned.startsWith("1700")) {
+    // לא ניתן לחיוג בינלאומי
+    return null;
+  } else if (cleaned.startsWith("+")) {
+    // חו"ל עם +
+    candidate = cleaned.slice(1);
+  } else {
+    // לא ברור — best effort, ייפסל אם יש תווים זרים
+    candidate = cleaned;
   }
 
-  // 1-800/1-700/קצרים — לא ניתן בינלאומי
-  if (cleaned.startsWith("1800") || cleaned.startsWith("1700")) return null;
-
-  // חו"ל עם +
-  if (cleaned.startsWith("+")) return cleaned.slice(1);
-
-  // לא ברור — מחזיר ספרות בלבד כ-best effort
-  return cleaned;
+  // guard סופי: רק ספרות. מונע פלט שבור אם הקלט הכיל אותיות / סמלים אחרים
+  // שעברו את הניקוי הראשוני (למשל phone שלא עבר את ה-backend validator).
+  return E164_DIGITS_ONLY.test(candidate) ? candidate : null;
 }
 
 export function toTelHref(phone: string | null): string | null {

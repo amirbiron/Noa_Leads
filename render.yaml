@@ -14,9 +14,11 @@ envVarGroups:
 
 databases:
   - name: noa-leads-db
-    # Render הסירו את ה-legacy starter. השמות הנוכחיים הם kebab-case
-    # ולא snake_case. basic-256mb (~$6/חודש, 256MB RAM, 1GB אחסון) הוא
-    # המינימום הנוכחי — מספיק ל-MVP של נועה. אם נדרשת הרחבה: basic-1gb.
+    # plan: starter עבור Postgres הוא instance type מסוג legacy שלא ניתן
+    # יותר ליצור איתו DBs חדשים (קיימים ממשיכים לרוץ). השמות הנוכחיים
+    # הם kebab-case. plan: basic-256mb תקף ועולה ~$6/חודש (256MB RAM,
+    # 1GB אחסון) — מספיק ל-MVP של נועה. אופציית שדרוג: basic-1gb.
+    # הערה: עבור web/cron services "starter" *כן* תקף עדיין — ראה למטה.
     plan: basic-256mb
     databaseName: noa_leads
     user: noa_leads

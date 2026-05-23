@@ -48,14 +48,22 @@
 
 ## 3. `hebrew-tailwind-preset`
 
-הסקיל ממליץ על Tailwind v4. אנחנו על v3.4.17. גרסה v3.1+ תומכת ב-dir variants —
-התאמה חלקית.
-
 **לבדוק/לתקן:**
 
-- ⬜ **שדרוג ל-Tailwind v4** — לא דחוף ולא בהכרח רצוי (v4 בשלבי early adoption, יציבות פחותה). דחיתי לעתיד.
-- ⬜ **`@theme` block + פונטים עבריים** — להעביר את הגדרת Heebo מ-Google Fonts לרשימת `@theme` מסודרת לפי הסקיל.
-- ⬜ **dir variants** — אם נצטרך styling שונה ב-LTR/RTL (לא צפוי, אנחנו RTL-only), להשתמש ב-`rtl:` ו-`ltr:`.
+- ✅ **שדרוג ל-Tailwind v4.3.0** — בוצע. v4 יציבה מאז Jan 2025.
+  - הוסר `tailwindcss 3.4.17` + `autoprefixer`
+  - הוסף `tailwindcss ^4` + `@tailwindcss/postcss ^4`
+  - `postcss.config.mjs` עודכן ל-`@tailwindcss/postcss` plugin יחיד
+  - `tailwind.config.ts` נמחק (v4 auto-scans את כל ה-`./app/**/*.tsx` וכו')
+- ✅ **`@theme` block** — צבעי המצב והפונטים הוגדרו ב-CSS תחת `@theme {}` (פונטים, --color-state-*).
+- ✅ **`@utility pb-safe`** — הועבר ל-syntax v4.
+- ✅ **dir variants** — `rtl:-scale-x-100` מתקמפל ל-`:where(:dir(rtl), [dir=rtl], [dir=rtl] *)` ב-v4 — שימוש אוטומטי ב-`:dir()` pseudo-class המודרני (בדיוק מה שהסקיל המליץ).
+
+**Audit לאחר השדרוג:**
+- אין שימוש ב-`bg-opacity-*`/`text-opacity-*`/`ring-opacity-*` (deprecated ב-v4)
+- אין שימוש ב-`ring-*` בקוד
+- כל ה-`border-*` עם צבע מפורש — לא נפלנו על default שהשתנה ל-`currentColor`
+- Build: 10 routes, types ✓, CSS bundle תקין (אומת ב-`.next/static/css`).
 
 **מתי לטפל:** רק אם נראה issue ויזואלי או אם משדרגים tailwind.
 
@@ -106,11 +114,14 @@
 
 ## טבלת priorities
 
-| פריט | priority | מתי |
+| פריט | סטטוס | הערה |
 |---|---|---|
-| ~~`formatRelativeHebrew` פלורליזציה~~ | ✅ Done | תוקן + 19 test cases |
-| ~~`_normalize_phone` הוספת אימות קידומות~~ | ✅ Done | תוקן + 17 test cases + wa.me E.164 |
-| ~~Phone display formatting אחיד~~ | ✅ Done | backend מנרמל ב-storage |
-| ~~Icon mirroring + bidi audit~~ | ✅ Done | Send שוקף, email bidi תוקן ב-settings |
-| Tailwind v4 שדרוג | Low | רק אם צריך |
-| `@theme` block לפונטים | Low | רק אם נשדרג ל-v4 |
+| `formatRelativeHebrew` פלורליזציה | ✅ Done | 19 test cases |
+| `_normalize_phone` קידומות ישראליות | ✅ Done | 17 test cases + wa.me E.164 |
+| Phone display formatting אחיד | ✅ Done | backend מנרמל ב-storage |
+| Icon mirroring + bidi audit | ✅ Done | Send שוקף + email dir="ltr" |
+| Tailwind v4 שדרוג | ✅ Done | + auto `:dir(rtl)` בונוס |
+| `@theme` block לפונטים | ✅ Done | --color-state-*, --font-sans |
+
+**כל הפריטים שזוהו ב-review הושלמו.** ב-pass עתידי על הסקילים הנותרים
+(`gws-hebrew-email-automation` ו-`hebrew-llm-eval-suite`) — בעת מימוש פאזה 3.

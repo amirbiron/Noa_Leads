@@ -1,6 +1,20 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+
+/*
+  Tailwind v4 — קונפיגורציה ב-@theme במקום tailwind.config.ts.
+  ראה: docs/Skills/hebrew-tailwind-preset/SKILL.md
+*/
+@theme {
+  /* מחסנית גופנים עברית — Heebo נטענת ב-app/layout.tsx דרך next/font */
+  --font-sans:
+    var(--font-heebo), "Assistant", "Noto Sans Hebrew", system-ui, sans-serif;
+
+  /* 4 צבעי מצב לפי האפיון — האדום בגוון עדין ולא צועק */
+  --color-state-red: #d97a7a;
+  --color-state-orange: #e8a55a;
+  --color-state-green: #7ab87a;
+  --color-state-gray: #9ca3af;
+}
 
 /* בסיס RTL — שימוש ב-logical properties בקוד הרכיבים */
 html {
@@ -14,8 +28,6 @@ body {
 }
 
 /* כיבוד safe-area במכשירי iOS (notch + home indicator) */
-@layer utilities {
-  .pb-safe {
-    padding-bottom: env(safe-area-inset-bottom);
-  }
+@utility pb-safe {
+  padding-bottom: env(safe-area-inset-bottom);
 }
