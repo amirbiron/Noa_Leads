@@ -1,0 +1,21 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* בסיס RTL — שימוש ב-logical properties בקוד הרכיבים */
+html {
+  direction: rtl;
+}
+
+body {
+  font-family: var(--font-heebo), system-ui, -apple-system, sans-serif;
+  background-color: #fafaf9;
+  color: #1f2937;
+}
+
+/* כיבוד safe-area במכשירי iOS (notch + home indicator) */
+@layer utilities {
+  .pb-safe {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+}

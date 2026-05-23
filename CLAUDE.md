@@ -36,3 +36,21 @@
 
 ### כלל 7: SSRF — URL מ-user → allowlist origin, לא רק https
 > כל endpoint שה-backend עושה אליו fetch/POST עם URL שמשתמש סיפק (webhooks, redirect URIs, image-proxy, file-download) חייב לאמת origin מול allowlist קבוע. הגבלת `https://` בלבד לא מספיקה — `https://169.254.169.254/` היא URL חוקי שמצביע ל-AWS metadata service. לדוגמה: Slack webhook → `https://hooks.slack.com/services/` בלבד.
+
+---
+
+## מסמכי ייחוס חיצוניים
+
+תיקיית `docs/references/` מכילה blueprints מפרויקטים אחרים — **לא חלק
+מהאפיון של נועה**, אלא דפוסי מימוש מוכחים שיש לאמץ בעת בניית פיצ'רים
+מתאימים. הם לא תחליף למסמכי `docs/product-spec.md` ו-`docs/tech-spec.md`
+שהם המקור היחיד לדרישות; הם רק מקור השראה ארכיטקטונית.
+
+**מתי לעיין:**
+
+| מסמך | מתי |
+|---|---|
+| `docs/references/google-calendar-blueprint.md` | בעת מימוש פאזה 2 (Google Calendar). מכסה OAuth flow + PKCE, הצפנת tokens, FreeBusy API, watch channels + syncToken, `bookingId=` anchor לסנכרון דו-כיווני, וטיפול ב-RefreshError. **שים לב:** הפרויקט המקורי משתמש ב-Telegram/WhatsApp bots לקביעת תור, אצלנו זה דף ווב — קח רק את חלקי ה-Google integration. |
+
+**עקרון:** אם הוספת בקוד דפוס שמופיע ב-references, ציין בקומנט קצר
+`# ראה: docs/references/<file>.md סעיף N` כדי שמי שיקרא ידע מנין המקור.
