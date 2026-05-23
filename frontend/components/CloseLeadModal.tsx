@@ -16,9 +16,10 @@ const CLOSURE_REASONS: { value: ClosureReason; label: string }[] = [
   { value: "other", label: "אחר" },
 ];
 
-// regex לולידציית מספר חיובי עם נקודה עשרונית אופציונלית.
+// regex לולידציית מספר חיובי עם עד 2 ספרות עשרוניות.
+// תואם ל-decimal_places=2 ב-Pydantic backend (Numeric(10,2) / Numeric(6,2)).
 // parseFloat("12abc") מחזיר 12, לכן regex הכרחי לפני הפרסור.
-const NUMERIC_RE = /^\d+(\.\d+)?$/;
+const NUMERIC_RE = /^\d+(\.\d{1,2})?$/;
 
 // ברירות מחדל ל-deal value+hours לפי subtype — מאפיין product-spec.md.
 // מועברות אוטומטית לטופס כשסוגרים כ-WON, ניתנות לעריכה.

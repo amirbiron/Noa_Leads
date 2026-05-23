@@ -98,7 +98,13 @@ class LeadUpdate(BaseModel):
         # אותה ולידציה כמו ב-LeadCreate — חייב להישאר עקבי לכל הפעולות
         return _normalize_phone(v)
 
-    @field_validator("full_name", "service_category")
+    @field_validator(
+        "full_name",
+        "service_category",
+        "waiting_on",
+        "priority_level",
+        "preferred_contact",
+    )
     @classmethod
     def reject_explicit_null(cls, v):
         # שדות NOT NULL ב-DB. ב-PATCH מותר להשמיט אותם (הם נשארים), אבל
@@ -173,6 +179,7 @@ class LeadRead(BaseModel):
     last_outbound_at: datetime | None
     last_activity_type: str | None
     reply_boost_until: datetime | None
+    proposal_sent_at: datetime | None
 
     dormant_flag: bool
     is_duplicate_suspected: bool

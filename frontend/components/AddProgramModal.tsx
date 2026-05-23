@@ -63,8 +63,9 @@ export function AddProgramModal({ leadId, open, onClose, onCreated }: Props) {
       const trimmed = price.trim();
       let priceNum: number | null = null;
       if (trimmed) {
-        if (!/^\d+(\.\d+)?$/.test(trimmed)) {
-          throw new Error("מחיר חייב להיות מספר חיובי");
+        // עד 2 ספרות עשרוניות (תואם decimal_places=2 ב-Pydantic)
+        if (!/^\d+(\.\d{1,2})?$/.test(trimmed)) {
+          throw new Error("מחיר חייב להיות מספר חיובי (עד 2 ספרות עשרוניות)");
         }
         priceNum = parseFloat(trimmed);
       }

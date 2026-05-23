@@ -92,6 +92,7 @@ export interface Lead {
   last_outbound_at: string | null;
   last_activity_type: string | null;
   reply_boost_until: string | null;
+  proposal_sent_at: string | null;
   dormant_flag: boolean;
   is_duplicate_suspected: boolean;
   is_returning_customer: boolean;
