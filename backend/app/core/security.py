@@ -1,27 +1,42 @@
 """
 JWT + hashing סיסמאות (bcrypt).
+
+passlib הוחלף בשימוש ישיר ב-bcrypt כי passlib 1.7.4 (יצא 2020) לא תואם
+ל-bcrypt 4.x — נופל על ה-`__about__` שהוסר וב-`detect_wrap_bug` שמפעיל
+checkpw עם > 72 bytes (bcrypt 4.1+ מסרב לחתוך שקט וזורק ValueError).
 """
 
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
+import bcrypt
 from jose import JWTError, jwt
-from passlib.context import CryptContext
 
 from app.config import get_settings
 from app.core.exceptions import AuthError
 
-_pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+# bcrypt 4.1+ מסרב לסיסמאות מעל 72 bytes. אנחנו חותכים בעצמנו לפני
+# גם hash וגם verify, כך שהתנהגות זהה לגרסאות הישנות (וזהה לדפוס של
+# Django/Flask). חשוב: גם ב-verify יש לחתוך באותה צורה — אחרת לסיסמה
+# >72 התקפה לא תאומת.
+_BCRYPT_MAX = 72
 
 
-# ===== סיסמאות =====
+def _to_bytes(plain: str) -> bytes:
+    return plain.encode("utf-8")[:_BCRYPT_MAX]
+
 
 def hash_password(plain: str) -> str:
-    return _pwd_context.hash(plain)
+    return bcrypt.hashpw(_to_bytes(plain), bcrypt.gensalt()).decode("utf-8")
 
 
 def verify_password(plain: str, hashed: str) -> bool:
-    return _pwd_context.verify(plain, hashed)
+    try:
+        return bcrypt.checkpw(_to_bytes(plain), hashed.encode("utf-8"))
+    except (ValueError, TypeError):
+        # hash פגום או encoding לא תקין → טיפול כסיסמה שגויה, לא כשגיאה
+        return False
 
 
 # ===== JWT =====
