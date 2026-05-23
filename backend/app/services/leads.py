@@ -210,11 +210,12 @@ async def close_lead(
             "לא ניתן לסגור ליד שכבר נמצא בארכיון."
         )
 
-    activity_type = (
-        ActivityType.LEAD_WON if target == LeadStatus.WON
-        else ActivityType.LEAD_LOST if target == LeadStatus.LOST
-        else ActivityType.LEAD_UPDATED
-    )
+    # תיוג סמנטי מדויק לכל סוג סגירה — חשוב ל-audit timeline
+    activity_type = {
+        LeadStatus.WON: ActivityType.LEAD_WON,
+        LeadStatus.LOST: ActivityType.LEAD_LOST,
+        LeadStatus.ARCHIVED: ActivityType.LEAD_ARCHIVED,
+    }[target]
     await log_activity(
         db,
         lead_id=lead_id,

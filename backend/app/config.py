@@ -4,7 +4,7 @@
 
 from functools import lru_cache
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -55,6 +55,20 @@ class Settings(BaseSettings):
     def cors_origins_list(self) -> list[str]:
         # פיצול אוריג'ינס מופרדים בפסיק
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+    @field_validator("database_url", mode="after")
+    @classmethod
+    def _normalize_database_url(cls, v: str) -> str:
+        # Render (ו-Heroku) מחזירים postgresql:// או postgres://,
+        # אבל SQLAlchemy האסינכרוני דורש postgresql+asyncpg://.
+        # מבצעים נרמול שקוף כדי שלא נצטרך לדאוג לזה ב-runtime.
+        if v.startswith("postgresql+"):
+            return v  # כבר יש driver מפורש
+        if v.startswith("postgresql://"):
+            return "postgresql+asyncpg://" + v[len("postgresql://"):]
+        if v.startswith("postgres://"):
+            return "postgresql+asyncpg://" + v[len("postgres://"):]
+        return v
 
 
 @lru_cache

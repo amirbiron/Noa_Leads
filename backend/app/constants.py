@@ -127,6 +127,7 @@ class ActivityType(StrEnum):
     STATUS_CHANGED = "status_changed"
     LEAD_WON = "lead_won"
     LEAD_LOST = "lead_lost"
+    LEAD_ARCHIVED = "lead_archived"
     LEAD_REOPENED = "lead_reopened"
     INBOUND_MESSAGE_LOGGED = "inbound_message_logged"
     OUTBOUND_MESSAGE_LOGGED = "outbound_message_logged"
