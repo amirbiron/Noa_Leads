@@ -16,12 +16,13 @@
 
 **לבדוק/לתקן:**
 
-- ⬜ **`backend/app/schemas/lead.py:_normalize_phone`** — להוסיף אימות קידומת (050-058/02-09/07X/1-800/*XXXX) וספירת ספרות לפי טבלת הסקיל. אופציה: לקרוא לסקריפט `validate_phone.py` או לשכפל את הלוגיקה הקצרה ל-Python בלבד.
-- ⬜ **`backend/app/services/leads.py:list_leads` (חיפוש)** — הסקיל ממליץ על נירמול דרך `regexp_replace`. כבר עושים את זה. ✓ to verify only.
-- ⬜ **המרת `+972` ל-`0`** ב-input של `NewLeadModal.tsx` — אוטומטית כשהמשתמש מקליד.
-- ⬜ **תצוגה אחידה** של phone ב-`leads/[id]/page.tsx` ו-`LeadCardRow` — להציג תמיד בפורמט `050-1234567` (גם אם נשמר אחרת).
+- ✅ **`backend/app/schemas/lead.py:_normalize_phone`** — תוקן. נוסף `app/utils/phone.py` עם patterns מהסקיל (נייד 05X/0-9 ספרות, קווי 02-04/08-09, VoIP 07[2-9], 1-700/1-800, *XXXX). אימות מלא + נירמול ל-`0XX-XXXXXXX`. תומך גם ב-`+972`/`972` (ממיר ל-0) וגם במספרי חו"ל (pass-through). 17 test cases.
+- ✅ **חיפוש `list_leads`** — כבר משתמש ב-`regexp_replace`, מתאים להמלצות הסקיל.
+- ✅ **המרת `+972` ל-`0`** — מטופל ב-backend `_normalize_phone` בכניסה. כל input שמגיע ל-API ייקלט נכון.
+- ✅ **תצוגה אחידה** — backend מאחסן עכשיו תמיד בפורמט `0XX-XXXXXXX` (או international לחו"ל). ה-DB הוא source of truth, frontend מציג כפי שמגיע.
+- ✅ **wa.me URL** — נוסף `frontend/lib/phone.ts:toWhatsAppDigits` שממיר ל-E.164 ללא + (`972521234567`). תוקן ב-`leads/[id]/page.tsx` ו-`TemplatePickerSheet.tsx` — בעבר wa.me קיבל `0521234567` שלא עובד.
 
-**מתי לטפל:** בפעם הבאה שאני נוגע ב-phone-related code, או בסבב a11y/UX ייעודי.
+**מתי לטפל:** בוצע.
 
 ---
 
@@ -104,8 +105,8 @@
 | פריט | priority | מתי |
 |---|---|---|
 | ~~`formatRelativeHebrew` פלורליזציה~~ | ✅ Done | תוקן + 19 test cases |
-| `_normalize_phone` הוספת אימות קידומות | Medium | בנגיעה הבאה ב-lead intake |
+| ~~`_normalize_phone` הוספת אימות קידומות~~ | ✅ Done | תוקן + 17 test cases + wa.me E.164 |
+| ~~Phone display formatting אחיד~~ | ✅ Done | backend מנרמל ב-storage |
 | Icon mirroring + `:dir()` audit | Medium | בסבב a11y |
-| Phone display formatting אחיד | Low | בסבב polish |
 | Tailwind v4 שדרוג | Low | רק אם צריך |
 | `@theme` block לפונטים | Low | רק אם נשדרג ל-v4 |
