@@ -1,0 +1,171 @@
+"""
+סכמות ליד — יצירה, קריאה, עדכון, סגירה.
+"""
+
+from datetime import datetime
+from uuid import UUID
+
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+
+from app.constants import (
+    CLOSED_LEAD_STATUSES,
+    ClosureReason,
+    LeadStatus,
+    PreferredContact,
+    PriorityLevel,
+    ServiceCategory,
+    SourceChannel,
+    WaitingOn,
+)
+
+
+# ===================== יצירה =====================
+
+class LeadCreate(BaseModel):
+    """יצירת ליד חדש — שדות מינימליים בלבד מהמוביילי."""
+
+    full_name: str = Field(min_length=1, max_length=200)
+    phone: str | None = Field(default=None, max_length=20)
+    email: EmailStr | None = None
+    organization_name: str | None = Field(default=None, max_length=200)
+
+    service_category: ServiceCategory
+    service_subtype: str | None = Field(default=None, max_length=100)
+
+    source_channel: SourceChannel
+    source_detail: str | None = None
+    utm_source: str | None = Field(default=None, max_length=100)
+    utm_campaign: str | None = Field(default=None, max_length=100)
+    utm_content: str | None = Field(default=None, max_length=100)
+
+    preferred_contact: PreferredContact = PreferredContact.WHATSAPP
+    priority_level: PriorityLevel = PriorityLevel.NORMAL
+
+    owner_id: UUID | None = None
+    personal_note: str | None = None
+
+    @field_validator("phone")
+    @classmethod
+    def validate_phone(cls, v: str | None) -> str | None:
+        # ולידציית בסיס — רק ספרות, רווחים, פלוס ומקפים. הפורמט המלא ייעשה בשירות.
+        if v is None or v == "":
+            return None
+        cleaned = v.strip()
+        if not cleaned:
+            return None
+        allowed = set("0123456789+-() ")
+        if not all(c in allowed for c in cleaned):
+            raise ValueError("מספר טלפון מכיל תווים לא חוקיים")
+        return cleaned
+
+
+# ===================== עדכון =====================
+
+class LeadUpdate(BaseModel):
+    """עדכון ליד — כל השדות אופציונליים."""
+
+    full_name: str | None = Field(default=None, min_length=1, max_length=200)
+    phone: str | None = Field(default=None, max_length=20)
+    email: EmailStr | None = None
+    organization_name: str | None = Field(default=None, max_length=200)
+
+    service_category: ServiceCategory | None = None
+    service_subtype: str | None = Field(default=None, max_length=100)
+
+    waiting_on: WaitingOn | None = None
+    priority_level: PriorityLevel | None = None
+    preferred_contact: PreferredContact | None = None
+
+    owner_id: UUID | None = None
+    personal_note: str | None = None
+
+    source_detail: str | None = None
+    utm_source: str | None = Field(default=None, max_length=100)
+    utm_campaign: str | None = Field(default=None, max_length=100)
+    utm_content: str | None = Field(default=None, max_length=100)
+
+
+# ===================== סגירה / פתיחה מחדש =====================
+
+class LeadCloseRequest(BaseModel):
+    """סגירת ליד כ-WON / LOST / ARCHIVED."""
+
+    target_status: LeadStatus
+    closure_reason: ClosureReason | None = None
+    note: str | None = None
+
+    @field_validator("target_status")
+    @classmethod
+    def must_be_closed_status(cls, v: LeadStatus) -> LeadStatus:
+        if v not in CLOSED_LEAD_STATUSES:
+            raise ValueError("סטטוס יעד חייב להיות WON, LOST או ARCHIVED")
+        return v
+
+
+# ===================== קריאה =====================
+
+class LeadRead(BaseModel):
+    """ייצוג מלא של ליד."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    full_name: str
+    phone: str | None
+    email: str | None
+    organization_name: str | None
+
+    service_category: str
+    service_subtype: str | None
+
+    status: str
+    waiting_on: str
+    priority_level: str
+    preferred_contact: str
+
+    owner_id: UUID | None
+
+    next_action_type: str | None
+    next_action_due_at: datetime | None
+    needs_attention: bool
+
+    source_channel: str
+    source_detail: str | None
+    utm_source: str | None
+    utm_campaign: str | None
+    utm_content: str | None
+
+    last_inbound_at: datetime | None
+    last_outbound_at: datetime | None
+    last_activity_type: str | None
+    reply_boost_until: datetime | None
+
+    dormant_flag: bool
+    is_duplicate_suspected: bool
+    is_returning_customer: bool
+
+    closure_reason: str | None
+    personal_note: str | None
+
+    created_at: datetime
+    updated_at: datetime
+
+
+class LeadListItem(BaseModel):
+    """ייצוג מקוצר לליד בתוך רשימה — חוסך bandwidth בנייד."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    full_name: str
+    organization_name: str | None
+    service_category: str
+    service_subtype: str | None
+    status: str
+    waiting_on: str
+    priority_level: str
+    preferred_contact: str
+    needs_attention: bool
+    last_inbound_at: datetime | None
+    last_outbound_at: datetime | None
+    updated_at: datetime

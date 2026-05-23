@@ -1,20 +1,67 @@
 """
 נקודת כניסה ל-FastAPI.
-בשלב 0 — שלד בלבד עם health check. הראוטרים האמיתיים נוספים בשלבים הבאים.
 """
 
+import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
+from app.api.routes import auth as auth_routes
+from app.api.routes import leads as leads_routes
 from app.config import get_settings
+from app.core.exceptions import AppException
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # מקום עתידי ל-init של חיבורי DB / clients חיצוניים
     yield
+
+
+def _register_exception_handlers(app: FastAPI) -> None:
+    """
+    Handlers שלא חושפים פנימיים (כלל 3 ב-CLAUDE.md):
+    - הודעות בעברית, גנריות
+    - אין stack traces ב-response
+    - שגיאות לא צפויות → 500 גנרי
+    """
+
+    @app.exception_handler(AppException)
+    async def handle_app_exception(_: Request, exc: AppException) -> JSONResponse:
+        return JSONResponse(status_code=exc.status_code, content=exc.to_dict())
+
+    @app.exception_handler(RequestValidationError)
+    async def handle_validation_error(
+        _: Request, exc: RequestValidationError
+    ) -> JSONResponse:
+        # מציגים את errors ב-FastAPI/Pydantic — אלה הודעות על הקלט עצמו,
+        # לא על פנים המערכת. אבל מוסיפים מעטפת אחידה בעברית.
+        return JSONResponse(
+            status_code=422,
+            content={
+                "error": "validation_error",
+                "message": "נתונים לא תקינים.",
+                "details": exc.errors(),
+            },
+        )
+
+    @app.exception_handler(Exception)
+    async def handle_unexpected(request: Request, exc: Exception) -> JSONResponse:
+        # log פנימי בלבד — לא חוזר ל-client
+        logger.exception("Unhandled exception on %s %s", request.method, request.url)
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": "internal_error",
+                "message": "אירעה שגיאה פנימית. נסה שוב מאוחר יותר.",
+            },
+        )
 
 
 def create_app() -> FastAPI:
@@ -35,9 +82,15 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    _register_exception_handlers(app)
+
     @app.get("/health", tags=["system"])
     async def health() -> dict[str, str]:
         return {"status": "ok", "env": settings.app_env}
+
+    # ===== Routers =====
+    app.include_router(auth_routes.router)
+    app.include_router(leads_routes.router)
 
     return app
 

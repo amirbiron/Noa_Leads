@@ -1,0 +1,285 @@
+"""
+שירות leads — CRUD בסיסי + רשימות עם פילטרים + סגירה/פתיחה מחדש.
+
+מעברי סטטוס תמיד אטומיים: UPDATE ... WHERE status IN (...) + rowcount check.
+זה מבטל race conditions בין שני משתמשים שמנסים לעדכן אותו ליד בו-זמנית.
+"""
+
+from datetime import datetime, timezone
+from typing import Any
+from uuid import UUID
+
+from sqlalchemy import func, select, update
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.constants import (
+    CLOSED_LEAD_STATUSES,
+    OPEN_LEAD_STATUSES,
+    ActivityType,
+    ClosureReason,
+    LeadStatus,
+)
+from app.core.exceptions import (
+    InvalidStateTransitionError,
+    NotFoundError,
+    ValidationError,
+)
+from app.core.state_machine import (
+    CLOSE_ALLOWED_FROM,
+    REOPEN_ALLOWED_FROM,
+)
+from app.models.lead import Lead
+from app.schemas.lead import LeadCloseRequest, LeadCreate, LeadUpdate
+from app.services.activities import log_activity
+
+
+# ===================== יצירה =====================
+
+async def create_lead(
+    db: AsyncSession, payload: LeadCreate, current_user_id: UUID | None
+) -> Lead:
+    # אם לא צוין owner מפורש, מקצים לפי המשתמש שיצר
+    owner_id = payload.owner_id or current_user_id
+
+    lead = Lead(
+        full_name=payload.full_name,
+        phone=payload.phone,
+        email=payload.email,
+        organization_name=payload.organization_name,
+        service_category=str(payload.service_category),
+        service_subtype=payload.service_subtype,
+        source_channel=str(payload.source_channel),
+        source_detail=payload.source_detail,
+        utm_source=payload.utm_source,
+        utm_campaign=payload.utm_campaign,
+        utm_content=payload.utm_content,
+        preferred_contact=str(payload.preferred_contact),
+        priority_level=str(payload.priority_level),
+        owner_id=owner_id,
+        personal_note=payload.personal_note,
+        status=LeadStatus.NEW.value,
+        waiting_on="NOAH",
+    )
+    db.add(lead)
+    await db.flush()  # כדי לקבל id
+
+    await log_activity(
+        db,
+        lead_id=lead.id,
+        activity_type=ActivityType.LEAD_CREATED,
+        performed_by=current_user_id,
+        metadata={"source_channel": lead.source_channel},
+    )
+
+    await db.commit()
+    await db.refresh(lead)
+    return lead
+
+
+# ===================== קריאה =====================
+
+async def get_lead_or_404(db: AsyncSession, lead_id: UUID) -> Lead:
+    result = await db.execute(select(Lead).where(Lead.id == lead_id))
+    lead = result.scalar_one_or_none()
+    if lead is None:
+        raise NotFoundError("ליד לא נמצא.")
+    return lead
+
+
+async def list_leads(
+    db: AsyncSession,
+    *,
+    page: int,
+    page_size: int,
+    status: str | None = None,
+    waiting_on: str | None = None,
+    owner_id: UUID | None = None,
+    source_channel: str | None = None,
+    needs_attention: bool | None = None,
+) -> tuple[list[Lead], int]:
+    """מחזיר (items, total)."""
+    base = select(Lead)
+    if status:
+        base = base.where(Lead.status == status)
+    if waiting_on:
+        base = base.where(Lead.waiting_on == waiting_on)
+    if owner_id:
+        base = base.where(Lead.owner_id == owner_id)
+    if source_channel:
+        base = base.where(Lead.source_channel == source_channel)
+    if needs_attention is not None:
+        base = base.where(Lead.needs_attention == needs_attention)
+
+    # ספירה
+    count_stmt = select(func.count()).select_from(base.subquery())
+    total = (await db.execute(count_stmt)).scalar_one()
+
+    # מיון: ליד חדש קודם, אחר כך לפי updated_at יורד
+    items_stmt = (
+        base.order_by(Lead.updated_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
+    result = await db.execute(items_stmt)
+    items = list(result.scalars().all())
+    return items, total
+
+
+# ===================== עדכון =====================
+
+async def update_lead(
+    db: AsyncSession, lead_id: UUID, payload: LeadUpdate, current_user_id: UUID | None
+) -> Lead:
+    lead = await get_lead_or_404(db, lead_id)
+
+    # רק שדות שנשלחו במפורש
+    updates = payload.model_dump(exclude_unset=True)
+
+    # אם נשלח owner_id = None — מותר רק אם הסטטוס לא פתוח (ולידציה לפי spec)
+    if "owner_id" in updates and updates["owner_id"] is None:
+        if lead.status in OPEN_LEAD_STATUSES:
+            raise ValidationError("ליד פתוח חייב בעל אחריות.")
+
+    # המרת enums למחרוזות לפני שמירה
+    for key, value in list(updates.items()):
+        if hasattr(value, "value"):
+            updates[key] = value.value
+
+    for key, value in updates.items():
+        setattr(lead, key, value)
+
+    await log_activity(
+        db,
+        lead_id=lead.id,
+        activity_type=ActivityType.LEAD_UPDATED,
+        performed_by=current_user_id,
+        metadata={"fields": list(updates.keys())},
+    )
+
+    await db.commit()
+    await db.refresh(lead)
+    return lead
+
+
+# ===================== סגירה =====================
+
+async def close_lead(
+    db: AsyncSession,
+    lead_id: UUID,
+    payload: LeadCloseRequest,
+    current_user_id: UUID | None,
+) -> Lead:
+    target = payload.target_status
+    if target not in CLOSED_LEAD_STATUSES:
+        raise ValidationError("ניתן לסגור ליד רק ל-WON, LOST או ARCHIVED.")
+
+    if target == LeadStatus.LOST and payload.closure_reason is None:
+        raise ValidationError("חובה לציין סיבת סגירה כשסוגרים כ-LOST.")
+
+    # closure_reason חוקי רק אם target = LOST
+    if target != LeadStatus.LOST and payload.closure_reason is not None:
+        raise ValidationError("ניתן לציין סיבת סגירה רק כשסוגרים כ-LOST.")
+
+    # מעבר אטומי: רק אם הסטטוס הנוכחי מורשה
+    allowed_from = [s.value for s in CLOSE_ALLOWED_FROM]
+    values: dict[str, Any] = {
+        "status": target.value,
+        "next_action_type": None,
+        "next_action_due_at": None,
+        "needs_attention": False,
+        "waiting_on": "NONE",
+    }
+    if payload.closure_reason is not None:
+        values["closure_reason"] = str(payload.closure_reason)
+
+    stmt = (
+        update(Lead)
+        .where(Lead.id == lead_id, Lead.status.in_(allowed_from))
+        .values(**values)
+        .returning(Lead.id)
+    )
+    result = await db.execute(stmt)
+    if result.scalar_one_or_none() is None:
+        # ייתכן שהליד לא קיים, או שהסטטוס שלו כבר ARCHIVED
+        existing = await db.execute(
+            select(Lead.status).where(Lead.id == lead_id)
+        )
+        if existing.scalar_one_or_none() is None:
+            raise NotFoundError("ליד לא נמצא.")
+        raise InvalidStateTransitionError(
+            "לא ניתן לסגור ליד שכבר נמצא בארכיון."
+        )
+
+    activity_type = (
+        ActivityType.LEAD_WON if target == LeadStatus.WON
+        else ActivityType.LEAD_LOST if target == LeadStatus.LOST
+        else ActivityType.LEAD_UPDATED
+    )
+    await log_activity(
+        db,
+        lead_id=lead_id,
+        activity_type=activity_type,
+        performed_by=current_user_id,
+        content=payload.note,
+        metadata={
+            "new_status": target.value,
+            "closure_reason": (
+                str(payload.closure_reason) if payload.closure_reason else None
+            ),
+        },
+    )
+
+    await db.commit()
+    return await get_lead_or_404(db, lead_id)
+
+
+# ===================== פתיחה מחדש =====================
+
+async def reopen_lead(
+    db: AsyncSession, lead_id: UUID, current_user_id: UUID | None
+) -> Lead:
+    allowed_from = [s.value for s in REOPEN_ALLOWED_FROM]
+    stmt = (
+        update(Lead)
+        .where(Lead.id == lead_id, Lead.status.in_(allowed_from))
+        .values(
+            status=LeadStatus.IN_PROGRESS.value,
+            closure_reason=None,
+            waiting_on="NOAH",
+        )
+        .returning(Lead.id)
+    )
+    result = await db.execute(stmt)
+    if result.scalar_one_or_none() is None:
+        existing = await db.execute(select(Lead.status).where(Lead.id == lead_id))
+        current = existing.scalar_one_or_none()
+        if current is None:
+            raise NotFoundError("ליד לא נמצא.")
+        raise InvalidStateTransitionError(
+            "ניתן לפתוח מחדש רק לידים סגורים (WON / LOST / ARCHIVED)."
+        )
+
+    await log_activity(
+        db,
+        lead_id=lead_id,
+        activity_type=ActivityType.LEAD_REOPENED,
+        performed_by=current_user_id,
+    )
+    await db.commit()
+    return await get_lead_or_404(db, lead_id)
+
+
+# ===================== Timeline =====================
+
+async def get_timeline(db: AsyncSession, lead_id: UUID):
+    # מאמת קיום הליד תחילה — אחרת מחזירים 404 ולא רשימה ריקה
+    await get_lead_or_404(db, lead_id)
+
+    from app.models.activity import Activity  # local import למניעת circular
+    stmt = (
+        select(Activity)
+        .where(Activity.lead_id == lead_id)
+        .order_by(Activity.created_at.desc())
+    )
+    result = await db.execute(stmt)
+    return list(result.scalars().all())
