@@ -12,10 +12,18 @@ from app.core.security import (
     create_access_token,
     create_refresh_token,
     decode_refresh_token,
+    hash_password,
     verify_password,
 )
 from app.models.user import User
 from app.schemas.auth import TokenResponse
+
+
+# bcrypt hash אמיתי שנוצר פעם אחת בטעינת המודול. משמש להרצת verify
+# על משתמש שלא קיים כדי שזמן התגובה לא יחשוף את קיומו (timing attack).
+# בעבר השתמשנו בקבוע פייק ($2b$12$ + "x"*53) שעבד אבל עלול להישבר
+# בעדכוני passlib עתידיים. dummy אמיתי יציב לאורך זמן.
+_DUMMY_HASH = hash_password("__noa_leads_auth_timing_dummy__")
 
 
 async def authenticate_user(
@@ -27,8 +35,8 @@ async def authenticate_user(
 
     # בדיקת הסיסמה גם אם user is None — למניעת timing attacks.
     if user is None or not user.password_hash:
-        # הרצת hash dummy כדי לשמור על timing דומה
-        verify_password(password, "$2b$12$" + "x" * 53)
+        # הרצת verify מול hash תקין כדי לשמור על זמן תגובה דומה
+        verify_password(password, _DUMMY_HASH)
         raise AuthError()
 
     if not verify_password(password, user.password_hash):

@@ -8,7 +8,7 @@ check_stuck_proposals — רץ כל שעה.
 import logging
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import exists, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.constants import LeadStatus, TaskStatus, TaskType
@@ -30,10 +30,12 @@ async def _stuck_proposal_leads(db: AsyncSession) -> list[Lead]:
     שולף PROPOSAL_SENT שעברו STUCK_THRESHOLD_DAYS מאז שליחת ההצעה,
     ואין להם משימה פתוחה.
 
-    משתמש ב-proposal_sent_at במקום last_outbound_at — האחרון מתאפס
-    בכל פולואפ outbound, ויגרום לזהות כ"לא תקוע" הצעות שכבר ישנות.
+    משתמש ב-COALESCE(proposal_sent_at, last_outbound_at) — לידים שנוצרו
+    לפני migration 0002 לא יקבלו אף פעם proposal_sent_at, ובלי הfallback
+    הם נשארים שקופים לעד מבחינת ה-cron הזה ו-dashboard סנכרוני זה עם זה.
     """
     threshold = datetime.now(timezone.utc) - timedelta(days=STUCK_THRESHOLD_DAYS)
+    effective_sent_at = func.coalesce(Lead.proposal_sent_at, Lead.last_outbound_at)
 
     # subquery של "יש task פתוח לליד הזה"
     has_open_task = (
@@ -49,8 +51,8 @@ async def _stuck_proposal_leads(db: AsyncSession) -> list[Lead]:
         select(Lead)
         .where(
             Lead.status == LeadStatus.PROPOSAL_SENT.value,
-            Lead.proposal_sent_at.is_not(None),
-            Lead.proposal_sent_at <= threshold,
+            effective_sent_at.is_not(None),
+            effective_sent_at <= threshold,
             ~has_open_task,
         )
     )

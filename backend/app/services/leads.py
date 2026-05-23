@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import func, select, update
+from sqlalchemy import case, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.constants import (
@@ -251,7 +251,14 @@ async def close_lead(
         "closure_reason": (
             str(payload.closure_reason) if payload.closure_reason else None
         ),
-        "closed_at": func.now(),
+        # closed_at מתעדכן רק כשהסטטוס *באמת* משתנה. סגירה חוזרת לאותו
+        # סטטוס (WON→WON כדי לעדכן closed_value) שומרת על תאריך הסגירה
+        # המקורי — אחרת ליד שנסגר לפני שבועות היה נכנס בטעות לסיכום
+        # הרווחיות של השבוע הנוכחי.
+        "closed_at": case(
+            (Lead.status != target.value, func.now()),
+            else_=Lead.closed_at,
+        ),
         "updated_at": func.now(),
     }
     # כלכלת ה-deal — רק כשסוגרים כ-WON. ב-LOST/ARCHIVED אין הכנסה.

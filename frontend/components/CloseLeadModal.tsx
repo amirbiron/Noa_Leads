@@ -88,13 +88,23 @@ export function CloseLeadModal({ lead, open, onClose, onClosed }: Props) {
           if (!NUMERIC_RE.test(closedValue.trim())) {
             throw new Error("שווי לא תקין");
           }
-          value = parseFloat(closedValue);
+          const parsed = parseFloat(closedValue);
+          // NaN/Infinity check לפי כלל 4 ב-CLAUDE.md — NUMERIC_RE כבר חוסם
+          // אבל double-guard מונע הפתעות אם הקלט מגיע ממקור עתידי אחר.
+          if (!Number.isFinite(parsed)) {
+            throw new Error("שווי לא תקין");
+          }
+          value = parsed;
         }
         if (actualHours.trim()) {
           if (!NUMERIC_RE.test(actualHours.trim())) {
             throw new Error("מספר שעות לא תקין");
           }
-          hours = parseFloat(actualHours);
+          const parsed = parseFloat(actualHours);
+          if (!Number.isFinite(parsed)) {
+            throw new Error("מספר שעות לא תקין");
+          }
+          hours = parsed;
         }
       }
       await api.closeLead(lead.id, {

@@ -67,7 +67,12 @@ export function AddProgramModal({ leadId, open, onClose, onCreated }: Props) {
         if (!/^\d+(\.\d{1,2})?$/.test(trimmed)) {
           throw new Error("מחיר חייב להיות מספר חיובי (עד 2 ספרות עשרוניות)");
         }
-        priceNum = parseFloat(trimmed);
+        const parsed = parseFloat(trimmed);
+        // NaN/Infinity check לפי כלל 4 ב-CLAUDE.md
+        if (!Number.isFinite(parsed)) {
+          throw new Error("מחיר לא תקין");
+        }
+        priceNum = parsed;
       }
       await api.createProgram({
         lead_id: leadId,

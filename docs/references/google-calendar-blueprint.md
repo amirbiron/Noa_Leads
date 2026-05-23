@@ -55,7 +55,7 @@
 **Scopes:** `https://www.googleapis.com/auth/calendar` (קריאה+כתיבה).
 
 **משתני סביבה** (`.env.example` שורות 90–95):
-```
+```env
 GOOGLE_CLIENT_ID=""
 GOOGLE_CLIENT_SECRET=""
 GOOGLE_REDIRECT_URI="https://your-domain.com/google/callback"
@@ -236,7 +236,7 @@ created_at TEXT DEFAULT (datetime('now'))
 ```
 
 **`bot_settings`** — הגדרות auto-booking ותזכורות:
-```
+```text
 auto_booking_mode (manual/auto_with_check/auto_always)
 auto_booking_max_days_ahead, auto_booking_buffer_after_event_minutes
 default_appointment_duration_minutes, appointment_duration_step_minutes
@@ -249,7 +249,7 @@ second_reminder_enabled, second_reminder_hours
 
 ## 9) קונפיגורציה
 
-```
+```env
 # OAuth
 GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URI
 SECRETS_ENCRYPTION_KEY  # חובה בפרוד — מצפין refresh/access tokens
@@ -287,7 +287,7 @@ TWILIO_ACCOUNT_SID/AUTH_TOKEN/WHATSAPP_NUMBER, OWNER_WHATSAPP_NUMBER
 
 ## מבנה תיקיות בפרויקט המקורי (לעיון)
 
-```
+```text
 google_calendar.py            # OAuth, FreeBusy, Events CRUD, refresh
 core/booking_decision.py      # auto-booking logic
 bot/
