@@ -12,3 +12,10 @@ body {
   background-color: #fafaf9;
   color: #1f2937;
 }
+
+/* כיבוד safe-area במכשירי iOS (notch + home indicator) */
+@layer utilities {
+  .pb-safe {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+}
