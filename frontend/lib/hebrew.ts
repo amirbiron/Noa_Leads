@@ -147,6 +147,20 @@ export function labelActivity(s: string): string {
 
 // ===== פורמטר תאריך יחסי =====
 
+// פלורליזציה בעברית — קטגוריות CLDR: one (1) / two (2) / other (3+, decimals, 0).
+// ראה: docs/Skills/hebrew-i18n/references/pluralization.md
+// במקום "דקתיים" משתמשים ב"שתי דקות" — צורה תקנית יותר לפי הסקיל.
+function pluralizeTimeUnit(
+  n: number,
+  one: string,
+  two: string,
+  other: string,
+): string {
+  if (n === 1) return one;
+  if (n === 2) return two;
+  return `${n} ${other}`;
+}
+
 export function formatRelativeHebrew(iso: string | null): string {
   if (!iso) return "";
   const date = new Date(iso);
@@ -157,19 +171,29 @@ export function formatRelativeHebrew(iso: string | null): string {
   const diffHours = Math.round(diffMs / 3_600_000);
   const diffDays = Math.round(diffMs / 86_400_000);
 
+  // עד שעה — דקות. הבאג הקודם: "לפני 1 דקות" / "בעוד 1 דקות".
   if (Math.abs(diffMinutes) < 60) {
     if (diffMinutes === 0) return "ממש עכשיו";
-    if (diffMinutes < 0) return `לפני ${-diffMinutes} דקות`;
-    return `בעוד ${diffMinutes} דקות`;
+    const abs = Math.abs(diffMinutes);
+    const unit = pluralizeTimeUnit(abs, "דקה", "שתי דקות", "דקות");
+    return diffMinutes < 0 ? `לפני ${unit}` : `בעוד ${unit}`;
   }
+
+  // עד 24 שעות — שעות
   if (Math.abs(diffHours) < 24) {
-    if (diffHours < 0) return `לפני ${-diffHours} שעות`;
-    return `בעוד ${diffHours} שעות`;
+    const abs = Math.abs(diffHours);
+    const unit = pluralizeTimeUnit(abs, "שעה", "שעתיים", "שעות");
+    return diffHours < 0 ? `לפני ${unit}` : `בעוד ${unit}`;
   }
-  if (diffDays < 0) return `לפני ${-diffDays} ימים`;
-  if (diffDays === 1) return "מחר";
+
+  // ימים — עם מילים מיוחדות לאתמול/היום/מחר. הבאג הקודם:
+  // "לפני 1 ימים" במקום "אתמול".
   if (diffDays === 0) return "היום";
-  return `בעוד ${diffDays} ימים`;
+  if (diffDays === 1) return "מחר";
+  if (diffDays === -1) return "אתמול";
+  const abs = Math.abs(diffDays);
+  const unit = pluralizeTimeUnit(abs, "יום", "יומיים", "ימים");
+  return diffDays < 0 ? `לפני ${unit}` : `בעוד ${unit}`;
 }
 
 export function formatDateTimeHebrew(iso: string | null): string {

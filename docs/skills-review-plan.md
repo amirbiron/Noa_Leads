@@ -67,16 +67,11 @@
 
 **לבדוק/לתקן:**
 
-- ⬜ **`formatRelativeHebrew`** — באג ידוע: "לפני 1 דקות" / "לפני 1 ימים". צריך:
-  - 0 → "ממש עכשיו"
-  - 1 → "לפני דקה" / "לפני יום"
-  - 2 → "לפני יומיים" (צורת זוגי)
-  - 3+ → "לפני N דקות/ימים"
-  - אותו דבר ב"בעוד"
-- ⬜ **`Intl.PluralRules` או `Intl.RelativeTimeFormat`** — הסקיל ממליץ לקחת מנוע מובנה במקום string templates. בעברית `Intl.RelativeTimeFormat('he')` עושה את העבודה.
+- ✅ **`formatRelativeHebrew`** — תוקן עם `pluralizeTimeUnit` helper לפי קטגוריות CLDR (one/two/other). הצורות לפי הסקיל: דקה / שתי דקות / N דקות; שעה / שעתיים / N שעות; יום / יומיים / N ימים. בנוסף: היום/מחר/אתמול כשרלוונטי. אומת על 19 test cases.
+- ⏭️ **`Intl.RelativeTimeFormat`** — דילגתי. לא נותן את הצורה הזוגית ("יומיים") הנדרשת בעברית, רק "לפני יום אחד" / "לפני 2 ימים". helper מקומי קצר יותר ועקבי עם הסקיל.
 - ⬜ **`Intl.NumberFormat('he-IL')`** — כבר משתמשים ב-`toLocaleString("he-IL")` בכמה מקומות, לוודא שכל המקומות עקביים.
 
-**מתי לטפל:** בקרוב — formatRelativeHebrew נראית למשתמשת בכל card בדשבורד. שווה לתקן בסבב קצר.
+**מתי לטפל:** בוצע (formatRelativeHebrew). יתר ייעשה בסבב polish כללי.
 
 ---
 
@@ -108,7 +103,7 @@
 
 | פריט | priority | מתי |
 |---|---|---|
-| `formatRelativeHebrew` פלורליזציה | High | בקרוב — visible bug |
+| ~~`formatRelativeHebrew` פלורליזציה~~ | ✅ Done | תוקן + 19 test cases |
 | `_normalize_phone` הוספת אימות קידומות | Medium | בנגיעה הבאה ב-lead intake |
 | Icon mirroring + `:dir()` audit | Medium | בסבב a11y |
 | Phone display formatting אחיד | Low | בסבב polish |
