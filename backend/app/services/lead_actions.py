@@ -12,7 +12,7 @@ from uuid import UUID
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.constants import LeadStatus
+from app.constants import OPEN_LEAD_STATUSES, LeadStatus
 from app.core.exceptions import (
     InvalidStateTransitionError,
     NotFoundError,
@@ -100,11 +100,17 @@ async def perform_action(
         )
 
     else:
-        # פעולה שלא מזיזה סטטוס (לדוגמה: add_internal_note)
+        # פעולה שלא מזיזה סטטוס (לדוגמה: add_internal_note).
         atomic_update_needed = bool(values)
-        allowed_from = (
-            [s.value for s in action.allowed_from] if action.allowed_from else None
-        )
+        if action.allowed_from is not None:
+            allowed_from = [s.value for s in action.allowed_from]
+        elif values:
+            # latent design safety: action בלי allowed_from שעדיין מעדכן שדות —
+            # אסור לבצע על ליד סגור. fallback ל-OPEN_LEAD_STATUSES.
+            allowed_from = [s.value for s in OPEN_LEAD_STATUSES]
+        else:
+            # אין values בכלל (add_internal_note) — מותר מכל סטטוס.
+            allowed_from = None
 
     if not atomic_update_needed and not values:
         # add_internal_note — אין שינוי בליד, רק activity. בודקים שהליד קיים.

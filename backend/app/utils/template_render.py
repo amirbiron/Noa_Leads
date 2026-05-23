@@ -85,7 +85,3 @@ def render_template(body: str, context: Mapping[str, str]) -> str:
         return match.group(0)
 
     return _PLACEHOLDER_RE.sub(_replace, body)
-
-
-def render_for_lead(body: str, lead: Lead) -> str:
-    return render_template(body, build_variable_context(lead))

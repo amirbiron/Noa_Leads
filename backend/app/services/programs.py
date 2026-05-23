@@ -35,7 +35,13 @@ from app.utils.work_hours import next_working_day_start
 # ===================== קריאה =====================
 
 async def get_program_or_404(db: AsyncSession, program_id: UUID) -> Program:
-    result = await db.execute(select(Program).where(Program.id == program_id))
+    # populate_existing — חובה אחרי Core update() (למשל cancel_program).
+    # ראה הסבר ב-leads.get_lead_or_404.
+    result = await db.execute(
+        select(Program)
+        .where(Program.id == program_id)
+        .execution_options(populate_existing=True)
+    )
     program = result.scalar_one_or_none()
     if program is None:
         raise NotFoundError("תוכנית לא נמצאה.")

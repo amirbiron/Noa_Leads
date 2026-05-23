@@ -16,8 +16,13 @@ const CLOSURE_REASONS: { value: ClosureReason; label: string }[] = [
   { value: "other", label: "אחר" },
 ];
 
+// regex לולידציית מספר חיובי עם נקודה עשרונית אופציונלית.
+// parseFloat("12abc") מחזיר 12, לכן regex הכרחי לפני הפרסור.
+const NUMERIC_RE = /^\d+(\.\d+)?$/;
+
 // ברירות מחדל ל-deal value+hours לפי subtype — מאפיין product-spec.md.
 // מועברות אוטומטית לטופס כשסוגרים כ-WON, ניתנות לעריכה.
+// אם הברירות במקור (backend/app/utils/service_rates.py) משתנות — צריך לעדכן גם פה.
 const SUBTYPE_DEFAULTS: Record<string, { price: string; hours: string }> = {
   voice_development: { price: "300", hours: "1" },
   public_speaking: { price: "2400", hours: "8" },
@@ -63,8 +68,11 @@ export function CloseLeadModal({ lead, open, onClose, onClosed }: Props) {
   }, [open, lead.id, lead.service_subtype]);
 
   const hourlyRate =
-    closedValue && actualHours && /^\d+(\.\d+)?$/.test(closedValue) &&
-    /^\d+(\.\d+)?$/.test(actualHours) && parseFloat(actualHours) > 0
+    closedValue &&
+    actualHours &&
+    NUMERIC_RE.test(closedValue) &&
+    NUMERIC_RE.test(actualHours) &&
+    parseFloat(actualHours) > 0
       ? Math.round(parseFloat(closedValue) / parseFloat(actualHours))
       : null;
 
@@ -76,13 +84,13 @@ export function CloseLeadModal({ lead, open, onClose, onClosed }: Props) {
       let hours: number | null = null;
       if (target === "WON") {
         if (closedValue.trim()) {
-          if (!/^\d+(\.\d+)?$/.test(closedValue.trim())) {
+          if (!NUMERIC_RE.test(closedValue.trim())) {
             throw new Error("שווי לא תקין");
           }
           value = parseFloat(closedValue);
         }
         if (actualHours.trim()) {
-          if (!/^\d+(\.\d+)?$/.test(actualHours.trim())) {
+          if (!NUMERIC_RE.test(actualHours.trim())) {
             throw new Error("מספר שעות לא תקין");
           }
           hours = parseFloat(actualHours);

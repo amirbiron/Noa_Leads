@@ -98,6 +98,16 @@ class LeadUpdate(BaseModel):
         # אותה ולידציה כמו ב-LeadCreate — חייב להישאר עקבי לכל הפעולות
         return _normalize_phone(v)
 
+    @field_validator("full_name", "service_category")
+    @classmethod
+    def reject_explicit_null(cls, v):
+        # שדות NOT NULL ב-DB. ב-PATCH מותר להשמיט אותם (הם נשארים), אבל
+        # אסור לשלוח null מפורש — זה היה גורם ל-IntegrityError ב-commit
+        # במקום שגיאת ולידציה ברורה.
+        if v is None:
+            raise ValueError("שדה חובה — לא ניתן לאפס. אפשר להשמיט מה-payload.")
+        return v
+
 
 # ===================== סגירה / פתיחה מחדש =====================
 

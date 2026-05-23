@@ -272,7 +272,12 @@ async def list_open_tasks(
 # ===================== עזרה =====================
 
 async def _get_task_or_404(db: AsyncSession, task_id: UUID) -> Task:
-    result = await db.execute(select(Task).where(Task.id == task_id))
+    # populate_existing — חובה אחרי Core update(). ראה הסבר ב-leads.get_lead_or_404.
+    result = await db.execute(
+        select(Task)
+        .where(Task.id == task_id)
+        .execution_options(populate_existing=True)
+    )
     task = result.scalar_one_or_none()
     if task is None:
         raise NotFoundError("משימה לא נמצאה.")

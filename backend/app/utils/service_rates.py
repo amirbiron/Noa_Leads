@@ -82,7 +82,11 @@ SERVICE_RATES: dict[str, dict] = {
 
 
 def get_rate_for_subtype(subtype: str | None) -> dict | None:
-    """מחזיר את ערכי ברירת המחדל לסאב-טייפ, או None אם לא ידוע."""
+    """
+    מחזיר את ערכי ברירת המחדל לסאב-טייפ, או None אם לא ידוע.
+    מחזיר עותק רדוד — מונע מ-callers לדרוס את ה-defaults הגלובליים.
+    """
     if not subtype:
         return None
-    return SERVICE_RATES.get(subtype)
+    entry = SERVICE_RATES.get(subtype)
+    return entry.copy() if entry is not None else None
