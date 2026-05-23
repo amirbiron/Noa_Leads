@@ -33,12 +33,16 @@
 
 **לבדוק/לתקן:**
 
-- ⬜ **חיפוש `left`/`right` במחלקות** — `grep -rn "\\bleft\\|right\\b" frontend/components/ frontend/app/` ובדיקה שכולם logical. נמצאו: `inset-inline-end-4`, `text-end`, `ps-9 pe-3` — אלה בסדר. צריך לאמת.
-- ⬜ **Icon mirroring** — `ChevronLeft` ב-`LeadCardRow.tsx`, `TodayActionRow.tsx`, `NavRow` בsettings: לפי הסקיל צריך `:dir(rtl) { transform: scaleX(-1); }` או לבחור `ChevronRight` ב-RTL. במצב הנוכחי החץ הוא ChevronLeft (מצביע שמאלה) — ב-RTL זה "קדימה" שזה הגיוני, אבל יש לוודא שזה מכוון.
-- ⬜ **scroll directions** ב-modals — `TemplatePickerSheet`, `CloseLeadModal` (max-h-[95vh] flex-col + overflow-y-auto) — לבדוק שאין `scroll-padding-left/right` שלא מותאם.
-- ⬜ **`:dir()` במקום `[dir="rtl"]`** — אנחנו לא משתמשים ב-attribute selector בכלל. ✓ to verify.
+- ✅ **Physical CSS audit** — `grep` על `ml-/mr-/pl-/pr-/border-l/border-r/left-/right-/rounded-l/rounded-r/text-left/text-right` חזר נקי. הכל logical (`ms-`, `me-`, `ps-`, `pe-`, `border-s`, `inset-inline-*`).
+- ✅ **Icon mirroring** — סקירה מלאה:
+  - `ChevronLeft`/`ArrowLeft` (3 מקומות): כבר מצביעים נכון ל"קדימה" ב-RTL. אין שיקוף.
+  - `Send` (paper plane, 2 מקומות): נוסף `rtl:-scale-x-100` — הסקיל מסווג "חצי שליחה" כצריכים שיקוף.
+  - `Phone`/`Mail`/`MessageCircle`/`Search`/`Clock`/`Settings`/`X`/`Check`/`Plus`/`Trash` — universal, לא משקפים (לפי הסקיל).
+  - `ArrowRightLeft` (transfer) — bidirectional, לא משקפים.
+- ✅ **Bidi: email/phone בטקסט מעורב** — תוקן ב-settings (`<span dir="ltr">{email}</span> · {role}`). יתר המקומות עם phone/email היו כבר עם `dir="ltr"`.
+- ✅ **`:dir()` vs `[dir="rtl"]`** — לא בשימוש; אנחנו ב-Tailwind `rtl:` variant הסטנדרטי.
 
-**מתי לטפל:** בסבב a11y/RTL ייעודי, או כשמוסיפים קומפוננטה חדשה עם layout מורכב.
+**מתי לטפל:** בוצע.
 
 ---
 
@@ -107,6 +111,6 @@
 | ~~`formatRelativeHebrew` פלורליזציה~~ | ✅ Done | תוקן + 19 test cases |
 | ~~`_normalize_phone` הוספת אימות קידומות~~ | ✅ Done | תוקן + 17 test cases + wa.me E.164 |
 | ~~Phone display formatting אחיד~~ | ✅ Done | backend מנרמל ב-storage |
-| Icon mirroring + `:dir()` audit | Medium | בסבב a11y |
+| ~~Icon mirroring + bidi audit~~ | ✅ Done | Send שוקף, email bidi תוקן ב-settings |
 | Tailwind v4 שדרוג | Low | רק אם צריך |
 | `@theme` block לפונטים | Low | רק אם נשדרג ל-v4 |

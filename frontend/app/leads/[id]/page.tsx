@@ -190,7 +190,9 @@ export default function LeadDetailPage() {
                 onClick={() => setTemplateOpen(true)}
                 className="rounded-lg bg-white border border-gray-200 py-2.5 text-sm font-medium flex items-center justify-center gap-1.5"
               >
-                <Send size={15} aria-hidden />
+                {/* Send הוא מטוס נייר — "חץ שליחה" שצריך להישקף ב-RTL
+                    לפי הסקיל (docs/Skills/hebrew-rtl-best-practices). */}
+                <Send size={15} aria-hidden className="rtl:-scale-x-100" />
                 בחירת תבנית
               </button>
               <button
