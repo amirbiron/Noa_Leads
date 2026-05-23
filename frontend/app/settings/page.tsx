@@ -83,7 +83,9 @@ export default function SettingsPage() {
           <div className="text-xs text-gray-400 mb-0.5">משתמשת מחוברת</div>
           <div className="font-semibold">{me.name}</div>
           <div className="text-sm text-gray-500 mt-0.5">
-            {me.email} · {ROLE_LABEL[me.role] ?? me.role}
+            {/* dir="ltr" על המייל — אחרת הוא נמצא בטקסט מעורב עם עברית
+                והאלגוריתם של bidi עלול להציג את ה-"·" בצד הלא נכון. */}
+            <span dir="ltr">{me.email}</span> · {ROLE_LABEL[me.role] ?? me.role}
           </div>
         </div>
       )}
@@ -92,7 +94,7 @@ export default function SettingsPage() {
       <SectionHeader title="ניהול" />
       <ul className="space-y-2">
         <NavRow href="/templates" icon={<FileText size={18} />} label="תבניות הודעה" />
-        <NavRow href="/proposals" icon={<Send size={18} />} label="הצעות פתוחות" />
+        <NavRow href="/proposals" icon={<Send size={18} className="rtl:-scale-x-100" />} label="הצעות פתוחות" />
       </ul>
 
       {/* חוקי פולואפ */}

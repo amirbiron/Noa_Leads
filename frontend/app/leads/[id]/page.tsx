@@ -24,6 +24,7 @@ import { TemplatePickerSheet } from "@/components/TemplatePickerSheet";
 import { Timeline } from "@/components/Timeline";
 import { TransferLeadModal } from "@/components/TransferLeadModal";
 import { api, ApiError } from "@/lib/api";
+import { toWhatsAppDigits } from "@/lib/phone";
 import {
   labelCategory,
   labelContact,
@@ -147,9 +148,9 @@ export default function LeadDetailPage() {
                   <span dir="ltr">{lead.phone}</span>
                 </a>
               )}
-              {lead.phone && (
+              {lead.phone && toWhatsAppDigits(lead.phone) && (
                 <a
-                  href={`https://wa.me/${lead.phone.replace(/\D/g, "")}`}
+                  href={`https://wa.me/${toWhatsAppDigits(lead.phone)}`}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="inline-flex items-center gap-1.5 text-sm text-gray-700 bg-gray-100 px-2.5 py-1 rounded-full"
@@ -189,7 +190,9 @@ export default function LeadDetailPage() {
                 onClick={() => setTemplateOpen(true)}
                 className="rounded-lg bg-white border border-gray-200 py-2.5 text-sm font-medium flex items-center justify-center gap-1.5"
               >
-                <Send size={15} aria-hidden />
+                {/* Send הוא מטוס נייר — "חץ שליחה" שצריך להישקף ב-RTL
+                    לפי הסקיל (docs/Skills/hebrew-rtl-best-practices). */}
+                <Send size={15} aria-hidden className="rtl:-scale-x-100" />
                 בחירת תבנית
               </button>
               <button

@@ -16,12 +16,13 @@
 
 **לבדוק/לתקן:**
 
-- ⬜ **`backend/app/schemas/lead.py:_normalize_phone`** — להוסיף אימות קידומת (050-058/02-09/07X/1-800/*XXXX) וספירת ספרות לפי טבלת הסקיל. אופציה: לקרוא לסקריפט `validate_phone.py` או לשכפל את הלוגיקה הקצרה ל-Python בלבד.
-- ⬜ **`backend/app/services/leads.py:list_leads` (חיפוש)** — הסקיל ממליץ על נירמול דרך `regexp_replace`. כבר עושים את זה. ✓ to verify only.
-- ⬜ **המרת `+972` ל-`0`** ב-input של `NewLeadModal.tsx` — אוטומטית כשהמשתמש מקליד.
-- ⬜ **תצוגה אחידה** של phone ב-`leads/[id]/page.tsx` ו-`LeadCardRow` — להציג תמיד בפורמט `050-1234567` (גם אם נשמר אחרת).
+- ✅ **`backend/app/schemas/lead.py:_normalize_phone`** — תוקן. נוסף `app/utils/phone.py` עם patterns מהסקיל (נייד 05X/0-9 ספרות, קווי 02-04/08-09, VoIP 07[2-9], 1-700/1-800, *XXXX). אימות מלא + נירמול ל-`0XX-XXXXXXX`. תומך גם ב-`+972`/`972` (ממיר ל-0) וגם במספרי חו"ל (pass-through). 17 test cases.
+- ✅ **חיפוש `list_leads`** — כבר משתמש ב-`regexp_replace`, מתאים להמלצות הסקיל.
+- ✅ **המרת `+972` ל-`0`** — מטופל ב-backend `_normalize_phone` בכניסה. כל input שמגיע ל-API ייקלט נכון.
+- ✅ **תצוגה אחידה** — backend מאחסן עכשיו תמיד בפורמט `0XX-XXXXXXX` (או international לחו"ל). ה-DB הוא source of truth, frontend מציג כפי שמגיע.
+- ✅ **wa.me URL** — נוסף `frontend/lib/phone.ts:toWhatsAppDigits` שממיר ל-E.164 ללא + (`972521234567`). תוקן ב-`leads/[id]/page.tsx` ו-`TemplatePickerSheet.tsx` — בעבר wa.me קיבל `0521234567` שלא עובד.
 
-**מתי לטפל:** בפעם הבאה שאני נוגע ב-phone-related code, או בסבב a11y/UX ייעודי.
+**מתי לטפל:** בוצע.
 
 ---
 
@@ -32,25 +33,37 @@
 
 **לבדוק/לתקן:**
 
-- ⬜ **חיפוש `left`/`right` במחלקות** — `grep -rn "\\bleft\\|right\\b" frontend/components/ frontend/app/` ובדיקה שכולם logical. נמצאו: `inset-inline-end-4`, `text-end`, `ps-9 pe-3` — אלה בסדר. צריך לאמת.
-- ⬜ **Icon mirroring** — `ChevronLeft` ב-`LeadCardRow.tsx`, `TodayActionRow.tsx`, `NavRow` בsettings: לפי הסקיל צריך `:dir(rtl) { transform: scaleX(-1); }` או לבחור `ChevronRight` ב-RTL. במצב הנוכחי החץ הוא ChevronLeft (מצביע שמאלה) — ב-RTL זה "קדימה" שזה הגיוני, אבל יש לוודא שזה מכוון.
-- ⬜ **scroll directions** ב-modals — `TemplatePickerSheet`, `CloseLeadModal` (max-h-[95vh] flex-col + overflow-y-auto) — לבדוק שאין `scroll-padding-left/right` שלא מותאם.
-- ⬜ **`:dir()` במקום `[dir="rtl"]`** — אנחנו לא משתמשים ב-attribute selector בכלל. ✓ to verify.
+- ✅ **Physical CSS audit** — `grep` על `ml-/mr-/pl-/pr-/border-l/border-r/left-/right-/rounded-l/rounded-r/text-left/text-right` חזר נקי. הכל logical (`ms-`, `me-`, `ps-`, `pe-`, `border-s`, `inset-inline-*`).
+- ✅ **Icon mirroring** — סקירה מלאה:
+  - `ChevronLeft`/`ArrowLeft` (3 מקומות): כבר מצביעים נכון ל"קדימה" ב-RTL. אין שיקוף.
+  - `Send` (paper plane, 2 מקומות): נוסף `rtl:-scale-x-100` — הסקיל מסווג "חצי שליחה" כצריכים שיקוף.
+  - `Phone`/`Mail`/`MessageCircle`/`Search`/`Clock`/`Settings`/`X`/`Check`/`Plus`/`Trash` — universal, לא משקפים (לפי הסקיל).
+  - `ArrowRightLeft` (transfer) — bidirectional, לא משקפים.
+- ✅ **Bidi: email/phone בטקסט מעורב** — תוקן ב-settings (`<span dir="ltr">{email}</span> · {role}`). יתר המקומות עם phone/email היו כבר עם `dir="ltr"`.
+- ✅ **`:dir()` vs `[dir="rtl"]`** — לא בשימוש; אנחנו ב-Tailwind `rtl:` variant הסטנדרטי.
 
-**מתי לטפל:** בסבב a11y/RTL ייעודי, או כשמוסיפים קומפוננטה חדשה עם layout מורכב.
+**מתי לטפל:** בוצע.
 
 ---
 
 ## 3. `hebrew-tailwind-preset`
 
-הסקיל ממליץ על Tailwind v4. אנחנו על v3.4.17. גרסה v3.1+ תומכת ב-dir variants —
-התאמה חלקית.
-
 **לבדוק/לתקן:**
 
-- ⬜ **שדרוג ל-Tailwind v4** — לא דחוף ולא בהכרח רצוי (v4 בשלבי early adoption, יציבות פחותה). דחיתי לעתיד.
-- ⬜ **`@theme` block + פונטים עבריים** — להעביר את הגדרת Heebo מ-Google Fonts לרשימת `@theme` מסודרת לפי הסקיל.
-- ⬜ **dir variants** — אם נצטרך styling שונה ב-LTR/RTL (לא צפוי, אנחנו RTL-only), להשתמש ב-`rtl:` ו-`ltr:`.
+- ✅ **שדרוג ל-Tailwind v4.3.0** — בוצע. v4 יציבה מאז Jan 2025.
+  - הוסר `tailwindcss 3.4.17` + `autoprefixer`
+  - הוסף `tailwindcss ^4` + `@tailwindcss/postcss ^4`
+  - `postcss.config.mjs` עודכן ל-`@tailwindcss/postcss` plugin יחיד
+  - `tailwind.config.ts` נמחק (v4 auto-scans את כל ה-`./app/**/*.tsx` וכו')
+- ✅ **`@theme` block** — צבעי המצב והפונטים הוגדרו ב-CSS תחת `@theme {}` (פונטים, --color-state-*).
+- ✅ **`@utility pb-safe`** — הועבר ל-syntax v4.
+- ✅ **dir variants** — `rtl:-scale-x-100` מתקמפל ל-`:where(:dir(rtl), [dir=rtl], [dir=rtl] *)` ב-v4 — שימוש אוטומטי ב-`:dir()` pseudo-class המודרני (בדיוק מה שהסקיל המליץ).
+
+**Audit לאחר השדרוג:**
+- אין שימוש ב-`bg-opacity-*`/`text-opacity-*`/`ring-opacity-*` (deprecated ב-v4)
+- אין שימוש ב-`ring-*` בקוד
+- כל ה-`border-*` עם צבע מפורש — לא נפלנו על default שהשתנה ל-`currentColor`
+- Build: 10 routes, types ✓, CSS bundle תקין (אומת ב-`.next/static/css`).
 
 **מתי לטפל:** רק אם נראה issue ויזואלי או אם משדרגים tailwind.
 
@@ -67,16 +80,11 @@
 
 **לבדוק/לתקן:**
 
-- ⬜ **`formatRelativeHebrew`** — באג ידוע: "לפני 1 דקות" / "לפני 1 ימים". צריך:
-  - 0 → "ממש עכשיו"
-  - 1 → "לפני דקה" / "לפני יום"
-  - 2 → "לפני יומיים" (צורת זוגי)
-  - 3+ → "לפני N דקות/ימים"
-  - אותו דבר ב"בעוד"
-- ⬜ **`Intl.PluralRules` או `Intl.RelativeTimeFormat`** — הסקיל ממליץ לקחת מנוע מובנה במקום string templates. בעברית `Intl.RelativeTimeFormat('he')` עושה את העבודה.
+- ✅ **`formatRelativeHebrew`** — תוקן עם `pluralizeTimeUnit` helper לפי קטגוריות CLDR (one/two/other). הצורות לפי הסקיל: דקה / שתי דקות / N דקות; שעה / שעתיים / N שעות; יום / יומיים / N ימים. בנוסף: היום/מחר/אתמול כשרלוונטי. אומת על 19 test cases.
+- ⏭️ **`Intl.RelativeTimeFormat`** — דילגתי. לא נותן את הצורה הזוגית ("יומיים") הנדרשת בעברית, רק "לפני יום אחד" / "לפני 2 ימים". helper מקומי קצר יותר ועקבי עם הסקיל.
 - ⬜ **`Intl.NumberFormat('he-IL')`** — כבר משתמשים ב-`toLocaleString("he-IL")` בכמה מקומות, לוודא שכל המקומות עקביים.
 
-**מתי לטפל:** בקרוב — formatRelativeHebrew נראית למשתמשת בכל card בדשבורד. שווה לתקן בסבב קצר.
+**מתי לטפל:** בוצע (formatRelativeHebrew). יתר ייעשה בסבב polish כללי.
 
 ---
 
@@ -106,11 +114,14 @@
 
 ## טבלת priorities
 
-| פריט | priority | מתי |
+| פריט | סטטוס | הערה |
 |---|---|---|
-| `formatRelativeHebrew` פלורליזציה | High | בקרוב — visible bug |
-| `_normalize_phone` הוספת אימות קידומות | Medium | בנגיעה הבאה ב-lead intake |
-| Icon mirroring + `:dir()` audit | Medium | בסבב a11y |
-| Phone display formatting אחיד | Low | בסבב polish |
-| Tailwind v4 שדרוג | Low | רק אם צריך |
-| `@theme` block לפונטים | Low | רק אם נשדרג ל-v4 |
+| `formatRelativeHebrew` פלורליזציה | ✅ Done | 19 test cases |
+| `_normalize_phone` קידומות ישראליות | ✅ Done | 17 test cases + wa.me E.164 |
+| Phone display formatting אחיד | ✅ Done | backend מנרמל ב-storage |
+| Icon mirroring + bidi audit | ✅ Done | Send שוקף + email dir="ltr" |
+| Tailwind v4 שדרוג | ✅ Done | + auto `:dir(rtl)` בונוס |
+| `@theme` block לפונטים | ✅ Done | --color-state-*, --font-sans |
+
+**כל הפריטים שזוהו ב-review הושלמו.** ב-pass עתידי על הסקילים הנותרים
+(`gws-hebrew-email-automation` ו-`hebrew-llm-eval-suite`) — בעת מימוש פאזה 3.

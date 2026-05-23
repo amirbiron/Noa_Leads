@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { Copy, MessageCircle, X } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
+import { toWhatsAppDigits } from "@/lib/phone";
 import type { Lead, Template, TemplateRenderResponse } from "@/lib/types";
 
 interface Props {
@@ -65,7 +66,11 @@ export function TemplatePickerSheet({ lead, open, onClose, onSent }: Props) {
     setSending(true);
     setError(null);
     try {
-      const digits = lead.phone.replace(/\D/g, "");
+      const digits = toWhatsAppDigits(lead.phone);
+      if (!digits) {
+        setError("מספר הטלפון לא מתאים לחיוג בוואטסאפ.");
+        return;
+      }
       const text = encodeURIComponent(rendered.rendered_body);
       // window.open יכול להחזיר null אם popup blocker חסם — במקרה כזה אסור
       // לסמן את התבנית כנשלחה (כי הלקוחה לא קיבלה כלום).
