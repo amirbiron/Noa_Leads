@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.api.routes import auth as auth_routes
+from app.api.routes import dashboard as dashboard_routes
 from app.api.routes import intake as intake_routes
 from app.api.routes import leads as leads_routes
 from app.api.routes import tasks as tasks_routes
@@ -97,6 +98,7 @@ def create_app() -> FastAPI:
     app.include_router(tasks_routes.router)
     app.include_router(templates_routes.router)
     app.include_router(intake_routes.router)
+    app.include_router(dashboard_routes.router)
 
     return app
 
