@@ -282,6 +282,22 @@ async def close_lead(
             "לא ניתן לסגור ליד שכבר נמצא בארכיון."
         )
 
+    # ביטול משימות פתוחות לליד הסגור — אחרת הן ימשיכו להופיע ב"פעולות
+    # היום" וייקחו מקום לפעולות שעדיין רלוונטיות. local import למניעת circular.
+    from app.constants import TaskStatus
+    from app.models.task import Task
+
+    await db.execute(
+        update(Task)
+        .where(
+            Task.lead_id == lead_id,
+            Task.status.in_(
+                [TaskStatus.OPEN.value, TaskStatus.SNOOZED.value]
+            ),
+        )
+        .values(status=TaskStatus.CANCELED.value)
+    )
+
     # תיוג סמנטי מדויק לכל סוג סגירה — חשוב ל-audit timeline
     activity_type = {
         LeadStatus.WON: ActivityType.LEAD_WON,

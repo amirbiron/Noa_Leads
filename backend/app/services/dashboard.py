@@ -148,6 +148,10 @@ def _current_week_bounds(now_utc: datetime) -> tuple[datetime, datetime]:
     """
     מחזיר (start, end) של השבוע הנוכחי בזמן ישראל.
     בישראל השבוע מתחיל ביום ראשון.
+
+    שני ה-bounds נבנים כ-midnight מקומי באופן עצמאי (לא start+7days)
+    כי datetime+timedelta מוסיף שעות אבסולוטיות — בשבוע של מעבר שעון
+    (אביב/סתיו) end_local היה נופל ב-01:00 או 23:00 במקום חצות.
     """
     local = to_israel_tz(now_utc)
     today = local.date()
@@ -155,8 +159,9 @@ def _current_week_bounds(now_utc: datetime) -> tuple[datetime, datetime]:
     # מספר ימים אחורה כדי להגיע ליום ראשון:
     days_since_sunday = (today.weekday() + 1) % 7
     sunday = today - timedelta(days=days_since_sunday)
+    next_sunday = sunday + timedelta(days=7)
     start_local = datetime.combine(sunday, time(0, 0, tzinfo=ISRAEL_TZ))
-    end_local = start_local + timedelta(days=7)
+    end_local = datetime.combine(next_sunday, time(0, 0, tzinfo=ISRAEL_TZ))
     return start_local.astimezone(timezone.utc), end_local.astimezone(timezone.utc)
 
 
@@ -169,6 +174,7 @@ async def get_today_actions(db: AsyncSession) -> list[TodayActionItem]:
     """
     now_utc = datetime.now(timezone.utc)
     end_today_exclusive = _start_of_tomorrow_israel(now_utc)
+    closed = [s.value for s in CLOSED_LEAD_STATUSES]
 
     stmt = (
         select(Task, Lead)
@@ -182,6 +188,9 @@ async def get_today_actions(db: AsyncSession) -> list[TodayActionItem]:
                 ),
             ),
             Task.due_at < end_today_exclusive,
+            # סינון לידים סגורים — defense in depth. close_lead מבטל
+            # tasks פתוחים שלהם, אבל אם משהו פספס (race / cron) זה תופס.
+            Lead.status.notin_(closed),
         )
         # מיון: overdue קודם, אדום קודם, ואז לפי due_at
         .order_by(
