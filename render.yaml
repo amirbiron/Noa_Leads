@@ -1,5 +1,16 @@
-# הגדרת שירותים ל-Render — שלד ראשוני
-# Cron jobs יתווספו בשלב 6 כשהם ייכנסו לקוד.
+# הגדרת שירותים ל-Render.
+# כל ה-cron jobs חולקים envVarGroup אחד כדי לא לכפול secrets.
+# שעות ה-cron הן ב-UTC; הסכימה אומרת ~19:00 ישראל (16:00 UTC, מתאים לקיץ).
+
+envVarGroups:
+  - name: noa-leads-shared
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_OWNER_CHAT_ID
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
 
 databases:
   - name: noa-leads-db
@@ -28,12 +39,7 @@ services:
         generateValue: true
       - key: CORS_ORIGINS
         sync: false
-      - key: TELEGRAM_BOT_TOKEN
-        sync: false
-      - key: TELEGRAM_OWNER_CHAT_ID
-        sync: false
-      - key: ANTHROPIC_API_KEY
-        sync: false
+      - fromGroup: noa-leads-shared
 
   # ===== Frontend (Next.js) =====
   - type: web
@@ -46,3 +52,85 @@ services:
     envVars:
       - key: NEXT_PUBLIC_API_BASE_URL
         sync: false
+
+  # ===== Cron jobs =====
+
+  # סימון לידים שעבר הפולואפ שלהם — כל 15 דקות
+  - type: cron
+    name: noa-mark-overdue
+    runtime: python
+    plan: starter
+    rootDir: backend
+    schedule: "*/15 * * * *"
+    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
+    startCommand: python -m jobs.mark_overdue
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: noa-leads-db
+          property: connectionString
+      - fromGroup: noa-leads-shared
+
+  # זיהוי הצעות תקועות + יצירת משימת פולואפ — כל שעה
+  - type: cron
+    name: noa-check-stuck-proposals
+    runtime: python
+    plan: starter
+    rootDir: backend
+    schedule: "5 * * * *"
+    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
+    startCommand: python -m jobs.check_stuck_proposals
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: noa-leads-db
+          property: connectionString
+      - fromGroup: noa-leads-shared
+
+  # זיהוי לידים רדומים — פעם ביום ב-03:00 ישראל (00:00 UTC)
+  - type: cron
+    name: noa-detect-dormant
+    runtime: python
+    plan: starter
+    rootDir: backend
+    schedule: "0 0 * * *"
+    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
+    startCommand: python -m jobs.detect_dormant
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: noa-leads-db
+          property: connectionString
+      - fromGroup: noa-leads-shared
+
+  # סיכום יומי לטלגרם — 19:00 ישראל (16:00 UTC, IDT קיץ)
+  - type: cron
+    name: noa-daily-summary
+    runtime: python
+    plan: starter
+    rootDir: backend
+    schedule: "0 16 * * *"
+    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
+    startCommand: python -m jobs.daily_summary
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: noa-leads-db
+          property: connectionString
+      - fromGroup: noa-leads-shared
+
+  # סיכום שבועי — יום ראשון 08:00 ישראל (05:00 UTC)
+  - type: cron
+    name: noa-weekly-summary
+    runtime: python
+    plan: starter
+    rootDir: backend
+    schedule: "0 5 * * 0"
+    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
+    startCommand: python -m jobs.weekly_summary
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: noa-leads-db
+          property: connectionString
+      - fromGroup: noa-leads-shared

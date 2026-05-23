@@ -91,6 +91,11 @@ async def create_lead(
     if commit:
         await db.commit()
         await db.refresh(lead)
+        # פוש לטלגרם — לכל מקור חוץ מהזנה ידנית (נועה עצמה הזינה,
+        # אין צורך להתריע לעצמה). שגיאות telegram נבלעות בתוך השירות.
+        if lead.source_channel != "manual":
+            from app.services import telegram as telegram_service
+            await telegram_service.notify_new_lead(lead)
     return lead
 
 
