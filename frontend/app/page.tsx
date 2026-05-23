@@ -15,23 +15,20 @@ export default function HomePage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
+  async function load() {
+    setError(null);
+    try {
+      const d = await api.getHome();
+      setData(d);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "שגיאה בטעינה");
+    } finally {
+      setLoading(false);
+    }
+  }
+
   useEffect(() => {
-    let active = true;
-    api
-      .getHome()
-      .then((d) => {
-        if (active) setData(d);
-      })
-      .catch((err) => {
-        if (!active) return;
-        setError(err instanceof ApiError ? err.message : "שגיאה בטעינה");
-      })
-      .finally(() => {
-        if (active) setLoading(false);
-      });
-    return () => {
-      active = false;
-    };
+    void load();
   }, []);
 
   return (
@@ -66,7 +63,7 @@ export default function HomePage() {
             <ul className="space-y-2">
               {data.today_actions.map((item) => (
                 <li key={item.task_id}>
-                  <TodayActionRow item={item} />
+                  <TodayActionRow item={item} onChanged={load} />
                 </li>
               ))}
             </ul>

@@ -12,14 +12,20 @@ export default function TodayPage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
+  async function load() {
+    setError(null);
+    try {
+      const d = await api.getToday();
+      setItems(d.items);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "שגיאה בטעינה");
+    } finally {
+      setLoading(false);
+    }
+  }
+
   useEffect(() => {
-    api
-      .getToday()
-      .then((d) => setItems(d.items))
-      .catch((err) =>
-        setError(err instanceof ApiError ? err.message : "שגיאה בטעינה"),
-      )
-      .finally(() => setLoading(false));
+    void load();
   }, []);
 
   return (
@@ -41,7 +47,7 @@ export default function TodayPage() {
       <ul className="space-y-2 mt-1">
         {items.map((item) => (
           <li key={item.task_id}>
-            <TodayActionRow item={item} />
+            <TodayActionRow item={item} onChanged={load} />
           </li>
         ))}
       </ul>
