@@ -2,7 +2,7 @@
 שירות tasks — יצירה אוטומטית של משימות, snooze, complete, רשימת פתוחות.
 """
 
-from datetime import datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
@@ -25,6 +25,19 @@ from app.utils.work_hours import (
     next_working_day_start,
     to_israel_tz,
 )
+
+
+def _next_working_morning_from(d: date) -> datetime:
+    """
+    מחפש את יום העבודה הקרוב מ-d והלאה — מחזיר 09:00 באותו יום ב-TZ ישראל.
+    מדלג על שבת ועל חגים. נועה לא תקבל snooze שנוחת על שבת/חג.
+    """
+    candidate = d
+    for _ in range(14):  # safety bound
+        if not is_saturday(candidate) and not is_holiday(candidate):
+            return datetime.combine(candidate, time(9, 0, tzinfo=ISRAEL_TZ))
+        candidate += timedelta(days=1)
+    return datetime.combine(candidate, time(9, 0, tzinfo=ISRAEL_TZ))
 
 
 # ===================== יצירה אוטומטית =====================
@@ -120,16 +133,13 @@ def _resolve_snooze_target(payload: SnoozeRequest) -> datetime:
     if payload.preset == SnoozePreset.TODAY_AFTERNOON:
         target_local = datetime.combine(today, time(15, 0, tzinfo=ISRAEL_TZ))
         if target_local <= now_local:
-            # אם כבר אחרי 15:00, דוחים למחר בבוקר
-            target_local = datetime.combine(
-                today + timedelta(days=1), time(9, 0, tzinfo=ISRAEL_TZ)
-            )
+            # כבר אחרי 15:00 — דוחים ליום העבודה הבא, מדלגים על שבת/חג
+            target_local = _next_working_morning_from(today + timedelta(days=1))
         return target_local.astimezone(timezone.utc)
 
     if payload.preset == SnoozePreset.TOMORROW_MORNING:
-        target_local = datetime.combine(
-            today + timedelta(days=1), time(9, 0, tzinfo=ISRAEL_TZ)
-        )
+        # אם "מחר" נופל על שבת/חג, מקפיצים ליום העבודה הבא
+        target_local = _next_working_morning_from(today + timedelta(days=1))
         return target_local.astimezone(timezone.utc)
 
     if payload.preset == SnoozePreset.SUNDAY_MORNING:
@@ -137,9 +147,9 @@ def _resolve_snooze_target(payload: SnoozeRequest) -> datetime:
         days_until_sunday = (6 - today.weekday()) % 7
         if days_until_sunday == 0:
             days_until_sunday = 7  # אם היום ראשון, מתכוונים לראשון הבא
-        target_local = datetime.combine(
-            today + timedelta(days=days_until_sunday),
-            time(9, 0, tzinfo=ISRAEL_TZ),
+        # אם ראשון נופל על חג (ר"ה / סיגד / וכו'), נדלג ליום העבודה הבא
+        target_local = _next_working_morning_from(
+            today + timedelta(days=days_until_sunday)
         )
         return target_local.astimezone(timezone.utc)
 

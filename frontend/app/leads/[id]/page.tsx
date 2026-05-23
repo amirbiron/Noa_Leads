@@ -110,7 +110,7 @@ export default function LeadDetailPage() {
               )}
               {lead.phone && (
                 <a
-                  href={`https://wa.me/${lead.phone.replace(/[^\d+]/g, "")}`}
+                  href={`https://wa.me/${lead.phone.replace(/\D/g, "")}`}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="inline-flex items-center gap-1.5 text-sm text-gray-700 bg-gray-100 px-2.5 py-1 rounded-full"

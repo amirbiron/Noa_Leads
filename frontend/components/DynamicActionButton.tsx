@@ -12,6 +12,12 @@ function nextAction(lead: Lead): {
   action: string;
   description?: string;
 } | null {
+  // לידים סגורים: לא מציגים פעולה ראשית, גם אם preferred_contact=phone.
+  // (אחרת היה מופיע "התקשרי" שנופל ב-backend עם InvalidStateTransition).
+  if (lead.status === "WON" || lead.status === "LOST" || lead.status === "ARCHIVED") {
+    return null;
+  }
+  // ליד פתוח שמסומן "עדיף טלפון" — כפתור התקשרות גובר על שאר הסטטוסים
   if (lead.preferred_contact === "phone") {
     return { label: "התקשרי", action: "log_call_completed", description: "ולתעד אחרי" };
   }
@@ -26,10 +32,6 @@ function nextAction(lead: Lead): {
       return { label: "אשרי פגישה", action: "approve_meeting" };
     case "BOOKED":
       return { label: "סמני שהפגישה התקיימה", action: "log_call_completed" };
-    case "WON":
-    case "LOST":
-    case "ARCHIVED":
-      return null;
     default:
       return null;
   }

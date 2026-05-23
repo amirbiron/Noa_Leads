@@ -130,11 +130,16 @@ def _dashboard_order(now_utc: datetime) -> list:
 
 # ===================== חלונות זמן =====================
 
-def _end_of_today_israel(now_utc: datetime) -> datetime:
-    """סוף יום נוכחי בזמן Asia/Jerusalem — מוחזר ב-UTC לשימוש ב-DB."""
+def _start_of_tomorrow_israel(now_utc: datetime) -> datetime:
+    """
+    תחילת יום המחר בזמן Asia/Jerusalem (00:00) — מוחזר ב-UTC.
+    משמש כגבול exclusive: due_at < _start_of_tomorrow. כך לא מפספסים
+    משימות שנמצאות בשנייה האחרונה של היום.
+    """
     local = to_israel_tz(now_utc)
-    end_local = datetime.combine(local.date(), time(23, 59, 59, tzinfo=ISRAEL_TZ))
-    return end_local.astimezone(timezone.utc)
+    tomorrow = local.date() + timedelta(days=1)
+    start_local = datetime.combine(tomorrow, time(0, 0, tzinfo=ISRAEL_TZ))
+    return start_local.astimezone(timezone.utc)
 
 
 def _current_week_bounds(now_utc: datetime) -> tuple[datetime, datetime]:
@@ -161,7 +166,7 @@ async def get_today_actions(db: AsyncSession) -> list[TodayActionItem]:
     כולל overdue (משימות מאתמול שלא הושלמו).
     """
     now_utc = datetime.now(timezone.utc)
-    end_today = _end_of_today_israel(now_utc)
+    end_today_exclusive = _start_of_tomorrow_israel(now_utc)
 
     stmt = (
         select(Task, Lead)
@@ -174,7 +179,7 @@ async def get_today_actions(db: AsyncSession) -> list[TodayActionItem]:
                     Task.due_at <= now_utc,
                 ),
             ),
-            Task.due_at <= end_today,
+            Task.due_at < end_today_exclusive,
         )
         # מיון: overdue קודם, אדום קודם, ואז לפי due_at
         .order_by(

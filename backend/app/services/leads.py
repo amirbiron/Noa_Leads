@@ -201,6 +201,7 @@ async def close_lead(
     # מעבר אטומי: רק אם הסטטוס הנוכחי מורשה.
     # closure_reason תמיד נכתב — אם target=WON/ARCHIVED הערך הוא None,
     # אחרת ייתכן שערך LOST ישן יישאר על ליד שכעת WON (באג integrity).
+    # updated_at חייב להיכתב במפורש — onupdate של ORM לא מופעל ב-Core update().
     allowed_from = [s.value for s in CLOSE_ALLOWED_FROM]
     values: dict[str, Any] = {
         "status": target.value,
@@ -211,6 +212,7 @@ async def close_lead(
         "closure_reason": (
             str(payload.closure_reason) if payload.closure_reason else None
         ),
+        "updated_at": func.now(),
     }
 
     stmt = (
@@ -268,6 +270,7 @@ async def reopen_lead(
             status=LeadStatus.IN_PROGRESS.value,
             closure_reason=None,
             waiting_on="NOAH",
+            updated_at=func.now(),
         )
         .returning(Lead.id)
     )

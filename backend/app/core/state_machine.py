@@ -125,11 +125,12 @@ ACTIONS: dict[str, ActionDefinition] = {
         description="דחיית פגישה",
     ),
 
-    # הערה פנימית — לא משנה סטטוס ולא מעדכן last_*
+    # הערה פנימית — לא משנה סטטוס ולא מעדכן last_*.
+    # חשוב לא לדרוס last_activity_type — שמירת הפעולה העסקית האחרונה
+    # ("call_completed" / "proposal_sent" וכו') חיונית למיון הדשבורד.
     "add_internal_note": ActionDefinition(
         activity_type=ActivityType.INTERNAL_NOTE_ADDED,
         allowed_from=None,  # מותר מכל סטטוס, כולל סגורים
-        last_activity_tag="internal_note",
         description="הוספת הערה פנימית",
     ),
 

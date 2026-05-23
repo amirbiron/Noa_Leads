@@ -122,6 +122,8 @@ export function labelActivity(s: string): string {
 export function formatRelativeHebrew(iso: string | null): string {
   if (!iso) return "";
   const date = new Date(iso);
+  // ISO לא חוקי → fallback בטוח במקום NaN בכל החישובים
+  if (Number.isNaN(date.getTime())) return "";
   const diffMs = date.getTime() - Date.now();
   const diffMinutes = Math.round(diffMs / 60000);
   const diffHours = Math.round(diffMs / 3_600_000);
@@ -145,6 +147,7 @@ export function formatRelativeHebrew(iso: string | null): string {
 export function formatDateTimeHebrew(iso: string | null): string {
   if (!iso) return "";
   const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
   return date.toLocaleString("he-IL", {
     day: "2-digit",
     month: "2-digit",

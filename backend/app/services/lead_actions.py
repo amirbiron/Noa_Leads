@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.constants import LeadStatus
@@ -54,7 +54,9 @@ async def perform_action(
     now = datetime.now(timezone.utc)
 
     # ===== הכנת UPDATE statement =====
-    values: dict[str, Any] = {}
+    # updated_at חייב להיכתב במפורש — onupdate של ORM לא מופעל ב-Core update().
+    # זה משפיע ישירות על מיון הדשבורד (Lead.updated_at.desc()).
+    values: dict[str, Any] = {"updated_at": func.now()}
     if action.set_last_outbound:
         values["last_outbound_at"] = now
     if action.set_last_inbound:
@@ -156,7 +158,8 @@ async def _perform_with_optional_progress(
     1. ניסיון UPDATE WHERE status='NEW' → IN_PROGRESS + שאר השדות.
     2. אם rowcount=0 — UPDATE רגיל בלי שינוי סטטוס, מוגבל לסטטוסים פתוחים.
     """
-    # ניסיון 1 — אם הליד עוד ב-NEW, מעבירים ל-IN_PROGRESS אטומית
+    # ניסיון 1 — אם הליד עוד ב-NEW, מעבירים ל-IN_PROGRESS אטומית.
+    # values כבר מכיל updated_at=now (נקבע ב-caller).
     values_with_progress = {**values, "status": LeadStatus.IN_PROGRESS.value}
     stmt = (
         update(Lead)
