@@ -117,7 +117,7 @@ ACTIONS: dict[str, ActionDefinition] = {
 
     # דחיית פגישה והחזרה לטיפול — BOOKING_PENDING → IN_PROGRESS
     "reject_meeting": ActionDefinition(
-        activity_type=ActivityType.MEETING_REQUESTED,  # נשאר MEETING_* כדי להבדיל מתשובה רגילה
+        activity_type=ActivityType.MEETING_REJECTED,
         allowed_from=frozenset({LeadStatus.BOOKING_PENDING}),
         transition_to=LeadStatus.IN_PROGRESS,
         set_waiting_on="CLIENT",

@@ -50,6 +50,11 @@ _SERVICE_SUBTYPE_HE: dict[str, str] = {
 _PLACEHOLDER_RE = re.compile(r"\{([a-z_][a-z0-9_]*)\}")
 
 
+def extract_placeholders(body: str) -> list[str]:
+    """מחזיר את שמות ה-placeholders המופיעים ב-body (סדר שמירת הופעה)."""
+    return _PLACEHOLDER_RE.findall(body)
+
+
 def build_variable_context(lead: Lead) -> dict[str, str]:
     """בונה את ה-context לרינדור — כל הערכים כ-str (גם כשחסרים)."""
     return {

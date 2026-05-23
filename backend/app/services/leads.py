@@ -41,10 +41,14 @@ async def create_lead(
     current_user_id: UUID | None,
     *,
     create_first_response_task: bool = True,
+    commit: bool = True,
 ) -> Lead:
     """
     יוצרת ליד חדש + רישום ב-audit log + (כברירת מחדל) משימת first_response.
     הכל בטרנזקציה אחת — אם משהו נכשל, שום דבר לא נשמר.
+
+    commit=False — מאפשר לקוראים להוסיף activities נוספים לפני commit,
+    כדי לשמור על אטומיות (ראה intake_after_hours_whatsapp).
     """
     # אם לא צוין owner מפורש, מקצים לפי המשתמש שיצר
     owner_id = payload.owner_id or current_user_id
@@ -84,8 +88,9 @@ async def create_lead(
         from app.services import tasks as tasks_service
         await tasks_service.create_first_response_task(db, lead)
 
-    await db.commit()
-    await db.refresh(lead)
+    if commit:
+        await db.commit()
+        await db.refresh(lead)
     return lead
 
 
@@ -193,7 +198,9 @@ async def close_lead(
     if target != LeadStatus.LOST and payload.closure_reason is not None:
         raise ValidationError("ניתן לציין סיבת סגירה רק כשסוגרים כ-LOST.")
 
-    # מעבר אטומי: רק אם הסטטוס הנוכחי מורשה
+    # מעבר אטומי: רק אם הסטטוס הנוכחי מורשה.
+    # closure_reason תמיד נכתב — אם target=WON/ARCHIVED הערך הוא None,
+    # אחרת ייתכן שערך LOST ישן יישאר על ליד שכעת WON (באג integrity).
     allowed_from = [s.value for s in CLOSE_ALLOWED_FROM]
     values: dict[str, Any] = {
         "status": target.value,
@@ -201,9 +208,10 @@ async def close_lead(
         "next_action_due_at": None,
         "needs_attention": False,
         "waiting_on": "NONE",
+        "closure_reason": (
+            str(payload.closure_reason) if payload.closure_reason else None
+        ),
     }
-    if payload.closure_reason is not None:
-        values["closure_reason"] = str(payload.closure_reason)
 
     stmt = (
         update(Lead)

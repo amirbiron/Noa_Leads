@@ -19,6 +19,22 @@ from app.constants import (
 )
 
 
+# ולידציה משותפת לטלפון — מונעת ייבוא של תווי שליטה / סינטקס פעיל.
+# משמשת גם ב-LeadCreate וגם ב-LeadUpdate כדי לא ליצור drift.
+_PHONE_ALLOWED_CHARS = set("0123456789+-() ")
+
+
+def _normalize_phone(v: str | None) -> str | None:
+    if v is None or v == "":
+        return None
+    cleaned = v.strip()
+    if not cleaned:
+        return None
+    if not all(c in _PHONE_ALLOWED_CHARS for c in cleaned):
+        raise ValueError("מספר טלפון מכיל תווים לא חוקיים")
+    return cleaned
+
+
 # ===================== יצירה =====================
 
 class LeadCreate(BaseModel):
@@ -47,16 +63,7 @@ class LeadCreate(BaseModel):
     @field_validator("phone")
     @classmethod
     def validate_phone(cls, v: str | None) -> str | None:
-        # ולידציית בסיס — רק ספרות, רווחים, פלוס ומקפים. הפורמט המלא ייעשה בשירות.
-        if v is None or v == "":
-            return None
-        cleaned = v.strip()
-        if not cleaned:
-            return None
-        allowed = set("0123456789+-() ")
-        if not all(c in allowed for c in cleaned):
-            raise ValueError("מספר טלפון מכיל תווים לא חוקיים")
-        return cleaned
+        return _normalize_phone(v)
 
 
 # ===================== עדכון =====================
@@ -83,6 +90,12 @@ class LeadUpdate(BaseModel):
     utm_source: str | None = Field(default=None, max_length=100)
     utm_campaign: str | None = Field(default=None, max_length=100)
     utm_content: str | None = Field(default=None, max_length=100)
+
+    @field_validator("phone")
+    @classmethod
+    def validate_phone(cls, v: str | None) -> str | None:
+        # אותה ולידציה כמו ב-LeadCreate — חייב להישאר עקבי לכל הפעולות
+        return _normalize_phone(v)
 
 
 # ===================== סגירה / פתיחה מחדש =====================

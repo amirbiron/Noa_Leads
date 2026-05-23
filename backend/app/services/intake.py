@@ -7,7 +7,7 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.constants import ActivityType, SourceChannel
+from app.constants import ActivityType, ServiceCategory, SourceChannel
 from app.models.lead import Lead
 from app.schemas.intake import IntakeFormRequest, IntakeResponse
 from app.schemas.lead import LeadCreate
@@ -70,17 +70,22 @@ async def intake_after_hours_whatsapp(
     קליטת פנייה שהגיעה בוואטסאפ מחוץ לשעות עבודה.
     לפי האפיון: לא שולחים auto-reply בוואטסאפ — שומר על מגע אישי.
     במקום זה: יוצרים ליד + תיעוד שזה אחרי שעות.
+
+    שתי הפעולות חייבות להיות אטומיות — אחרת אפשר לאבד את הסימון
+    after_hours על ליד שכבר נוצר. לכן create_lead נקרא עם commit=False.
     """
     payload = LeadCreate(
         full_name=full_name,
         phone=phone,
-        service_category="clinic",  # ברירת מחדל — נועה תעדכן ידנית
+        service_category=ServiceCategory.CLINIC,  # ברירת מחדל — נועה תעדכן ידנית
         source_channel=SourceChannel.WHATSAPP,
         source_detail=message,
     )
-    lead = await leads_service.create_lead(db, payload, current_user_id)
+    lead = await leads_service.create_lead(
+        db, payload, current_user_id, commit=False
+    )
 
-    # תיעוד הקשר אחרי שעות — חשוב ל-audit
+    # תיעוד הקשר אחרי שעות — חשוב ל-audit. עדיין בתוך אותה טרנזקציה.
     await log_activity(
         db,
         lead_id=lead.id,
@@ -90,4 +95,5 @@ async def intake_after_hours_whatsapp(
         metadata={"after_hours": True, "channel": "whatsapp"},
     )
     await db.commit()
+    await db.refresh(lead)
     return lead

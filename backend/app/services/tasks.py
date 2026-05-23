@@ -6,7 +6,7 @@ from datetime import datetime, time, timedelta, timezone
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import select, update
+from sqlalchemy import and_, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.constants import TaskStatus, TaskType
@@ -193,9 +193,22 @@ async def list_open_tasks(
     assigned_to: UUID | None = None,
     due_before: datetime | None = None,
 ) -> list[Task]:
-    """משימות פתוחות (כולל snoozed שהגיע מועדן)."""
+    """
+    משימות פתוחות:
+    - OPEN: תמיד מוצגות (גם אם due_at בעתיד — חשוב לראות מה מתקרב)
+    - SNOOZED: רק אחרי שעבר ה-snooze (due_at <= now). מקודם
+      הקוד החזיר *כל* ה-snoozed אם לא הועבר due_before, מה שעקף
+      את כל המטרה של snooze.
+    """
+    now = datetime.now(timezone.utc)
     stmt = select(Task).where(
-        Task.status.in_([TaskStatus.OPEN.value, TaskStatus.SNOOZED.value])
+        or_(
+            Task.status == TaskStatus.OPEN.value,
+            and_(
+                Task.status == TaskStatus.SNOOZED.value,
+                Task.due_at <= now,
+            ),
+        )
     )
     if assigned_to is not None:
         stmt = stmt.where(Task.assigned_to == assigned_to)

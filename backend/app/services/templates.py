@@ -2,7 +2,6 @@
 שירות templates — CRUD + render לפי ליד.
 """
 
-import re
 from uuid import UUID
 
 from sqlalchemy import select
@@ -19,10 +18,9 @@ from app.services.leads import get_lead_or_404
 from app.utils.template_render import (
     SUPPORTED_VARIABLES,
     build_variable_context,
+    extract_placeholders,
     render_template,
 )
-
-_PLACEHOLDER_RE = re.compile(r"\{([a-z_][a-z0-9_]*)\}")
 
 
 # ===================== CRUD =====================
@@ -99,7 +97,7 @@ async def render_template_for_lead(
     rendered = render_template(template.body, context)
 
     # זיהוי משתנים שהוזכרו ב-body אבל ה-context לא מספק להם ערך
-    found = set(_PLACEHOLDER_RE.findall(template.body))
+    found = set(extract_placeholders(template.body))
     supported = set(SUPPORTED_VARIABLES.keys())
     # missing = placeholders שהיו אבל לא נתמכים בכלל
     missing = sorted(found - supported)

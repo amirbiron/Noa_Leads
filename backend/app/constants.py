@@ -120,6 +120,7 @@ class ActivityType(StrEnum):
     CALL_NO_ANSWER = "call_no_answer"
     MEETING_REQUESTED = "meeting_requested"
     MEETING_APPROVED = "meeting_approved"
+    MEETING_REJECTED = "meeting_rejected"
     PROPOSAL_SENT = "proposal_sent"
     FOLLOWUP_SCHEDULED = "followup_scheduled"
     OWNER_CHANGED = "owner_changed"
