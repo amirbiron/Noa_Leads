@@ -144,6 +144,9 @@ async def perform_action(
     )
 
     await _close_addressed_tasks(db, lead_id=lead_id, action=action, now=now)
+    await _create_followup_task_if_needed(
+        db, lead_id=lead_id, action=action, now=now
+    )
 
     await db.commit()
     return await _get_lead(db, lead_id)
@@ -203,6 +206,9 @@ async def _perform_with_optional_progress(
             metadata={"from": "NEW", "to": "IN_PROGRESS", "trigger": "auto_progress"},
         )
         await _close_addressed_tasks(db, lead_id=lead_id, action=action, now=now)
+        await _create_followup_task_if_needed(
+            db, lead_id=lead_id, action=action, now=now
+        )
         await db.commit()
         return await _get_lead(db, lead_id)
 
@@ -250,6 +256,9 @@ async def _perform_with_optional_progress(
         metadata=metadata,
     )
     await _close_addressed_tasks(db, lead_id=lead_id, action=action, now=now)
+    await _create_followup_task_if_needed(
+        db, lead_id=lead_id, action=action, now=now
+    )
     await db.commit()
     return await _get_lead(db, lead_id)
 
@@ -312,6 +321,52 @@ async def _close_addressed_tasks(
     )
     # סנכרון cache: כעת הליד עשוי להיות בלי tasks פתוחים, או עם task
     # אחר (PROPOSAL_FOLLOWUP / POST_MEETING_UPDATE שלא נסגרו אוטומטית).
+    await sync_lead_next_action_cache(db, lead_id)
+
+
+async def _create_followup_task_if_needed(
+    db: AsyncSession,
+    *,
+    lead_id: UUID,
+    action: ActionDefinition,
+    now: datetime,
+) -> None:
+    """
+    יוצר task פולואפ אוטומטי אחרי פעולות מסוימות:
+    - mark_proposal_sent (set_proposal_sent_at=True) → PROPOSAL_FOLLOWUP
+      עם grace של FOLLOWUP_GRACE_PROPOSAL_ORG (4 ימים, האפיון יב §484).
+
+    אינדמפוטנטי: אם כבר קיים PROPOSAL_FOLLOWUP פתוח לליד, מדלגים.
+    """
+    if not action.set_proposal_sent_at:
+        return
+
+    from app.constants import FOLLOWUP_GRACE_PROPOSAL_ORG
+    from app.models.task import Task
+    from app.services.tasks import sync_lead_next_action_cache
+
+    existing = await db.execute(
+        select(Task.id).where(
+            Task.lead_id == lead_id,
+            Task.type == TaskType.PROPOSAL_FOLLOWUP.value,
+            Task.status.in_(
+                [TaskStatus.OPEN.value, TaskStatus.SNOOZED.value]
+            ),
+        )
+    )
+    if existing.scalar_one_or_none() is not None:
+        return
+
+    db.add(
+        Task(
+            lead_id=lead_id,
+            type=TaskType.PROPOSAL_FOLLOWUP.value,
+            due_at=now + FOLLOWUP_GRACE_PROPOSAL_ORG,
+            status=TaskStatus.OPEN.value,
+            origin_rule="auto_proposal_followup",
+        )
+    )
+    await db.flush()
     await sync_lead_next_action_cache(db, lead_id)
 
 

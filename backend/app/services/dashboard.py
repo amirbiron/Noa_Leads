@@ -31,12 +31,31 @@ ORANGE_LOOKAHEAD = timedelta(hours=48)
 TODAY_ACTIONS_LIMIT = 20
 DEFAULT_DASHBOARD_LIMIT = 50
 
-# grace period per-type ל-is_overdue. FIRST_RESPONSE לפי האפיון (סעיף יב):
-# "מינימום 24 שעות לפני שמתריעים". ה-task מופיע ב-/today מיד (due_at=now)
-# אבל ה-badge "באיחור" מקבל true רק אחרי 24h.
+# grace period per-type ל-is_overdue. לפי האפיון יב סעיף 482 — 5 כללים
+# שונים. החלטה §7.4 ב-phase-2.5-plan.md: hardcoded, בלי UI ל-settings.
+#
+# הערות:
+# - FIRST_RESPONSE: 24h. ה-task מופיע מיד ב-/today, badge רק אחרי יום.
+# - FOLLOWUP (כללי): 60h = ממוצע 48-72h (לקוח שהתעניין ולא סגר).
+# - PROPOSAL_FOLLOWUP: 4 ימים = ממוצע 3-5 ימי עסקים (הצעה לארגון).
+# - DORMANT_REACHOUT: 75 יום = ממוצע 60-90 יום (חידוש קשר).
+# - AFTER_HOURS_REPLY: 24h (כמו FIRST_RESPONSE).
+#
+# POST_MEETING_UPDATE ו-PROGRAM_END לא ברשימה — משתמשים ב-due_at ישיר.
 # מקור יחיד לטובת SQL CASE ול-Python helper גם יחד.
+from app.constants import (
+    FOLLOWUP_GRACE_DORMANT,
+    FOLLOWUP_GRACE_FIRST_RESPONSE,
+    FOLLOWUP_GRACE_PROPOSAL_ORG,
+    FOLLOWUP_GRACE_WARM,
+)
+
 _OVERDUE_GRACE: dict[str, timedelta] = {
-    TaskType.FIRST_RESPONSE.value: timedelta(hours=24),
+    TaskType.FIRST_RESPONSE.value: FOLLOWUP_GRACE_FIRST_RESPONSE,
+    TaskType.FOLLOWUP.value: FOLLOWUP_GRACE_WARM,
+    TaskType.PROPOSAL_FOLLOWUP.value: FOLLOWUP_GRACE_PROPOSAL_ORG,
+    TaskType.DORMANT_REACHOUT.value: FOLLOWUP_GRACE_DORMANT,
+    TaskType.AFTER_HOURS_REPLY.value: FOLLOWUP_GRACE_FIRST_RESPONSE,
 }
 
 
@@ -427,22 +446,25 @@ async def get_weekly_insights(db: AsyncSession) -> WeeklyInsights:
     )
     responded_in_time_count = (await db.execute(responded_stmt)).scalar_one()
 
-    # "לא טופלו בזמן": ליד פתוח עם task פעיל שעבר זמן הטיפול. הגרייס
-    # per-type זהה ל-dashboard._calc_is_overdue:
-    # - FIRST_RESPONSE: created_at + 24h <= now (לפי האפיון יב — מינימום
-    #   24 שעות לפני התראה).
-    # - שאר ה-types: due_at <= now (התראה מיידית כשמגיע המועד).
+    # "לא טופלו בזמן": ליד פתוח עם task פעיל שעבר זמן הטיפול. ה-grace
+    # per-type נשאב מ-_OVERDUE_GRACE (5 כללים מהאפיון יב סעיף 482):
+    # FIRST_RESPONSE/AFTER_HOURS_REPLY=24h, FOLLOWUP=60h, PROPOSAL_FOLLOWUP=4d,
+    # DORMANT_REACHOUT=75d. שאר ה-types: due_at <= now (בלי grace).
     #
     # ליד חדש שזה עתה נוצר *לא* נספר כי ה-grace של 24h עוד לא חלף.
     # ליד פתוח בלי tasks פעילים *לא* נספר (זה bug אחר — לטפל בו דרך
     # יצירה אוטומטית של tasks, לא דרך הספירה הזו).
+    typed_overdue_conditions = [
+        and_(
+            Task.type == task_type,
+            Task.created_at + grace <= now_utc,
+        )
+        for task_type, grace in _OVERDUE_GRACE.items()
+    ]
     overdue_task_condition = or_(
+        *typed_overdue_conditions,
         and_(
-            Task.type == TaskType.FIRST_RESPONSE.value,
-            Task.created_at + timedelta(hours=24) <= now_utc,
-        ),
-        and_(
-            Task.type != TaskType.FIRST_RESPONSE.value,
+            Task.type.notin_(list(_OVERDUE_GRACE.keys())),
             Task.due_at <= now_utc,
         ),
     )

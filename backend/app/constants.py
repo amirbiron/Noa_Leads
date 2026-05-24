@@ -200,3 +200,23 @@ class ProgramType(StrEnum):
     STAGE_ARTS_4 = "stage_arts_4"              # אומניות הבמה - 3-4 מפגשים
     PRODUCTION_3MONTHS = "production_3months"  # ליווי הפקה - 3-4 חודשים
     DIGITAL_COURSE_12 = "digital_course_12"    # קורס דיגיטלי - 12 מפגשים
+
+
+# ===== כללי פולואפ — באיחור per-type =====
+# לפי האפיון יב סעיף 482: 5 סוגי פולואפ עם זמני התראה שונים. החלטה
+# §7.4 ב-phase-2.5-plan.md: מימוש hardcoded, בלי UI ל-settings.
+#
+# הערכים בשעות. הקריאה: כמה זמן אחרי due_at של ה-task צריך לעבור
+# כדי להחשיב אותו "באיחור" (= מוצג עם badge / נספר ב"לא טופלו בזמן").
+#
+# החיבור ל-TaskType: הלוגיקה תלויה גם בסוג הליד (org vs private),
+# לכן resolve_followup_grace(task, lead) הוא wrapper שמחזיר את הערך
+# הנכון לפי ההקשר. ראה app/utils/followup_rules.py.
+
+from datetime import timedelta as _timedelta
+
+FOLLOWUP_GRACE_FIRST_RESPONSE = _timedelta(hours=24)
+FOLLOWUP_GRACE_WARM = _timedelta(hours=60)            # 48-72h, ממוצע
+FOLLOWUP_GRACE_PROPOSAL_ORG = _timedelta(days=4)      # 3-5 ימי עסקים
+FOLLOWUP_GRACE_DORMANT = _timedelta(days=75)          # 60-90 יום
+FOLLOWUP_GRACE_LECTURE_INQUIRY = _timedelta(hours=24)
