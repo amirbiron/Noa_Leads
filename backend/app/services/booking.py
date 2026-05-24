@@ -417,7 +417,9 @@ async def create_booking_request(
     # סטטוס הליד → BOOKING_PENDING + עדכון CRM fields. mirror של request_meeting
     # ב-state_machine: last_inbound_at, reply_boost_until (קופץ לראש בדשבורד),
     # last_activity_type. אטומי דרך WHERE status IN (open) — אם הליד נסגר בינתיים
-    # ה-UPDATE לא יבוצע ושום שדה לא ידרס.
+    # ה-UPDATE לא יבוצע ואנחנו מבטלים את ה-booking כדי לא להשאיר orphan.
+    # BOOKING_PENDING כלול ב-open_statuses כדי לתמוך ב-rebook: ליד שכבר במצב
+    # הזה (בקשה קודמת שנדחתה ללא reset) עדיין צריך לקבל refresh של ה-CRM fields.
     from sqlalchemy import func, update
 
     from app.services.lead_actions import REPLY_BOOST_HOURS
@@ -429,9 +431,10 @@ async def create_booking_request(
             LeadStatus.IN_PROGRESS,
             LeadStatus.PROPOSAL_SENT,
             LeadStatus.BOOKED,
+            LeadStatus.BOOKING_PENDING,
         )
     ]
-    await db.execute(
+    update_result = await db.execute(
         update(Lead)
         .where(Lead.id == lead.id, Lead.status.in_(open_statuses))
         .values(
@@ -443,6 +446,14 @@ async def create_booking_request(
             updated_at=func.now(),
         )
     )
+    # אם ה-UPDATE לא תפס שורה — הליד נסגר/שונה בrace בין השליפה כאן.
+    # מבטלים את ה-booking insert כדי לא להשאיר תור פעיל על ליד שלא יקבל
+    # את הטיפול שמתחייב מבקשת פגישה.
+    if update_result.rowcount != 1:
+        await db.rollback()
+        raise ConflictError(
+            "מצב הפנייה השתנה בזמן השליחה. רעני את הדף ונסי שוב."
+        )
 
     await log_activity(
         db,
