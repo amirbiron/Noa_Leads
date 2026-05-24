@@ -30,6 +30,7 @@ from app.constants import (
     ActivityType,
     BookingStatus,
     LeadStatus,
+    WaitingOn,
 )
 from app.core.exceptions import (
     AppException,
@@ -562,7 +563,7 @@ async def list_pending_bookings(
         )
         .order_by(Booking.requested_slot_start.asc())
     )
-    return [(b, l) for b, l in result.all()]
+    return [(booking, lead) for booking, lead in result.all()]
 
 
 async def get_active_booking_for_lead(
@@ -626,7 +627,7 @@ async def approve_booking(
         )
     ).scalar_one()
 
-    # 3. ליד → BOOKED, waiting_on=THEM (הליד אמור להגיע לפגישה).
+    # 3. ליד → BOOKED, waiting_on=CLIENT (הליד אמור להגיע לפגישה).
     # WHERE מסנן כל סטטוס סגור — אם הליד נסגר בrace בין השליפה ל-UPDATE,
     # rowcount=0 יגרור rollback ולא יישאר booking שמצביע על ליד סגור.
     closed_values = [s.value for s in CLOSED_LEAD_STATUSES]
@@ -635,7 +636,7 @@ async def approve_booking(
         .where(Lead.id == lead.id, ~Lead.status.in_(closed_values))
         .values(
             status=LeadStatus.BOOKED.value,
-            waiting_on="THEM",
+            waiting_on=WaitingOn.CLIENT.value,
             last_activity_type="meeting_approved",
             updated_at=func.now(),
         )
@@ -705,7 +706,23 @@ async def approve_booking(
             .values(google_calendar_event_id=event_id)
         )
 
-    await db.commit()
+    # 6. commit עם compensation: אם נכשל ויש לנו event_id, מוחקים את
+    # האירוע ביומן כדי לא להשאיר orphan (פגישה שמופיעה ביומן של נועה
+    # בלי רישום מקביל במערכת). delete_calendar_event אינדמפוטנטי
+    # (404/410 נספגים), אז עוד retry של approve_booking לא ייצור כפילות.
+    try:
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        if event_id is not None:
+            try:
+                await gc_service.delete_calendar_event(db, event_id)
+            except Exception:
+                logger.exception(
+                    "Failed to delete orphaned Google event %s after commit failure",
+                    event_id,
+                )
+        raise
 
     # refetch אחרי commit כדי להחזיר נתונים עדכניים (event_id וכו')
     return (

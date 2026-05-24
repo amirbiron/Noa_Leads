@@ -28,17 +28,17 @@ async def list_pending(
     rows = await booking_service.list_pending_bookings(db)
     items = [
         PendingBookingItem(
-            id=b.id,
-            lead_id=l.id,
-            lead_name=l.full_name,
-            lead_phone=l.phone,
-            service_category=l.service_category,
-            service_subtype=l.service_subtype,
-            requested_slot_start=b.requested_slot_start,
-            requested_slot_end=b.requested_slot_end,
-            created_at=b.created_at,
+            id=booking.id,
+            lead_id=lead.id,
+            lead_name=lead.full_name,
+            lead_phone=lead.phone,
+            service_category=lead.service_category,
+            service_subtype=lead.service_subtype,
+            requested_slot_start=booking.requested_slot_start,
+            requested_slot_end=booking.requested_slot_end,
+            created_at=booking.created_at,
         )
-        for b, l in rows
+        for booking, lead in rows
     ]
     return PendingBookingsResponse(items=items)
 

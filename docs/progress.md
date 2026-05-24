@@ -25,7 +25,7 @@
 |---|---|---|
 | **11 — OAuth + credentials** | ✅ | cookieless flow (JWT state), Fernet encryption, owner-only |
 | **12 — דף קביעת תור ציבורי** | ✅ | `/book/{token}`, FreeBusy + DB busy, EXCLUDE constraint למניעת overlap |
-| **13 — אישור/דחייה ע"י נועה** | ✅ | `PendingBookingCard` בדף הליד, `/bookings/{id}/approve|reject`, אירוע נוצר ביומן עם `extendedProperties.private.bookingId` כעוגן לשלב 14. fail-safe ל-rollback אם Google נכשל. |
+| **13 — אישור/דחייה ע"י נועה** | ✅ | `PendingBookingCard` בדף הליד, `/bookings/{id}/approve\|reject`, אירוע נוצר ביומן עם `extendedProperties.private.bookingId` כעוגן לשלב 14. fail-safe ל-rollback אם Google נכשל. |
 | **14 — סנכרון הפוך** | ⬜ הבא | Watch channels + webhook (Google→DB) |
 | **15 — Post-meeting update** | ⬜ אחר 14 | התראה אחרי פגישה |
 

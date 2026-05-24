@@ -23,6 +23,7 @@ from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 from jose import JWTError, jwt as jose_jwt
 from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -438,3 +439,25 @@ def _create_event_blocking(
     )
     return result["id"]
 
+
+
+async def delete_calendar_event(db: AsyncSession, event_id: str) -> None:
+    """
+    מוחק אירוע ביומן. 404 (אירוע כבר נמחק) נספג שקט — אינדמפוטנטי.
+    משמש לcompensation: אם commit של ה-DB נכשל אחרי יצירת אירוע, הקורא
+    מוחק את האירוע ה-orphan כדי לא להשאיר ביומן של נועה פגישה שאינה ב-CRM.
+    """
+    creds = await get_credentials_or_404(db)
+    await asyncio.to_thread(_delete_event_blocking, creds, event_id)
+
+
+def _delete_event_blocking(creds: Credentials, event_id: str) -> None:
+    """blocking — נקרא רק מתוך asyncio.to_thread."""
+    service = build("calendar", "v3", credentials=creds, cache_discovery=False)
+    try:
+        service.events().delete(calendarId="primary", eventId=event_id).execute()
+    except HttpError as e:
+        # 404/410 — האירוע כבר לא קיים. אינדמפוטנטי.
+        if e.resp.status in (404, 410):
+            return
+        raise
