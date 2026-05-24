@@ -9,9 +9,11 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.middleware.sessions import SessionMiddleware
 
 from app.api.routes import auth as auth_routes
 from app.api.routes import dashboard as dashboard_routes
+from app.api.routes import google_calendar as google_routes
 from app.api.routes import intake as intake_routes
 from app.api.routes import leads as leads_routes
 from app.api.routes import programs as programs_routes
@@ -90,6 +92,18 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    # SessionMiddleware נדרש ל-OAuth flow של Google (שמירת state +
+    # code_verifier בין /google/auth/start ל-/google/auth/callback).
+    # ה-cookie חתום (HMAC) עם JWT_SECRET_KEY — לא נעוף לתוכן רגיש מעבר
+    # למזהי state רנדומליים, אז שיתוף המפתח עם JWT הוא acceptable trade-off.
+    app.add_middleware(
+        SessionMiddleware,
+        secret_key=settings.jwt_secret_key,
+        same_site="lax",  # נדרש כדי שה-cookie יישלח ב-redirect מ-Google
+        https_only=(settings.app_env == "production"),
+        max_age=600,  # 10 דקות — מספיק ל-OAuth flow, מינימום surface
+    )
+
     _register_exception_handlers(app)
 
     @app.get("/health", tags=["system"])
@@ -107,6 +121,7 @@ def create_app() -> FastAPI:
     app.include_router(programs_routes.router)
     app.include_router(settings_routes.router)
     app.include_router(setup_routes.router)
+    app.include_router(google_routes.router)
 
     return app
 

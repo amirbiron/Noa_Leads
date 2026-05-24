@@ -25,6 +25,15 @@ bcrypt>=4.1.0,<5.0
 httpx==0.28.1
 anthropic==0.42.0
 
+# ===== Cryptography =====
+# Fernet להצפנת tokens של Google ב-DB. כבר transitively של python-jose,
+# אבל נדרש מפורש כי app/utils/encryption.py מייבא ישירות.
+cryptography>=42.0.0
+# SessionMiddleware של starlette משתמש ב-itsdangerous לחתימת cookies
+# (נדרש ל-OAuth flow של Google). transitively כבר נגרר ע"י fastapi,
+# אבל מפורש כדי שלא יאבד בשדרוגים.
+itsdangerous>=2.0
+
 # ===== Google integrations (פאזה 2) =====
 google-api-python-client==2.157.0
 google-auth==2.37.0

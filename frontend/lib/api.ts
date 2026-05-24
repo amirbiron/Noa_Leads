@@ -254,4 +254,21 @@ export const api = {
   // ----- Settings -----
   listServiceRates: () =>
     fetcher<ServiceRate[]>("/settings/service-rates"),
+
+  // ----- Google Calendar -----
+  getGoogleStatus: () =>
+    fetcher<{
+      connected: boolean;
+      google_account_email?: string | null;
+      calendar_id?: string | null;
+      timezone?: string | null;
+      connected_at?: string | null;
+      auth_invalid: boolean;
+    }>("/google/status"),
+
+  startGoogleAuth: () =>
+    fetcher<{ auth_url: string }>("/google/auth/start"),
+
+  disconnectGoogle: () =>
+    fetcher<void>("/google/disconnect", { method: "POST" }),
 };

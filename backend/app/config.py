@@ -46,6 +46,14 @@ class Settings(BaseSettings):
     google_redirect_uri: str | None = None
     gmail_pubsub_topic: str | None = None
 
+    # מפתח Fernet להצפנת tokens של Google ב-DB. ייצור:
+    # `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`
+    secrets_encryption_key: str | None = None
+
+    # כתובת ה-frontend — נדרשת ל-OAuth callback (חוזרים לדף /settings)
+    # ולקישורים בהתראות. דוגמה: https://noa-leads-frontend.onrender.com
+    frontend_url: str = "http://localhost:3000"
+
     # ===== שעות עבודה =====
     work_day_start_hour: int = Field(default=9, ge=0, le=23)
     work_day_end_hour: int = Field(default=18, ge=0, le=23)

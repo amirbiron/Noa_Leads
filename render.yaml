@@ -55,6 +55,17 @@ services:
         generateValue: true
       - key: CORS_ORIGINS
         sync: false
+      # פאזה 2 — Google Calendar OAuth. ראה: docs/google-calendar-setup.md
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_REDIRECT_URI
+        sync: false
+      - key: SECRETS_ENCRYPTION_KEY
+        generateValue: true
+      - key: FRONTEND_URL
+        sync: false
       - fromGroup: noa-leads-shared
       - fromGroup: noa-leads-python
 
