@@ -71,10 +71,14 @@ async def _warm_followup_candidates(db: AsyncSession) -> list[Lead]:
 
 
 def _calc_due_at(last_outbound_at: datetime) -> datetime:
-    """due_at = last_outbound_at + 48h, נדחה לתחילת יום עבודה אם נופל מחוץ."""
+    """
+    due_at = last_outbound_at + 48h, נדחה לתחילת יום עבודה אם נופל מחוץ.
+    next_working_day_start מחזיר ISRAEL_TZ — ממירים ל-UTC לעקביות עם
+    שאר ה-tasks (מיון/השוואות ב-postgres מצפים tz אחיד).
+    """
     due = last_outbound_at + timedelta(hours=WARM_FOLLOWUP_DELAY_HOURS)
     if not is_working_time(due):
-        due = next_working_day_start(due)
+        due = next_working_day_start(due).astimezone(timezone.utc)
     return due
 
 

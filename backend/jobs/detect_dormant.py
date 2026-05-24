@@ -28,12 +28,16 @@ logger = logging.getLogger("jobs.detect_dormant")
 DORMANT_THRESHOLD_DAYS = 60
 
 
-async def _has_open_dormant_task(db: AsyncSession, lead_id) -> bool:
-    """True אם יש כבר open/snoozed dormant_check task לליד."""
+async def _has_any_open_task(db: AsyncSession, lead_id) -> bool:
+    """
+    True אם יש כבר open/snoozed task כלשהו לליד. בודק כל type, לא רק
+    dormant_check — אחרת ליד עם FIRST_RESPONSE/RETRY_CALL תקוע מ-60+
+    ימים היה מצטבר עם dormant_check חדש = שני reminders למצב אחד.
+    עקבי עם check_warm_followups שמדלג על כל ליד עם task פתוח.
+    """
     result = await db.execute(
         select(Task.id).where(
             Task.lead_id == lead_id,
-            Task.type == TaskType.DORMANT_CHECK.value,
             Task.status.in_(
                 [TaskStatus.OPEN.value, TaskStatus.SNOOZED.value]
             ),
@@ -73,13 +77,14 @@ async def detect_dormant() -> None:
         newly_dormant_ids = list(result.scalars().all())
 
         # יצירת dormant_check task לכל ליד חדש שנדלק, idempotent כנגד
-        # chip שכבר יצר task כזה (Spec §16.4 "לא רלוונטי כרגע" → dormant_check
-        # 60d). ה-task נוצר עם due_at=now כי הליד כבר 60 יום רדום.
+        # *כל* task פתוח (chip "לא רלוונטי כרגע" שיצר dormant_check, או
+        # FIRST_RESPONSE/RETRY_CALL ישנים שנשארו תקועים). ה-task נוצר עם
+        # due_at=now כי הליד כבר 60 יום רדום.
         from app.services.tasks import sync_lead_next_action_cache
 
         tasks_created = 0
         for lead_id in newly_dormant_ids:
-            if await _has_open_dormant_task(db, lead_id):
+            if await _has_any_open_task(db, lead_id):
                 continue
             task = Task(
                 lead_id=lead_id,

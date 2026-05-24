@@ -141,10 +141,14 @@ def _calc_followup_due_at(now_utc: datetime, days: int) -> datetime:
     """
     due_at = now + days. אם נופל מחוץ לשעות עבודה (לילה/שבת/חג) — נדחה
     לתחילת יום העבודה הבא. עקבי עם _due_at_for_first_response.
+
+    next_working_day_start מחזיר datetime ב-ISRAEL_TZ; ממירים ל-UTC כדי
+    שכל ה-task.due_at בDB יהיו ב-UTC tz-aware אחיד (אחרת מיון/השוואות
+    בין tasks משונות tz נשבר ב-postgres).
     """
     candidate = now_utc + timedelta(days=days)
     if not is_working_time(candidate):
-        return next_working_day_start(candidate)
+        return next_working_day_start(candidate).astimezone(timezone.utc)
     return candidate
 
 
