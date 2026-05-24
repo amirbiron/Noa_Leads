@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse
 
 from app.api.routes import auth as auth_routes
 from app.api.routes import booking_page as booking_routes
+from app.api.routes import bookings as bookings_routes
 from app.api.routes import dashboard as dashboard_routes
 from app.api.routes import google_calendar as google_routes
 from app.api.routes import intake as intake_routes
@@ -116,6 +117,7 @@ def create_app() -> FastAPI:
     app.include_router(setup_routes.router)
     app.include_router(google_routes.router)
     app.include_router(booking_routes.router)
+    app.include_router(bookings_routes.router)
 
     return app
 

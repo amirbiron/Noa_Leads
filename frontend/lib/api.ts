@@ -6,7 +6,9 @@ import type {
   Activity,
   AvailabilityResponse,
   BookingPageInfo,
+  BookingRead,
   CreateBookingResponse,
+  PendingBookingsResponse,
   HomeDashboard,
   Lead,
   LeadCard,
@@ -301,4 +303,17 @@ export const api = {
       body: payload,
       retryAuth: false,
     }),
+
+  // ----- Booking admin (אישור/דחייה ע"י נועה/עוזרת) -----
+  listPendingBookings: () =>
+    fetcher<PendingBookingsResponse>(`/bookings/pending`),
+
+  getActiveBookingForLead: (leadId: string) =>
+    fetcher<BookingRead | null>(`/bookings/lead/${leadId}/active`),
+
+  approveBooking: (id: string) =>
+    fetcher<BookingRead>(`/bookings/${id}/approve`, { method: "POST" }),
+
+  rejectBooking: (id: string) =>
+    fetcher<BookingRead>(`/bookings/${id}/reject`, { method: "POST" }),
 };

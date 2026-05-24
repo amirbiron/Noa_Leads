@@ -17,6 +17,7 @@ import { AddProgramModal } from "@/components/AddProgramModal";
 import { AppShell } from "@/components/AppShell";
 import { CloseLeadModal } from "@/components/CloseLeadModal";
 import { DynamicActionButton } from "@/components/DynamicActionButton";
+import { PendingBookingCard } from "@/components/PendingBookingCard";
 import { ProgramCard } from "@/components/ProgramCard";
 import { QuickActions } from "@/components/QuickActions";
 import { SectionHeader } from "@/components/SectionHeader";
@@ -34,7 +35,13 @@ import {
   labelSubtype,
   labelWaiting,
 } from "@/lib/hebrew";
-import type { Activity, Lead, Program, StateColor } from "@/lib/types";
+import type {
+  Activity,
+  BookingRead,
+  Lead,
+  Program,
+  StateColor,
+} from "@/lib/types";
 
 function inferStateColor(lead: Lead): StateColor {
   if (["WON", "LOST", "ARCHIVED"].includes(lead.status)) return "gray";
@@ -54,6 +61,7 @@ export default function LeadDetailPage() {
   const [lead, setLead] = useState<Lead | null>(null);
   const [activities, setActivities] = useState<Activity[]>([]);
   const [programs, setPrograms] = useState<Program[]>([]);
+  const [activeBooking, setActiveBooking] = useState<BookingRead | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [templateOpen, setTemplateOpen] = useState(false);
@@ -65,14 +73,19 @@ export default function LeadDetailPage() {
   async function load() {
     setError(null);
     try {
-      const [l, t, p] = await Promise.all([
+      const [l, t, p, b] = await Promise.all([
         api.getLead(id),
         api.getTimeline(id),
         api.listProgramsForLead(id),
+        // active booking — מוצג בכרטיס אישור/דחייה כשהליד ב-BOOKING_PENDING.
+        // נטען תמיד (גם כשהליד לא pending) כי זול ומאפשר תצוגה גם של booking
+        // approved בעתיד (שלב 14+).
+        api.getActiveBookingForLead(id),
       ]);
       setLead(l);
       setActivities(t);
       setPrograms(p);
+      setActiveBooking(b);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "שגיאה בטעינה");
     } finally {
@@ -178,6 +191,12 @@ export default function LeadDetailPage() {
               </div>
             )}
           </div>
+
+          {/* בקשת תור ממתינה — בראש לפי החשיבות (קריאה לפעולה ראשונה
+              שנועה צריכה) */}
+          {activeBooking && activeBooking.status === "pending_approval" && (
+            <PendingBookingCard booking={activeBooking} onChanged={load} />
+          )}
 
           {/* כפתור "מה עכשיו?" — רק לליד פתוח */}
           {!["WON", "LOST", "ARCHIVED"].includes(lead.status) && (

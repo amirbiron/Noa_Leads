@@ -1,7 +1,7 @@
 # מצב הפרויקט
 
 מסמך חי שמסכם מה נבנה, מה פתוח, ואיך להמשיך.
-**עדכון אחרון:** סוף שלב 12 (פאזה 2 — דף קביעת תור ציבורי).
+**עדכון אחרון:** סוף שלב 13 (פאזה 2 — אישור/דחייה ע"י נועה + יצירת אירוע ביומן).
 
 ---
 
@@ -16,7 +16,7 @@
 | פאזה | סטטוס | מה נכלל |
 |---|---|---|
 | **1 — ליבה (MVP)** | ✅ הושלמה | Auth, Leads CRUD + state machine, Intake, Templates, Tasks, Dashboard, Cron jobs, Telegram, Programs, Profitability, Frontend מלא |
-| **2 — Google Calendar** | 🟡 בעבודה | שלב 11+12 הושלמו (OAuth + booking page). חסר 13-15. |
+| **2 — Google Calendar** | 🟡 בעבודה | שלבים 11-13 הושלמו (OAuth + booking page + approve/reject + יצירת אירוע). חסר 14-15. |
 | **3 — AI** | ⬜ עתיד | סיכומים, סינון מיילים, ניסוח הצעות |
 
 ### פאזה 2 — שלבים פנימיים
@@ -25,9 +25,9 @@
 |---|---|---|
 | **11 — OAuth + credentials** | ✅ | cookieless flow (JWT state), Fernet encryption, owner-only |
 | **12 — דף קביעת תור ציבורי** | ✅ | `/book/{token}`, FreeBusy + DB busy, EXCLUDE constraint למניעת overlap |
-| **13 — אישור/דחייה ע"י נועה** | ⬜ הבא | UI ב-`/pending` + יצירת אירוע ב-Google כשמאשרת |
-| **14 — סנכרון הפוך** | ⬜ אחר 13 | Watch channels + webhook (Google→DB) |
-| **15 — Post-meeting update** | ⬜ אחר 13 | התראה אחרי פגישה |
+| **13 — אישור/דחייה ע"י נועה** | ✅ | `PendingBookingCard` בדף הליד, `/bookings/{id}/approve|reject`, אירוע נוצר ביומן עם `extendedProperties.private.bookingId` כעוגן לשלב 14. fail-safe ל-rollback אם Google נכשל. |
+| **14 — סנכרון הפוך** | ⬜ הבא | Watch channels + webhook (Google→DB) |
+| **15 — Post-meeting update** | ⬜ אחר 14 | התראה אחרי פגישה |
 
 ---
 

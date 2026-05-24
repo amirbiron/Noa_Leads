@@ -16,6 +16,7 @@ import logging
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from uuid import UUID
 
 from google.auth.exceptions import RefreshError
 from google.auth.transport.requests import Request
@@ -332,3 +333,77 @@ async def disconnect(db: AsyncSession) -> None:
     )
     await db.commit()
     logger.info("Google Calendar disconnected")
+
+
+# ===================== Event creation =====================
+
+
+async def create_calendar_event(
+    db: AsyncSession,
+    *,
+    booking_id: UUID,
+    summary: str,
+    description: str,
+    start: datetime,
+    end: datetime,
+) -> str:
+    """
+    יוצר אירוע ביומן primary של נועה ומחזיר event_id.
+
+    booking_id נשמר ב-extendedProperties.private.bookingId כעוגן לסנכרון
+    דו-כיווני בשלב 14 (Google→DB) — מאפשר לזהות שאירוע שינוי/נמחק
+    שייך לbooking ספציפי שלנו. ראה: docs/references/google-calendar-blueprint.md
+    סעיף 5.
+
+    attendees לא נוספים — החלטה ל-MVP. נועה תיצור קשר עם הליד ידנית.
+
+    מעלה את החריגות של get_credentials_or_404 (Google not connected /
+    auth invalid). הקורא אחראי להחליט אם זה fail-safe (rollback) או
+    fall-through (אירוע יווצר ידנית).
+    """
+    creds = await get_credentials_or_404(db)
+    return await asyncio.to_thread(
+        _create_event_blocking,
+        creds,
+        booking_id,
+        summary,
+        description,
+        start,
+        end,
+    )
+
+
+def _create_event_blocking(
+    creds: Credentials,
+    booking_id: UUID,
+    summary: str,
+    description: str,
+    start: datetime,
+    end: datetime,
+) -> str:
+    """blocking — נקרא רק מתוך asyncio.to_thread."""
+    service = build("calendar", "v3", credentials=creds, cache_discovery=False)
+    body = {
+        "summary": summary,
+        "description": description,
+        "start": {
+            "dateTime": start.isoformat(),
+            "timeZone": "Asia/Jerusalem",
+        },
+        "end": {
+            "dateTime": end.isoformat(),
+            "timeZone": "Asia/Jerusalem",
+        },
+        "extendedProperties": {
+            "private": {"bookingId": str(booking_id)},
+        },
+        # reminders ברירת מחדל של היומן (popup 10 דק' לפני). לא דורסים
+        # כדי שנועה תוכל לכוונן באופן גלובלי דרך הגדרות יומן Google.
+    }
+    result = (
+        service.events()
+        .insert(calendarId="primary", body=body)
+        .execute()
+    )
+    return result["id"]
+

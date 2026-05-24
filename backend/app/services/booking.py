@@ -539,3 +539,253 @@ async def create_booking_request(
         slot_start=booking_start,
         slot_end=booking_end,
     )
+
+
+# ===== Admin operations: list / approve / reject =====
+
+
+async def list_pending_bookings(
+    db: AsyncSession,
+) -> list[tuple[Booking, Lead]]:
+    """
+    כל ה-bookings ב-pending_approval שעדיין בעתיד, עם פרטי הליד שלהם
+    בtuple יחיד (חסכון בfk-fetch לכל שורה). מוין לפי מועד הסלוט (הקרוב
+    הראשון — נועה מטפלת בסדר זה).
+    """
+    now_utc = datetime.now(timezone.utc)
+    result = await db.execute(
+        select(Booking, Lead)
+        .join(Lead, Lead.id == Booking.lead_id)
+        .where(
+            Booking.status == BookingStatus.PENDING_APPROVAL.value,
+            Booking.requested_slot_end > now_utc,
+        )
+        .order_by(Booking.requested_slot_start.asc())
+    )
+    return [(b, l) for b, l in result.all()]
+
+
+async def get_active_booking_for_lead(
+    db: AsyncSession, lead_id: UUID
+) -> Booking | None:
+    """external wrapper על _get_active_booking — לרישום בנתיב admin
+    שמציג את ה-booking הפעיל בכרטיס הליד."""
+    return await _get_active_booking(db, lead_id)
+
+
+async def approve_booking(
+    db: AsyncSession,
+    booking_id: UUID,
+    performed_by_id: UUID,
+) -> Booking:
+    """
+    מאשר booking pending → approved + יוצר אירוע ביומן + ליד → BOOKED.
+
+    fail-safe: אם יצירת אירוע ביומן נכשלת כשהיומן מחובר אך שבור — rollback
+    מלא, ה-booking נשאר pending_approval. אסור שנועה תחשוב שהפגישה ביומן
+    אם לא. אם היומן בכלל לא מחובר — ממשיכים בלי event_id (היא מודעת
+    לכך שהאינטגרציה כבויה).
+    """
+    from sqlalchemy import func, update
+
+    from app.services import google_calendar as gc_service
+
+    now_utc = datetime.now(timezone.utc)
+
+    # 1. UPDATE אטומי על ה-booking. WHERE status=pending מבטיח שאישור
+    # מקבילי לא יעבור פעמיים.
+    booking_update = await db.execute(
+        update(Booking)
+        .where(
+            Booking.id == booking_id,
+            Booking.status == BookingStatus.PENDING_APPROVAL.value,
+        )
+        .values(
+            status=BookingStatus.APPROVED.value,
+            approved_at=now_utc,
+        )
+    )
+    if booking_update.rowcount != 1:
+        raise ConflictError(
+            "הבקשה כבר עברה לסטטוס אחר. רעני את הדף ונסי שוב."
+        )
+
+    # 2. שליפת ה-booking + ה-lead לserialization של summary/description
+    booking_row = (
+        await db.execute(
+            select(Booking)
+            .where(Booking.id == booking_id)
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one()
+    lead = (
+        await db.execute(
+            select(Lead)
+            .where(Lead.id == booking_row.lead_id)
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one()
+
+    # 3. ליד → BOOKED, waiting_on=THEM (הליד אמור להגיע לפגישה).
+    # WHERE מסנן כל סטטוס סגור — אם הליד נסגר בrace בין השליפה ל-UPDATE,
+    # rowcount=0 יגרור rollback ולא יישאר booking שמצביע על ליד סגור.
+    closed_values = [s.value for s in CLOSED_LEAD_STATUSES]
+    lead_update = await db.execute(
+        update(Lead)
+        .where(Lead.id == lead.id, ~Lead.status.in_(closed_values))
+        .values(
+            status=LeadStatus.BOOKED.value,
+            waiting_on="THEM",
+            last_activity_type="meeting_approved",
+            updated_at=func.now(),
+        )
+    )
+    if lead_update.rowcount != 1:
+        await db.rollback()
+        raise ConflictError(
+            "מצב הליד השתנה בזמן האישור. רעני את הדף ונסי שוב."
+        )
+
+    await log_activity(
+        db,
+        lead_id=lead.id,
+        activity_type=ActivityType.MEETING_APPROVED,
+        performed_by=performed_by_id,
+        metadata={
+            "booking_id": str(booking_id),
+            "slot_start": booking_row.requested_slot_start.isoformat(),
+            "slot_end": booking_row.requested_slot_end.isoformat(),
+        },
+    )
+
+    # 4. יצירת אירוע ביומן — לפני commit כדי שאם נכשל נוכל rollback.
+    event_id: str | None = None
+    try:
+        summary = f"פגישה — {lead.full_name}"
+        desc_lines: list[str] = []
+        if lead.organization_name:
+            desc_lines.append(f"ארגון: {lead.organization_name}")
+        if lead.phone:
+            desc_lines.append(f"טלפון: {lead.phone}")
+        if lead.email:
+            desc_lines.append(f"מייל: {lead.email}")
+        if lead.service_subtype:
+            desc_lines.append(f"תת-קטגוריה: {lead.service_subtype}")
+        desc_lines.append(f"קטגוריה: {lead.service_category}")
+        desc_lines.append(f"מזהה booking: {booking_id}")
+        description = "\n".join(desc_lines)
+
+        event_id = await gc_service.create_calendar_event(
+            db,
+            booking_id=booking_id,
+            summary=summary,
+            description=description,
+            start=booking_row.requested_slot_start,
+            end=booking_row.requested_slot_end,
+        )
+    except (
+        gc_service.GoogleNotConfiguredError,
+        gc_service.GoogleNotConnectedError,
+    ):
+        # יומן לא מחובר — בחירה מודעת. ממשיכים בלי event_id.
+        pass
+    except gc_service.GoogleAuthInvalidError as e:
+        await db.rollback()
+        raise CalendarTemporarilyUnavailable() from e
+    except Exception as e:
+        logger.exception("Failed to create Google event for approved booking")
+        await db.rollback()
+        raise CalendarTemporarilyUnavailable() from e
+
+    # 5. שמירת event_id ב-booking (אם נוצר)
+    if event_id is not None:
+        await db.execute(
+            update(Booking)
+            .where(Booking.id == booking_id)
+            .values(google_calendar_event_id=event_id)
+        )
+
+    await db.commit()
+
+    # refetch אחרי commit כדי להחזיר נתונים עדכניים (event_id וכו')
+    return (
+        await db.execute(
+            select(Booking)
+            .where(Booking.id == booking_id)
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one()
+
+
+async def reject_booking(
+    db: AsyncSession,
+    booking_id: UUID,
+    performed_by_id: UUID,
+) -> Booking:
+    """
+    דוחה booking pending → rejected, ליד חוזר ל-IN_PROGRESS (נועה תחליט
+    מה עכשיו). אטומי דרך WHERE status=pending.
+    """
+    from sqlalchemy import func, update
+
+    now_utc = datetime.now(timezone.utc)
+
+    booking_update = await db.execute(
+        update(Booking)
+        .where(
+            Booking.id == booking_id,
+            Booking.status == BookingStatus.PENDING_APPROVAL.value,
+        )
+        .values(
+            status=BookingStatus.REJECTED.value,
+            rejected_at=now_utc,
+        )
+    )
+    if booking_update.rowcount != 1:
+        raise ConflictError(
+            "הבקשה כבר עברה לסטטוס אחר. רעני את הדף ונסי שוב."
+        )
+
+    booking_row = (
+        await db.execute(
+            select(Booking)
+            .where(Booking.id == booking_id)
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one()
+
+    # ליד חזרה ל-IN_PROGRESS — נועה צריכה להחליט אם להציע מועד אחר/לסגור.
+    # waiting_on=NOAH כי הכדור חזר אליה.
+    await db.execute(
+        update(Lead)
+        .where(
+            Lead.id == booking_row.lead_id,
+            Lead.status == LeadStatus.BOOKING_PENDING.value,
+        )
+        .values(
+            status=LeadStatus.IN_PROGRESS.value,
+            waiting_on="NOAH",
+            last_activity_type="meeting_rejected",
+            updated_at=func.now(),
+        )
+    )
+    # rowcount לא נבדק — ליד שכבר ב-status אחר (למשל BOOKED מbooking אחר)
+    # פשוט לא יושפע. ה-booking עצמו עבר ל-rejected וזה ה-source of truth.
+
+    await log_activity(
+        db,
+        lead_id=booking_row.lead_id,
+        activity_type=ActivityType.MEETING_REJECTED,
+        performed_by=performed_by_id,
+        metadata={"booking_id": str(booking_id)},
+    )
+
+    await db.commit()
+
+    return (
+        await db.execute(
+            select(Booking)
+            .where(Booking.id == booking_id)
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one()
