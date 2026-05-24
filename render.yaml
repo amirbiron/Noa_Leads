@@ -121,6 +121,25 @@ services:
       - fromGroup: noa-leads-shared
       - fromGroup: noa-leads-python
 
+  # warm_followup — Spec §17.1, F-08. כל שעה, ב-15 דק' (מפזר מ-stuck_proposals
+  # שרץ ב-:05). יוצר warm_followup לליד IN_PROGRESS עם last_outbound_at <=
+  # now-48h, בלי inbound, בלי שום task פתוח (idempotent).
+  - type: cron
+    name: noa-check-warm-followups
+    runtime: python
+    plan: starter
+    rootDir: backend
+    schedule: "15 * * * *"
+    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
+    startCommand: python -m jobs.check_warm_followups
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: noa-leads-db
+          property: connectionString
+      - fromGroup: noa-leads-shared
+      - fromGroup: noa-leads-python
+
   # זיהוי לידים רדומים — פעם ביום ב-03:00 ישראל (00:00 UTC)
   - type: cron
     name: noa-detect-dormant

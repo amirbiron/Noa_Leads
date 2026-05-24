@@ -77,6 +77,15 @@ SERVICE_SUBTYPES: dict[ServiceCategory, list[str]] = {
 }
 
 
+# subtypes שמסומנים כהרצאות לארגונים — F-08 + Spec §17.1.
+# בintake של ליד עם subtype כזה, נוצרת משימת LECTURE_INQUIRY במקום
+# FIRST_RESPONSE. אותו SLA של 24h, רק עם type סמנטי שונה — מאפשר
+# הפרדה בדשבורד ושימוש בתבנית "פתיחה לארגון" (§18) בעתיד.
+LECTURE_SUBTYPES = frozenset(
+    {"lecture_organization", "lecture_academic"}
+)
+
+
 # ===== עדיפות =====
 class PriorityLevel(StrEnum):
     NORMAL = "normal"

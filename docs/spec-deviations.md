@@ -174,25 +174,34 @@
 
 ---
 
-### F-08: 3 כללי פולואפ חסרים — 🟠
+### F-08: 3 כללי פולואפ — 🟢 הושלם
 
-**Spec §17.1:** 5 כללי פולואפ:
-1. `first_response` (ליד חדש) — 24h ✓ קיים
-2. `warm_followup` (לקוח שהתעניין) — 48-72h ✗ חסר
-3. `proposal_followup` (הצעה לארגון) — 3-5 ימי עסקים ✓ קיים
-4. `dormant_check` (לקוח שלא חזר) — 60-90 יום ✗ חסר
-5. `lecture_inquiry` (ארגון בהרצאה) — 24h ✗ חסר
+**Spec §17.1:** 5 כללי פולואפ. אחרי commit זה, כולם פעילים:
+1. `first_response` (ליד חדש) — 24h ✓ קיים מתחילה
+2. `warm_followup` (לקוח שהתעניין) — 48h ✅ cron חדש (commit זה)
+3. `proposal_followup` (הצעה לארגון) — 3 ימי עסקים ✓ קיים (check_stuck_proposals)
+4. `dormant_check` (לקוח שלא חזר) — 60 יום ✅ extension ל-detect_dormant (commit זה)
+5. `lecture_inquiry` (ארגון בהרצאה) — 24h ✅ branch ב-intake לפי subtype (commit זה)
 
-**Code:** `backend/app/constants.py` — יש רק `FOLLOWUP_GRACE_FIRST_RESPONSE` ו-`FOLLOWUP_GRACE_PROPOSAL_ORG`.
-
-**Severity:** בינוני — לא שובר כרגע (אין יוצרי tasks לסוגים החסרים), אבל פיצ'ר חסר.
-
-**Open decision:** מתי בדיוק נוצרים `warm_followup`/`dormant_check`/`lecture_inquiry` tasks? §17 מציין כללים אבל לא טריגרים. §16.3 chips מצביעים על חלקם (`dormant_check` עבור "לא רלוונטי כרגע").
+**Code:**
+- `app/constants.py` — `LECTURE_SUBTYPES` frozenset חדש.
+- `app/services/tasks.py` — `create_first_response_task` עכשיו branches לפי
+  `lead.service_subtype`: lecture_organization/lecture_academic → LECTURE_INQUIRY,
+  אחרת FIRST_RESPONSE. אותו SLA 24h.
+- `jobs/detect_dormant.py` — אחרי UPDATE ש-flips dormant_flag, יוצר
+  dormant_check task per newly-marked lead, idempotent כנגד chip שיצר אחד.
+- `jobs/check_warm_followups.py` — cron חדש hourly. מאתר IN_PROGRESS עם
+  last_outbound_at <= now-48h, בלי inbound, בלי שום open task → ייצור
+  warm_followup עם due_at=last_outbound_at+48h (work-hours-aware).
+- `render.yaml` — `noa-check-warm-followups` cron רשום (schedule `15 * * * *`).
 
 **Acceptance:**
-- [ ] 3 קבועים חדשים ב-`constants.py`: `FOLLOWUP_GRACE_WARM`, `FOLLOWUP_GRACE_DORMANT`, `FOLLOWUP_GRACE_LECTURE_INQUIRY`.
-- [ ] לוגיקת יצירת tasks (`lead_actions.py`, `_create_followup_task_if_needed`) מקבלת פרמטר `followup_type` ובוחרת grace.
-- [ ] Chips מ-F-05 משתמשים בכללים הנכונים בהתאם לבחירת המשתמש.
+- [x] warm_followup cron קיים + רשום ב-render.yaml.
+- [x] dormant_check נוצר אוטומטית ע"י detect_dormant (idempotent).
+- [x] lecture_inquiry נוצר ב-intake לפי subtype.
+
+**הערה:** Spec §17.1 נותן טווחים (48-72h, 60-90d). אנחנו לוקחים את הסף
+התחתון כסף יחיד. שינוי בעתיד = שורה אחת בקובץ ה-cron / constant.
 
 ---
 

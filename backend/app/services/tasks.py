@@ -90,20 +90,36 @@ async def create_first_response_task(
     assigned_to: UUID | None = None,
 ) -> Task:
     """
-    נוצרת אוטומטית עם פתיחת ליד חדש: משימת "החזרה ראשונה" לליד.
-    אם הליד נכנס בשעות עבודה — due_at = עכשיו (יופיע מיד ב"פעולות היום").
-    אם נכנס מחוץ לשעות — due_at = תחילת יום העבודה הבא, 09:00.
+    נוצרת אוטומטית עם פתיחת ליד חדש: משימת תזכורת לטיפול ראשון.
+    אותו SLA של 24h (Spec §17.1), אבל סוג ה-task משתנה לפי subtype:
+    - lecture_organization / lecture_academic → LECTURE_INQUIRY (F-08).
+    - אחרת → FIRST_RESPONSE (ברירת מחדל).
+
+    ההבחנה נותנת סמנטיקה ברורה בדשבורד ("פניות מארגונים") ובסיס
+    לשימוש בתבנית "פתיחה לארגון" (§18) בעתיד.
+
+    אם הליד נכנס בשעות עבודה — due_at = עכשיו+24h. אם נופל מחוץ לשעות
+    עבודה — נדחה לתחילת יום העבודה הבא, 09:00.
     """
+    from app.constants import LECTURE_SUBTYPES
+
     now = datetime.now(timezone.utc)
     due_at = _due_at_for_first_response(now)
 
+    if lead.service_subtype in LECTURE_SUBTYPES:
+        task_type = TaskType.LECTURE_INQUIRY.value
+        origin = "auto_lecture_inquiry"
+    else:
+        task_type = TaskType.FIRST_RESPONSE.value
+        origin = "auto_first_response"
+
     task = Task(
         lead_id=lead.id,
-        type=TaskType.FIRST_RESPONSE.value,
+        type=task_type,
         assigned_to=assigned_to or lead.owner_id,
         due_at=due_at,
         status=TaskStatus.OPEN.value,
-        origin_rule="auto_first_response",
+        origin_rule=origin,
     )
     db.add(task)
     await db.flush()
