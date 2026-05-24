@@ -52,11 +52,17 @@ export const PREFERRED_CONTACT_LABELS: Record<string, string> = {
 };
 
 export const TASK_TYPE_LABELS: Record<string, string> = {
+  // 5 כללי הפולואפ של Spec §17.1
   first_response: "תגובה ראשונה",
-  followup: "פולואפ",
+  warm_followup: "פולואפ חם",
   proposal_followup: "פולואפ הצעה",
+  dormant_check: "בדיקת חידוש קשר",
+  lecture_inquiry: "פנייה לארגון בנושא הרצאה",
+  // סוגים שצ'יפים יוצרים (Spec §16.4) ושאר המערכת
+  followup: "פולואפ",
+  retry_call: "ניסיון שיחה חוזר",
+  send_proposal: "שליחת הצעת מחיר",
   post_meeting_update: "עדכון אחרי פגישה",
-  dormant_reachout: "חידוש קשר",
   program_end: "סיום תוכנית",
   after_hours_reply: "מענה אחרי שעות",
 };

@@ -143,11 +143,18 @@ class ActivityType(StrEnum):
 
 # ===== סוגי משימות (tasks) =====
 class TaskType(StrEnum):
-    FIRST_RESPONSE = "first_response"            # תגובה ראשונה לליד חדש
-    FOLLOWUP = "followup"                        # פולואפ כללי
-    PROPOSAL_FOLLOWUP = "proposal_followup"      # פולואפ אחרי הצעת מחיר
+    # 5 כללי הפולואפ של §17.1 + §27.6
+    FIRST_RESPONSE = "first_response"            # ליד חדש שלא טופל — 24h
+    WARM_FOLLOWUP = "warm_followup"              # לקוח חם שלא סגר — 48h (§17.1)
+    PROPOSAL_FOLLOWUP = "proposal_followup"      # פולואפ אחרי הצעת מחיר — 3 ימי עסקים
+    DORMANT_CHECK = "dormant_check"              # ליד שלא חזר — 60d (§17.1; היה dormant_reachout)
+    LECTURE_INQUIRY = "lecture_inquiry"          # ארגון התעניין בהרצאה — 24h (§17.1)
+
+    # סוגים נוספים שמופיעים ב-§16.4 (chips) ובגזירות מערכת
+    FOLLOWUP = "followup"                        # פולואפ כללי (chip "רוצה פרטים"/"מעוניין בשיחה"/"לחזור בעוד חודש")
+    RETRY_CALL = "retry_call"                    # ניסיון שיחה חוזר אחרי אין מענה (chip "אין מענה")
+    SEND_PROPOSAL = "send_proposal"              # יש לשלוח הצעת מחיר ללקוח (chip "רוצה הצעה")
     POST_MEETING_UPDATE = "post_meeting_update"  # עדכון אחרי פגישה
-    DORMANT_REACHOUT = "dormant_reachout"        # חידוש קשר עם רדום
     PROGRAM_END = "program_end"                  # סיום תוכנית מתמשכת
     AFTER_HOURS_REPLY = "after_hours_reply"      # החזרה אחרי שעות עבודה
 

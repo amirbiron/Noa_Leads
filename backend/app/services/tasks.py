@@ -10,7 +10,7 @@ from sqlalchemy import and_, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
-from app.constants import TaskStatus, TaskType
+from app.constants import CLOSED_LEAD_STATUSES, TaskStatus, TaskType
 from app.core.exceptions import (
     InvalidStateTransitionError,
     NotFoundError,
@@ -123,6 +123,11 @@ async def sync_lead_next_action_cache(
     שמירה ישירה של task.due_at — אין יותר grace adjustment. ה-due_at
     של כל task מייצג את ה-alert time (כשהוא נוצר, חשבו את ה-grace
     לתוכו). שינוי מהמודל הקודם — ראה הערות ב-_due_at_for_first_response.
+
+    F-23: WHERE כולל בדיקה ש-status פתוח. ליד סגור לעולם לא יקבל
+    next_action_due_at חי (כלל §6.5 בSpec). אם sync נקרא על ליד סגור
+    בעקבות race (task נוצר בו במקביל לסגירה) — ה-UPDATE לא תופס, ה-cache
+    נשאר NULL כפי שclose_lead הגדיר. silent no-op מכוון.
     """
     earliest = (
         await db.execute(
@@ -141,9 +146,13 @@ async def sync_lead_next_action_cache(
     next_type = earliest.type if earliest is not None else None
     next_due = earliest.due_at if earliest is not None else None
 
+    closed = [s.value for s in CLOSED_LEAD_STATUSES]
     await db.execute(
         update(Lead)
-        .where(Lead.id == lead_id)
+        .where(
+            Lead.id == lead_id,
+            Lead.status.notin_(closed),
+        )
         .values(
             next_action_type=next_type,
             next_action_due_at=next_due,
@@ -353,8 +362,6 @@ async def list_stuck_tasks(db: AsyncSession) -> list[tuple[Task, Lead]]:
     מסונן ללידים פתוחים (defense in depth — close_lead מבטל tasks).
     מיון לפי due_at עולה (ישנים קודם).
     """
-    from app.constants import CLOSED_LEAD_STATUSES
-
     now_utc = datetime.now(timezone.utc)
 
     stmt = (
