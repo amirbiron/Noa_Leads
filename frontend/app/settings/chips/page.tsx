@@ -98,7 +98,7 @@ export default function ChipsSettingsPage() {
       {!loading && (
         <>
           <p className="text-sm text-gray-600 mb-3">
-            צ'יפים שמופיעים בכרטיס ליד לסיכום שיחה מהיר. אפשר לערוך, להוסיף, או להסיר.
+            {"צ'יפים שמופיעים בכרטיס ליד לסיכום שיחה מהיר. אפשר לערוך, להוסיף, או להסיר."}
           </p>
 
           <ul className="space-y-2">
@@ -206,7 +206,7 @@ export default function ChipsSettingsPage() {
               className="mt-3 w-full bg-gray-900 text-white rounded-xl py-3 text-sm font-medium flex items-center justify-center gap-2"
             >
               <Plus size={16} aria-hidden />
-              הוספת צ'יפ חדש
+              {"הוספת צ'יפ חדש"}
             </button>
           )}
         </>
@@ -263,7 +263,7 @@ function ChipEditor({
   return (
     <div className="bg-white rounded-xl border border-gray-300 p-3 space-y-3">
       <div>
-        <label className="text-xs text-gray-600 block mb-1">שם הצ'יפ</label>
+        <label className="text-xs text-gray-600 block mb-1">{"שם הצ'יפ"}</label>
         <input
           value={label}
           onChange={(e) => setLabel(e.target.value)}
