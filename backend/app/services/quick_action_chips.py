@@ -30,6 +30,7 @@ from app.schemas.quick_action_chip import (
     QuickActionChipUpdate,
 )
 from app.services.activities import log_activity
+from app.services.lead_actions import AUTO_CLOSE_TASK_TYPES
 from app.services.tasks import sync_lead_next_action_cache
 from app.utils.work_hours import is_working_time, next_working_day_start
 
@@ -207,7 +208,45 @@ async def apply_chip(
             "מצב הליד השתנה תוך כדי הפעולה. רעני את הכרטיס ונסי שוב."
         )
 
-    # 2. INSERT Task חדש
+    # 2a. De-dup: לחיצה חוזרת על אותו צ'יפ (או על צ'יפ אחר עם אותו
+    #     followup_task_type) לא צריכה לערום משימות. ה-task הישן superseded
+    #     ע"י הלחיצה הנוכחית — CANCELED (לא DONE, כי לא בוצע באמת).
+    await db.execute(
+        update(Task)
+        .where(
+            Task.lead_id == lead_id,
+            Task.type == chip.followup_task_type,
+            Task.status.in_(
+                [TaskStatus.OPEN.value, TaskStatus.SNOOZED.value]
+            ),
+        )
+        .values(status=TaskStatus.CANCELED.value)
+    )
+
+    # 2b. Touchpoint close: לחיצה על chip = נועה סיכמה שיחה, אז התזכורות
+    #     לטיפול ראשוני / פולואפ / retry_call כבר לא רלוונטיות → DONE.
+    #     מקביל ל-_close_addressed_tasks ב-lead_actions. מדלגים על
+    #     followup_task_type של הצ'יפ עצמו — כבר טופל ב-2a.
+    other_close_types = [
+        t for t in AUTO_CLOSE_TASK_TYPES if t != chip.followup_task_type
+    ]
+    if other_close_types:
+        await db.execute(
+            update(Task)
+            .where(
+                Task.lead_id == lead_id,
+                Task.type.in_(other_close_types),
+                Task.status.in_(
+                    [TaskStatus.OPEN.value, TaskStatus.SNOOZED.value]
+                ),
+            )
+            .values(
+                status=TaskStatus.DONE.value,
+                completed_at=now_utc,
+            )
+        )
+
+    # 2c. INSERT Task חדש
     task = Task(
         lead_id=lead_id,
         type=chip.followup_task_type,
