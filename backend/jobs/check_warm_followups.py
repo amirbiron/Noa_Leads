@@ -38,7 +38,11 @@ async def _warm_followup_candidates(db: AsyncSession) -> list[Lead]:
     שולף לידים IN_PROGRESS שעוברים את התנאים לcreate warm_followup:
     - last_outbound_at <= now - 48h (כלומר שלחנו ועברו 48h+).
     - אין inbound חדש מאז (לקוח לא ענה).
-    - אין task פתוח בכלל (idempotent + מכבד chip-driven tasks).
+    - אין task פתוח בכלל (מכבד chip-driven tasks).
+    - אין warm_followup task — *בכל סטטוס* — שנוצר אחרי ה-outbound הנוכחי.
+      כך, אם נועה השלימה warm_followup ואין outbound חדש, לא נוצר עוד אחד.
+      ברגע שיש outbound חדש (Noah שלחה משהו), last_outbound_at קופץ קדימה
+      וה-warm_followup הישן "נשאר מאחור" — מותר ליצור חדש.
     """
     threshold = datetime.now(timezone.utc) - timedelta(
         hours=WARM_FOLLOWUP_DELAY_HOURS
@@ -54,6 +58,17 @@ async def _warm_followup_candidates(db: AsyncSession) -> list[Lead]:
         )
         .exists()
     )
+    # מונע הוצאת hourly של warm_followup ל-loop: ברגע שנוצר warm_followup
+    # ל-outbound הזה (פתוח/הושלם/בוטל), לא יוצרים עוד עד שיהיה outbound חדש.
+    has_warm_followup_after_outbound = (
+        select(Task.id)
+        .where(
+            Task.lead_id == Lead.id,
+            Task.type == TaskType.WARM_FOLLOWUP.value,
+            Task.created_at >= Lead.last_outbound_at,
+        )
+        .exists()
+    )
 
     stmt = select(Lead).where(
         Lead.status == LeadStatus.IN_PROGRESS.value,
@@ -65,6 +80,7 @@ async def _warm_followup_candidates(db: AsyncSession) -> list[Lead]:
             Lead.last_inbound_at < Lead.last_outbound_at,
         ),
         ~has_open_task,
+        ~has_warm_followup_after_outbound,
     )
     result = await db.execute(stmt)
     return list(result.scalars().all())

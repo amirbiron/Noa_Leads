@@ -198,39 +198,39 @@ async def apply_chip(
             "לא ניתן להפעיל צ'יפ על ליד סגור. פתחי אותו מחדש קודם."
         )
 
-    # ליד ב-BOOKING_PENDING / BOOKED עם בקשת תור פעילה — לחיצה על chip
-    # שמשנה את הסטטוס תנתק את ה-CRM מהיומן:
+    # ליד ב-BOOKING_PENDING / BOOKED עם בקשת תור פעילה — chip apply חסום
+    # *תמיד*, גם אם target_status שווה לסטטוס הנוכחי. למה: chip עדיין מעדכן
+    # waiting_on, יוצר followup task, ומגדיר touchpoint — בזמן שיש בקשה
+    # פעילה ביומן שדורשת טיפול ראשון (אישור/דחייה/ביטול). שינוי jbeg על
+    # ליד כזה דורש קודם לסגור את הbooking דרך ה-UI הייעודי.
     #   - BOOKING_PENDING + pending_approval: הליד נושר מ-/dashboard/pending
     #     (F-06), הבקשה נשכחת.
-    #   - BOOKED + approved: הסטטוס יורד אבל ה-Google Calendar event נשאר
-    #     קיים ופעיל — נועה רואה פגישה ביומן בלי context ב-CRM.
-    # בשני המקרים, דורש מנועה לטפל בבקשה (אישור/דחייה/ביטול) קודם.
-    if chip.target_status != lead.status:
-        blocking_booking_status: str | None = None
-        if lead.status == LeadStatus.BOOKING_PENDING.value:
-            blocking_booking_status = BookingStatus.PENDING_APPROVAL.value
-        elif lead.status == LeadStatus.BOOKED.value:
-            blocking_booking_status = BookingStatus.APPROVED.value
+    #   - BOOKED + approved: ה-Google Calendar event נשאר פעיל בלי context.
+    blocking_booking_status: str | None = None
+    if lead.status == LeadStatus.BOOKING_PENDING.value:
+        blocking_booking_status = BookingStatus.PENDING_APPROVAL.value
+    elif lead.status == LeadStatus.BOOKED.value:
+        blocking_booking_status = BookingStatus.APPROVED.value
 
-        if blocking_booking_status is not None:
-            active_booking = (
-                await db.execute(
-                    select(Booking.id)
-                    .where(
-                        Booking.lead_id == lead_id,
-                        Booking.status == blocking_booking_status,
-                    )
-                    .limit(1)
+    if blocking_booking_status is not None:
+        active_booking = (
+            await db.execute(
+                select(Booking.id)
+                .where(
+                    Booking.lead_id == lead_id,
+                    Booking.status == blocking_booking_status,
                 )
-            ).scalar_one_or_none()
-            if active_booking is not None:
-                if lead.status == LeadStatus.BOOKING_PENDING.value:
-                    raise ValidationError(
-                        "יש בקשת תור הממתינה לאישור. אישרי או דחי אותה לפני שינוי סטטוס הליד."
-                    )
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if active_booking is not None:
+            if lead.status == LeadStatus.BOOKING_PENDING.value:
                 raise ValidationError(
-                    "יש פגישה מאושרת בלוח. בטלי או דחי את הפגישה לפני שינוי סטטוס הליד."
+                    "יש בקשת תור הממתינה לאישור. אישרי או דחי אותה לפני הפעלת הצ'יפ."
                 )
+            raise ValidationError(
+                "יש פגישה מאושרת בלוח. בטלי או דחי את הפגישה לפני הפעלת הצ'יפ."
+            )
 
     now_utc = datetime.now(timezone.utc)
     due_at = _calc_followup_due_at(now_utc, chip.auto_followup_days)
