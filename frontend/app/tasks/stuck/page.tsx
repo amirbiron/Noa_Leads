@@ -49,7 +49,7 @@ export default function StuckTasksPage() {
       {items.length > 0 && (
         <>
           <p className="text-sm text-gray-500 mb-3">
-            משימות שעברו 7+ ימים מהמועד שלהן ועדיין לא טופלו. מסודר לפי וותק.
+            משימות שלא טופלו במועד — מסודר לפי וותק (ישנים קודם).
           </p>
           <ul className="space-y-2">
             {items.map((item) => (
@@ -80,7 +80,13 @@ export default function StuckTasksPage() {
                         {labelCategory(item.service_category)}
                       </div>
                       <div className="mt-1.5 text-xs text-state-red font-medium">
-                        תקוע {item.days_stuck} ימים
+                        {item.days_stuck === 0
+                          ? "באיחור היום"
+                          : item.days_stuck === 1
+                            ? "באיחור יום"
+                            : item.days_stuck === 2
+                              ? "באיחור יומיים"
+                              : `באיחור ${item.days_stuck} ימים`}
                       </div>
                     </div>
                     <ChevronLeft

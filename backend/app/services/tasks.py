@@ -117,15 +117,22 @@ async def sync_lead_next_action_cache(
     """
     מעדכן את שדות next_action_* בליד לפי ה-task הפעיל הקרוב ביותר.
 
-    הקונספט: tasks = source of truth, leads.next_action_* = cache שמאפשר
-    קריאה מהירה לכרטיס ליד בלי JOIN. ראה docs/phase-2.5-plan.md §7.3.
+    הקונספט: tasks = source of truth, leads.next_action_* = cache.
+    ראה docs/phase-2.5-plan.md §7.3.
 
-    קריאה: אחרי כל יצירה/עדכון/השלמה/סנוז של task. אם אין tasks פעילים
-    לליד — מאפס ל-NULL.
+    *זמן ה-alert* (לקאש) מותאם ל-grace per-type:
+    - OPEN FIRST_RESPONSE: created_at + 24h (לפי האפיון יב §482).
+      מבטיח שליד חדש לא יצבע אדום מיד — derive_state_color יחזיר orange
+      ב-48h הראשונות.
+    - SNOOZED (כל סוג): due_at (המשתמש בחר את זמן הפעולה במפורש).
+      בלי זה, snooze לא היה משפיע על הצביעה ועל "לא טופלו בזמן".
+    - שאר ה-OPEN: due_at רגיל.
     """
+    from app.constants import FOLLOWUP_GRACE_FIRST_RESPONSE
+
     earliest = (
         await db.execute(
-            select(Task.type, Task.due_at)
+            select(Task.type, Task.due_at, Task.created_at, Task.status)
             .where(
                 Task.lead_id == lead_id,
                 Task.status.in_(
@@ -137,8 +144,16 @@ async def sync_lead_next_action_cache(
         )
     ).first()
 
-    next_type = earliest.type if earliest is not None else None
-    next_due = earliest.due_at if earliest is not None else None
+    if earliest is None:
+        next_type, next_due = None, None
+    else:
+        next_type = earliest.type
+        if earliest.status == TaskStatus.SNOOZED.value:
+            next_due = earliest.due_at
+        elif earliest.type == TaskType.FIRST_RESPONSE.value:
+            next_due = earliest.created_at + FOLLOWUP_GRACE_FIRST_RESPONSE
+        else:
+            next_due = earliest.due_at
 
     await db.execute(
         update(Lead)
@@ -335,25 +350,45 @@ async def _get_task_or_404(db: AsyncSession, task_id: UUID) -> Task:
     return task
 
 
-STUCK_THRESHOLD_DAYS = 7
-
-
-async def list_stuck_tasks(
-    db: AsyncSession, *, threshold_days: int = STUCK_THRESHOLD_DAYS
-) -> list[tuple[Task, Lead]]:
+async def list_stuck_tasks(db: AsyncSession) -> list[tuple[Task, Lead]]:
     """
-    "ממתין לטיפול" — משימות פתוחות/דחויות שעבר זמן יעדן + threshold_days
-    ימים. לפי האפיון יב סעיף 477: "אם לא טופל אחרי כל ההתראות → עובר
-    לעמוד נפרד 'ממתין לטיפול'".
+    "ממתין לטיפול" — משימות שעבר זמן ה-alert שלהן (overdue) ועדיין לא
+    טופלו. לפי האפיון יב סעיף 477: "אם לא טופל אחרי כל ההתראות → עובר
+    לעמוד נפרד".
 
-    מסונן ללידים פתוחים (לא לכלול WON/LOST/ARCHIVED — close_lead כבר
-    מבטל את ה-tasks שלהם, אבל defense in depth).
+    הקריטריון זהה ל-stuck_count ב-dashboard (per-type grace + טיפול
+    בsnooze) — כך שהקליק על "לא טופלו בזמן" בדף הבית מוביל לרשימה
+    המכילה את אותן יחידות. ראה dashboard._OVERDUE_GRACE.
 
-    מיון לפי due_at עולה (ישנים קודם) — לפי האפיון "מיון לפי וותק".
+    מסונן ללידים פתוחים (defense in depth — close_lead מבטל tasks).
+    מיון לפי due_at עולה (ישנים קודם).
     """
     from app.constants import CLOSED_LEAD_STATUSES
+    from app.services.dashboard import _OVERDUE_GRACE
 
-    cutoff = datetime.now(timezone.utc) - timedelta(days=threshold_days)
+    now_utc = datetime.now(timezone.utc)
+
+    typed_overdue_conditions = [
+        and_(
+            Task.status == TaskStatus.OPEN.value,
+            Task.type == task_type,
+            Task.created_at + grace <= now_utc,
+        )
+        for task_type, grace in _OVERDUE_GRACE.items()
+    ]
+    overdue_condition = or_(
+        and_(
+            Task.status == TaskStatus.SNOOZED.value,
+            Task.due_at <= now_utc,
+        ),
+        *typed_overdue_conditions,
+        and_(
+            Task.status == TaskStatus.OPEN.value,
+            Task.type.notin_(list(_OVERDUE_GRACE.keys())),
+            Task.due_at <= now_utc,
+        ),
+    )
+
     stmt = (
         select(Task, Lead)
         .join(Lead, Task.lead_id == Lead.id)
@@ -361,7 +396,7 @@ async def list_stuck_tasks(
             Task.status.in_(
                 [TaskStatus.OPEN.value, TaskStatus.SNOOZED.value]
             ),
-            Task.due_at < cutoff,
+            overdue_condition,
             Lead.status.notin_([s.value for s in CLOSED_LEAD_STATUSES]),
         )
         .order_by(Task.due_at.asc())

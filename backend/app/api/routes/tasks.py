@@ -31,15 +31,33 @@ async def list_open_tasks(
 async def list_stuck_tasks(
     db: DbSession, _user: CurrentUser
 ) -> list[StuckTaskItem]:
-    """משימות תקועות (לא טופלו 7+ ימים) — לעמוד 'ממתין לטיפול'."""
+    """
+    משימות תקועות — קריטריון זהה ל-stuck_count ב-dashboard
+    (overdue per-type grace, snooze respected). כך שהקליק על
+    "לא טופלו בזמן" מוביל לרשימה התואמת.
+    """
+    from app.constants import TaskStatus
+    from app.services.dashboard import _OVERDUE_GRACE
+
     rows = await tasks_service.list_stuck_tasks(db)
     now = datetime.now(timezone.utc)
+
+    def _alert_threshold(task) -> datetime:
+        # נקודת הזמן שבה המשימה נחשבת overdue. עבור snooze - due_at,
+        # עבור OPEN עם grace - created_at + grace, אחרת - due_at.
+        if task.status == TaskStatus.SNOOZED.value:
+            return task.due_at
+        grace = _OVERDUE_GRACE.get(task.type)
+        if grace is not None:
+            return task.created_at + grace
+        return task.due_at
+
     return [
         StuckTaskItem(
             task_id=task.id,
             task_type=task.type,
             due_at=task.due_at,
-            days_stuck=(now - task.due_at).days,
+            days_stuck=max(0, (now - _alert_threshold(task)).days),
             lead_id=lead.id,
             lead_name=lead.full_name,
             lead_status=lead.status,

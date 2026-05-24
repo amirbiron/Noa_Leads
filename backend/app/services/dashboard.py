@@ -203,13 +203,18 @@ async def get_today_actions(db: AsyncSession) -> list[TodayActionItem]:
     end_today_exclusive = _start_of_tomorrow_israel(now_utc)
     closed = [s.value for s in CLOSED_LEAD_STATUSES]
 
-    # ביטוי is_overdue per-type — אותה לוגיקה כמו _calc_is_overdue ב-Python
-    # אבל ב-SQL כדי שגם המיון יכבד את ה-grace. אחרת FIRST_RESPONSE עם
-    # due_at=now היה קופץ לראש מיד, גם כשה-badge עוד לא דולק. ה-grace
-    # נשאב מ-_OVERDUE_GRACE — מקור יחיד שמשמש גם את _calc_is_overdue.
+    # ביטוי is_overdue per-type — אותה לוגיקה כמו _calc_is_overdue ב-Python.
+    # סדר: SNOOZED קודם (snooze דורס grace), אחר כך per-type, אחרת due_at.
     is_overdue_expr = case(
+        (Task.status == TaskStatus.SNOOZED.value, Task.due_at <= now_utc),
         *[
-            (Task.type == task_type, Task.created_at + grace <= now_utc)
+            (
+                and_(
+                    Task.status == TaskStatus.OPEN.value,
+                    Task.type == task_type,
+                ),
+                Task.created_at + grace <= now_utc,
+            )
             for task_type, grace in _OVERDUE_GRACE.items()
         ],
         else_=Task.due_at <= now_utc,
@@ -267,12 +272,16 @@ async def get_today_actions(db: AsyncSession) -> list[TodayActionItem]:
 
 def _calc_is_overdue(task, now_utc: datetime) -> bool:
     """
-    מחשב is_overdue עם grace per-type. ל-FIRST_RESPONSE: 24h מ-task.created_at
-    (לפי האפיון). לשאר ה-types: due_at <= now כרגיל.
+    מחשב is_overdue עם grace per-type ועם טיפול בsnooze:
+    - SNOOZED (כל סוג): due_at <= now (המשתמש בחר את זמן הalert במפורש).
+    - OPEN עם type ב-_OVERDUE_GRACE: created_at + grace <= now.
+    - OPEN אחרים: due_at <= now.
 
-    הלוגיקה הזו משוכפלת ב-SQL ב-get_today_actions (is_overdue_expr) כדי
-    שגם המיון יכבד את ה-grace — אחרת המשימה תקפוץ לראש לפני שה-badge דולק.
+    הלוגיקה משוכפלת ב-SQL ב-get_today_actions (is_overdue_expr) ובחישוב
+    stuck_count (overdue_task_condition) — מקור יחיד דרך _OVERDUE_GRACE.
     """
+    if task.status == TaskStatus.SNOOZED.value:
+        return task.due_at <= now_utc
     grace = _OVERDUE_GRACE.get(task.type)
     if grace is not None:
         return task.created_at + grace <= now_utc
@@ -454,16 +463,23 @@ async def get_weekly_insights(db: AsyncSession) -> WeeklyInsights:
     # ליד חדש שזה עתה נוצר *לא* נספר כי ה-grace של 24h עוד לא חלף.
     # ליד פתוח בלי tasks פעילים *לא* נספר (זה bug אחר — לטפל בו דרך
     # יצירה אוטומטית של tasks, לא דרך הספירה הזו).
+    # snooze דורס grace per-type: המשתמש בחר זמן alert במפורש.
     typed_overdue_conditions = [
         and_(
+            Task.status == TaskStatus.OPEN.value,
             Task.type == task_type,
             Task.created_at + grace <= now_utc,
         )
         for task_type, grace in _OVERDUE_GRACE.items()
     ]
     overdue_task_condition = or_(
+        and_(
+            Task.status == TaskStatus.SNOOZED.value,
+            Task.due_at <= now_utc,
+        ),
         *typed_overdue_conditions,
         and_(
+            Task.status == TaskStatus.OPEN.value,
             Task.type.notin_(list(_OVERDUE_GRACE.keys())),
             Task.due_at <= now_utc,
         ),
