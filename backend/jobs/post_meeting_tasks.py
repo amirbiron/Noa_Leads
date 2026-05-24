@@ -88,18 +88,22 @@ async def create_post_meeting_tasks() -> None:
         # reschedule לעתיד = הפגישה עוד לא התקיימה. ה-booking בשורה
         # עשוי להחזיק עדיין slot_end ישן (sync לא רץ עוד / webhook delay),
         # אבל ה-activity מ-MEETING_RESCHEDULED האחרון כן יחזיק את הזמן
-        # החדש ב-metadata.new_end.
+        # החדש ב-metadata.
+        #
+        # COALESCE בין new_end (מסלול רגיל) ל-attempted_new_end (מסלול
+        # שבו ה-UPDATE נכשל ב-IntegrityError — overlap עם booking אחר).
+        # שני המקרים מסמנים reschedule אמיתי ב-Google. בלי הfallback,
+        # conflict path היה משאיר NULL והguard היה עובר שגוי.
         #
         # חשוב: בודקים רק את ה-activity *האחרון* (ORDER BY created_at DESC
         # LIMIT 1). EXISTS על כל reschedule היה גורם לדיכוי שגוי כש-
         # reschedule מאוחר יותר החזיר את הslot לעבר (הפגישה כן קרתה).
+        reschedule_end_text = func.coalesce(
+            Activity.activity_metadata["new_end"].astext,
+            Activity.activity_metadata["attempted_new_end"].astext,
+        )
         latest_reschedule_new_end = (
-            select(
-                cast(
-                    Activity.activity_metadata["new_end"].astext,
-                    postgresql.TIMESTAMP(timezone=True),
-                )
-            )
+            select(cast(reschedule_end_text, postgresql.TIMESTAMP(timezone=True)))
             .where(
                 Activity.lead_id == Booking.lead_id,
                 Activity.type == ActivityType.MEETING_RESCHEDULED.value,
