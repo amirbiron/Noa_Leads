@@ -91,17 +91,26 @@ async def _run_sync_in_new_session() -> None:
     (BackgroundTasks). שגיאות נספגות + נכתבות ללוג — Google לא ממתין.
 
     sync_changes מחזיר את ה-token החדש בלי לpersist אותו. אנחנו persists
-    רק אם apply עבר ללא שגיאות, אחרת ה-token נשאר על הישן ובwebhook הבא
-    נחזור על אותם האירועים (apply אינדמפוטנטי אז כפילויות מסוננות).
+    אם apply עבר ללא שגיאות (כולל מקרה של 0 changes — Google כן מקדם
+    token גם אם אין delta בbookings שלנו, חייבים לפרסם אחרת ניתקע על
+    אותו עמוד events לנצח).
     """
     async with AsyncSessionLocal() as session:
         try:
             changes, next_token = await gc_service.sync_changes(session)
-            if not changes:
-                return
-            stats = await booking_sync.apply_calendar_changes(session, changes)
-            logger.info("Calendar sync applied: %s", stats)
-            if stats["errors"] == 0:
+
+            if changes:
+                stats = await booking_sync.apply_calendar_changes(
+                    session, changes
+                )
+                logger.info("Calendar sync applied: %s", stats)
+                error_count = stats["errors"]
+            else:
+                # 0 changes רלוונטיים, אבל ייתכן ש-Google נתן next_token
+                # חדש (events לא-מ-bookings שלנו). חייבים להתקדם.
+                error_count = 0
+
+            if error_count == 0:
                 await gc_service.persist_sync_token(session, next_token)
             else:
                 # ה-token לא מתקדם — הwebhook הבא יקבל את אותם האירועים שוב.
@@ -110,7 +119,7 @@ async def _run_sync_in_new_session() -> None:
                 logger.warning(
                     "Sync had %d errors — sync_token NOT advanced. "
                     "Failed events will be retried on next webhook.",
-                    stats["errors"],
+                    error_count,
                 )
         except Exception:
             logger.exception("Calendar sync failed in webhook background task")

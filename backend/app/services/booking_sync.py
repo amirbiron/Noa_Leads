@@ -125,7 +125,7 @@ async def _apply_cancellation(
         .values(
             status=LeadStatus.IN_PROGRESS.value,
             waiting_on=WaitingOn.NOAH.value,
-            last_activity_type="meeting_rejected",
+            last_activity_type=ActivityType.MEETING_CANCELED.value,
             updated_at=func.now(),
         )
     )
