@@ -4,18 +4,13 @@ import { useState } from "react";
 import Link from "next/link";
 import {
   Check,
-  Clock,
   Mail,
   MessageCircle,
   MoonStar,
   Phone,
 } from "lucide-react";
 import { STATE_COLORS } from "@/lib/colors";
-import {
-  formatRelativeHebrew,
-  labelCategory,
-  labelTaskType,
-} from "@/lib/hebrew";
+import { labelCategory, labelTaskType } from "@/lib/hebrew";
 import type { TodayActionItem } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { api, ApiError } from "@/lib/api";
@@ -89,9 +84,7 @@ export function TodayActionRow({ item, onChanged }: Props) {
             {labelCategory(item.service_category)}
           </div>
           <div className="mt-1.5 flex items-center gap-2 text-xs text-gray-500">
-            <Clock size={12} aria-hidden />
-            <span>{formatRelativeHebrew(item.due_at)}</span>
-            <ContactIcon size={12} aria-hidden className="ms-1" />
+            <ContactIcon size={12} aria-hidden />
           </div>
         </Link>
 

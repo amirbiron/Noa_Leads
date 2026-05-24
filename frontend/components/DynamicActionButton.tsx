@@ -4,6 +4,7 @@ import { useState } from "react";
 import { ArrowLeft } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import type { Lead } from "@/lib/types";
+import { ProposalSentConfirmModal } from "./ProposalSentConfirmModal";
 
 // כפתור "מה עכשיו?" — דינמי לפי סטטוס הליד.
 // פעולה אחת ראשית גדולה, מובילה לפעולה הטבעית הבאה.
@@ -46,11 +47,18 @@ export function DynamicActionButton({
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [proposalOpen, setProposalOpen] = useState(false);
   const next = nextAction(lead);
   if (!next) return null;
 
   async function run() {
     if (!next) return;
+    // mark_proposal_sent דורש זרימת 2-שלבים: פתיחת וואטסאפ ואז אישור
+    // ידני שההצעה נשלחה. עקבי עם "שליחה תמיד ידנית" באפיון.
+    if (next.action === "mark_proposal_sent") {
+      setProposalOpen(true);
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -83,6 +91,12 @@ export function DynamicActionButton({
           {error}
         </div>
       )}
+      <ProposalSentConfirmModal
+        lead={lead}
+        open={proposalOpen}
+        onClose={() => setProposalOpen(false)}
+        onConfirmed={onActionDone}
+      />
     </div>
   );
 }

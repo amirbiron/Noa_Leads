@@ -294,6 +294,7 @@ async def _close_addressed_tasks(
         return
 
     from app.models.task import Task  # local import — מונע circular
+    from app.services.tasks import sync_lead_next_action_cache
 
     await db.execute(
         update(Task)
@@ -309,6 +310,9 @@ async def _close_addressed_tasks(
             completed_at=now,
         )
     )
+    # סנכרון cache: כעת הליד עשוי להיות בלי tasks פתוחים, או עם task
+    # אחר (PROPOSAL_FOLLOWUP / POST_MEETING_UPDATE שלא נסגרו אוטומטית).
+    await sync_lead_next_action_cache(db, lead_id)
 
 
 async def _atomic_update_with_status_guard(

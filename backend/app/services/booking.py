@@ -775,18 +775,25 @@ async def approve_booking(
     # 4. יצירת אירוע ביומן — לפני commit כדי שאם נכשל נוכל rollback.
     event_id: str | None = None
     try:
+        from app.utils.labels import SERVICE_SUBTYPE_HE
+
         summary = f"פגישה — {lead.full_name}"
+        # תיאור ידידותי לנועה: רק מה ששימושי לפגישה עצמה. שדות טכניים
+        # (booking_id, category code) הוסרו ב-§3.6 של phase-2.5-plan.md —
+        # ה-bookingId כבר ב-extendedProperties.private (העוגן לסנכרון
+        # הפוך), לא צריך להציג למשתמש.
         desc_lines: list[str] = []
+        if lead.service_subtype:
+            subtype_he = SERVICE_SUBTYPE_HE.get(
+                lead.service_subtype, lead.service_subtype
+            )
+            desc_lines.append(f"סוג שירות: {subtype_he}")
         if lead.organization_name:
             desc_lines.append(f"ארגון: {lead.organization_name}")
         if lead.phone:
             desc_lines.append(f"טלפון: {lead.phone}")
         if lead.email:
             desc_lines.append(f"מייל: {lead.email}")
-        if lead.service_subtype:
-            desc_lines.append(f"תת-קטגוריה: {lead.service_subtype}")
-        desc_lines.append(f"קטגוריה: {lead.service_category}")
-        desc_lines.append(f"מזהה booking: {booking_id}")
         description = "\n".join(desc_lines)
 
         event_id = await gc_service.create_calendar_event(

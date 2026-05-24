@@ -190,6 +190,9 @@ async def create_post_meeting_tasks() -> None:
         # מבטיח שלא ניצור 2 משימות לאותה פגישה (גם בין riliki שונות).
         # ליד עם 2 פגישות שונות בחלון מקבל 2 משימות — כל פגישה דורשת
         # התייחסות נפרדת.
+        from app.services.tasks import sync_lead_next_action_cache
+
+        affected_lead_ids: set = set()
         for row in rows:
             db.add(
                 Task(
@@ -201,6 +204,12 @@ async def create_post_meeting_tasks() -> None:
                     origin_rule="post_meeting_cron",
                 )
             )
+            affected_lead_ids.add(row.lead_id)
+        await db.flush()  # כדי שה-sync הבא יראה את ה-tasks שזה עתה נוספו
+
+        # סנכרון cache עבור כל ליד שקיבל משימה חדשה
+        for lead_id in affected_lead_ids:
+            await sync_lead_next_action_cache(db, lead_id)
         await db.commit()
 
     logger.info("Created %d post-meeting tasks", len(rows))

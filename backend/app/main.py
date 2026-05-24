@@ -36,6 +36,49 @@ async def lifespan(app: FastAPI):
     yield
 
 
+# מיפוי שדה → הודעת שגיאה ידידותית. השדה מתועד דרך loc האחרון של
+# RequestValidationError (לרוב שם המאפיין ב-payload).
+_FIELD_FRIENDLY_MESSAGES: dict[str, str] = {
+    "phone": "מספר הטלפון שהוזן לא תקין.",
+    "email": "כתובת המייל שהוזנה לא תקינה.",
+    "full_name": "שם הליד נדרש.",
+    "service_category": "יש לבחור קטגוריית שירות.",
+    "service_subtype": "יש לבחור תת-קטגוריית שירות.",
+    "source_channel": "יש לבחור מקור פנייה.",
+    "preferred_contact": "ערך לא תקין לערוץ קשר מועדף.",
+    "priority_level": "ערך לא תקין לרמת עדיפות.",
+    "slot_start": "מועד התחלה לא תקין.",
+    "slot_end": "מועד סיום לא תקין.",
+    "date_from": "תאריך התחלה לא תקין.",
+    "date_to": "תאריך סיום לא תקין.",
+    "closure_reason": "יש לבחור סיבת סגירה.",
+    "target_status": "סטטוס יעד לא תקין.",
+}
+
+
+def _humanize_validation_error(exc: RequestValidationError) -> str:
+    """
+    מתרגם את ה-error הראשון של Pydantic להודעה ידידותית בעברית.
+    מבוסס על השדה האחרון ב-loc (לרוב שם המאפיין ב-body). אם השדה לא
+    ממופה — fallback גנרי "השדה <שם> לא תקין".
+    """
+    errors = exc.errors()
+    if not errors:
+        return "נתונים לא תקינים."
+
+    first = errors[0]
+    loc = first.get("loc", ())
+    # מדלגים על "body"/"query"/"path" שמופיע ראשון, ולוקחים את השדה
+    field_parts = [str(p) for p in loc if p not in ("body", "query", "path")]
+    field = field_parts[-1] if field_parts else ""
+
+    if field in _FIELD_FRIENDLY_MESSAGES:
+        return _FIELD_FRIENDLY_MESSAGES[field]
+    if field:
+        return f"השדה '{field}' לא תקין."
+    return "נתונים לא תקינים."
+
+
 def _register_exception_handlers(app: FastAPI) -> None:
     """
     Handlers שלא חושפים פנימיים (כלל 3 ב-CLAUDE.md):
@@ -52,14 +95,15 @@ def _register_exception_handlers(app: FastAPI) -> None:
     async def handle_validation_error(
         _: Request, exc: RequestValidationError
     ) -> JSONResponse:
-        # מציגים את errors ב-FastAPI/Pydantic — אלה הודעות על הקלט עצמו,
-        # לא על פנים המערכת. אבל מוסיפים מעטפת אחידה בעברית.
+        # תרגום ה-error הראשון להודעה ידידותית בעברית. לפי כלל 3 ב-CLAUDE.md
+        # — לא חושפים errors גולמיים של Pydantic (מילים טכניות באנגלית +
+        # ה-input המקורי שעלול להכיל מידע רגיש).
+        message = _humanize_validation_error(exc)
         return JSONResponse(
             status_code=422,
             content={
                 "error": "validation_error",
-                "message": "נתונים לא תקינים.",
-                "details": exc.errors(),
+                "message": message,
             },
         )
 

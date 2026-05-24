@@ -118,7 +118,7 @@ export default function HomePage() {
               />
               <Stat
                 value={data.weekly_insights.stuck_count}
-                label="נתקעו ללא צעד הבא"
+                label="לא טופלו בזמן"
                 tone={data.weekly_insights.stuck_count > 0 ? "red" : "gray"}
               />
             </div>

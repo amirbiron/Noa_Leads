@@ -107,7 +107,47 @@ async def create_first_response_task(
     )
     db.add(task)
     await db.flush()
+    await sync_lead_next_action_cache(db, lead.id)
     return task
+
+
+async def sync_lead_next_action_cache(
+    db: AsyncSession, lead_id: UUID
+) -> None:
+    """
+    מעדכן את שדות next_action_* בליד לפי ה-task הפעיל הקרוב ביותר.
+
+    הקונספט: tasks = source of truth, leads.next_action_* = cache שמאפשר
+    קריאה מהירה לכרטיס ליד בלי JOIN. ראה docs/phase-2.5-plan.md §7.3.
+
+    קריאה: אחרי כל יצירה/עדכון/השלמה/סנוז של task. אם אין tasks פעילים
+    לליד — מאפס ל-NULL.
+    """
+    earliest = (
+        await db.execute(
+            select(Task.type, Task.due_at)
+            .where(
+                Task.lead_id == lead_id,
+                Task.status.in_(
+                    [TaskStatus.OPEN.value, TaskStatus.SNOOZED.value]
+                ),
+            )
+            .order_by(Task.due_at.asc())
+            .limit(1)
+        )
+    ).first()
+
+    next_type = earliest.type if earliest is not None else None
+    next_due = earliest.due_at if earliest is not None else None
+
+    await db.execute(
+        update(Lead)
+        .where(Lead.id == lead_id)
+        .values(
+            next_action_type=next_type,
+            next_action_due_at=next_due,
+        )
+    )
 
 
 def _due_at_for_first_response(now: datetime) -> datetime:
@@ -149,10 +189,11 @@ async def snooze_task(
             snoozed_until=new_due_at,
             due_at=new_due_at,
         )
-        .returning(Task.id)
+        .returning(Task.id, Task.lead_id)
     )
     result = await db.execute(stmt)
-    if result.scalar_one_or_none() is None:
+    row = result.first()
+    if row is None:
         existing = await db.execute(select(Task.status).where(Task.id == task_id))
         status = existing.scalar_one_or_none()
         if status is None:
@@ -161,6 +202,8 @@ async def snooze_task(
             "ניתן לדחות רק משימות פתוחות או דחויות."
         )
 
+    # סנכרון cache — due_at השתנה, ה-task הקרוב ביותר עלול להשתנות.
+    await sync_lead_next_action_cache(db, row.lead_id)
     await db.commit()
     return await _get_task_or_404(db, task_id)
 
@@ -223,10 +266,11 @@ async def complete_task(db: AsyncSession, task_id: UUID) -> Task:
             Task.status.in_([TaskStatus.OPEN.value, TaskStatus.SNOOZED.value]),
         )
         .values(status=TaskStatus.DONE.value, completed_at=now)
-        .returning(Task.id)
+        .returning(Task.id, Task.lead_id)
     )
     result = await db.execute(stmt)
-    if result.scalar_one_or_none() is None:
+    row = result.first()
+    if row is None:
         existing = await db.execute(select(Task.status).where(Task.id == task_id))
         status = existing.scalar_one_or_none()
         if status is None:
@@ -235,6 +279,8 @@ async def complete_task(db: AsyncSession, task_id: UUID) -> Task:
             "ניתן לסיים רק משימות פתוחות או דחויות."
         )
 
+    # סנכרון cache בליד — אם זו הייתה המשימה הקרובה, מצא את הבאה.
+    await sync_lead_next_action_cache(db, row.lead_id)
     await db.commit()
     return await _get_task_or_404(db, task_id)
 

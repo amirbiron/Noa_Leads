@@ -396,7 +396,8 @@ async def get_weekly_insights(db: AsyncSession) -> WeeklyInsights:
     3 התובנות לפי האפיון:
     - new_leads_count: כמה לידים נכנסו השבוע
     - responded_in_time_count: כמה קיבלו מענה outbound באותו יום העבודה
-    - stuck_count: כמה לידים פתוחים בלי next_action_due_at מוגדר
+    - stuck_count: "לא טופלו בזמן" — לידים פתוחים שיש להם task פעיל
+      שעבר זמן הטיפול שלו (לפי per-type grace).
     - most_profitable_service: השעה הרווחית של השבוע (אם יש נתונים)
 
     בנוסף total_open לקונטקסט.
@@ -426,13 +427,43 @@ async def get_weekly_insights(db: AsyncSession) -> WeeklyInsights:
     )
     responded_in_time_count = (await db.execute(responded_stmt)).scalar_one()
 
-    # נתקעו: ליד פתוח בלי next_action_due_at (אין מה לעשות מוגדר)
+    # "לא טופלו בזמן": ליד פתוח עם task פעיל שעבר זמן הטיפול. הגרייס
+    # per-type זהה ל-dashboard._calc_is_overdue:
+    # - FIRST_RESPONSE: created_at + 24h <= now (לפי האפיון יב — מינימום
+    #   24 שעות לפני התראה).
+    # - שאר ה-types: due_at <= now (התראה מיידית כשמגיע המועד).
+    #
+    # ליד חדש שזה עתה נוצר *לא* נספר כי ה-grace של 24h עוד לא חלף.
+    # ליד פתוח בלי tasks פעילים *לא* נספר (זה bug אחר — לטפל בו דרך
+    # יצירה אוטומטית של tasks, לא דרך הספירה הזו).
+    overdue_task_condition = or_(
+        and_(
+            Task.type == TaskType.FIRST_RESPONSE.value,
+            Task.created_at + timedelta(hours=24) <= now_utc,
+        ),
+        and_(
+            Task.type != TaskType.FIRST_RESPONSE.value,
+            Task.due_at <= now_utc,
+        ),
+    )
+    overdue_task_exists = (
+        select(Task.id)
+        .where(
+            Task.lead_id == Lead.id,
+            Task.status.in_(
+                [TaskStatus.OPEN.value, TaskStatus.SNOOZED.value]
+            ),
+            overdue_task_condition,
+        )
+        .correlate(Lead)
+        .exists()
+    )
     stuck_stmt = (
         select(func.count())
         .select_from(Lead)
         .where(
             Lead.status.notin_([s.value for s in CLOSED_LEAD_STATUSES]),
-            Lead.next_action_due_at.is_(None),
+            overdue_task_exists,
         )
     )
     stuck_count = (await db.execute(stuck_stmt)).scalar_one()
