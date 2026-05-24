@@ -29,8 +29,12 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
+# UUIDs קבועים לסיד: דטרמיניסטיים כדי שדאונגרייד ימחק *רק* את התבניות
+# שהמיגרציה הזו יצרה. בלי id קבוע, downgrade שמסתמך על שם בלבד יכול
+# למחוק תבניות שנועה יצרה ידנית עם שם תואם.
 _TEMPLATES = [
     {
+        "id": "00000000-0000-0009-0000-000000000001",
         "name": "פתיחה - קליניקה",
         "channel": "whatsapp",
         "target_audience": "private",
@@ -45,6 +49,7 @@ _TEMPLATES = [
         "variables": ["customer_name", "service_subtype"],
     },
     {
+        "id": "00000000-0000-0009-0000-000000000002",
         "name": "פתיחה - ארגון",
         "channel": "email",
         "target_audience": "organization",
@@ -61,6 +66,7 @@ _TEMPLATES = [
         "variables": ["customer_name", "service_subtype", "organization"],
     },
     {
+        "id": "00000000-0000-0009-0000-000000000003",
         "name": "פולואפ אחרי שיחה - קליניקה",
         "channel": "whatsapp",
         "target_audience": "private",
@@ -76,6 +82,7 @@ _TEMPLATES = [
         "variables": ["customer_name"],
     },
     {
+        "id": "00000000-0000-0009-0000-000000000004",
         "name": "פולואפ אחרי הצעה",
         "channel": "whatsapp",
         "target_audience": None,
@@ -89,6 +96,7 @@ _TEMPLATES = [
         "variables": ["customer_name", "service_subtype"],
     },
     {
+        "id": "00000000-0000-0009-0000-000000000005",
         "name": "חידוש קשר עדין",
         "channel": "whatsapp",
         "target_audience": "dormant",
@@ -102,6 +110,7 @@ _TEMPLATES = [
         "variables": ["customer_name", "service_subtype"],
     },
     {
+        "id": "00000000-0000-0009-0000-000000000006",
         "name": "אישור פגישה",
         "channel": "whatsapp",
         "target_audience": None,
@@ -117,6 +126,7 @@ _TEMPLATES = [
         "variables": ["customer_name"],
     },
     {
+        "id": "00000000-0000-0009-0000-000000000007",
         "name": "מענה אחרי שעות / סוף שבוע",
         "channel": "whatsapp",
         "target_audience": None,
@@ -130,6 +140,7 @@ _TEMPLATES = [
         "variables": ["customer_name"],
     },
     {
+        "id": "00000000-0000-0009-0000-000000000008",
         "name": "הצעת מחיר - סדנה",
         "channel": "email",
         "target_audience": "organization",
@@ -153,6 +164,7 @@ _TEMPLATES = [
         "variables": ["customer_name", "service_subtype", "organization"],
     },
     {
+        "id": "00000000-0000-0009-0000-000000000009",
         "name": "הצעת תוכנית - שיקום/עמידה מול קהל",
         "channel": "whatsapp",
         "target_audience": "private",
@@ -173,6 +185,7 @@ _TEMPLATES = [
         "variables": ["customer_name", "service_subtype"],
     },
     {
+        "id": "00000000-0000-0009-0000-000000000010",
         "name": "סיום תוכנית - הצעת המשך",
         "channel": "whatsapp",
         "target_audience": "private",
@@ -193,8 +206,14 @@ _TEMPLATES = [
 def upgrade() -> None:
     """
     seed תבניות *רק* אם הטבלה ריקה. אחרת מדלגים — לא דורסים מה שנועה
-    יצרה ידנית (גם בעת re-run של migrations במקרה חירום).
+    יצרה ידנית.
+
+    Race: alembic תופס lock גלובלי לפני הרצת migrations (alembic_version
+    table), אז 2 הרצות בו-זמנית לא יכולות לקרות. ה-check-then-insert
+    כאן בטוח.
     """
+    import json
+
     bind = op.get_bind()
     existing = bind.execute(
         sa.text("SELECT COUNT(*) FROM templates")
@@ -210,31 +229,33 @@ def upgrade() -> None:
                     (id, name, channel, target_audience, body, variables,
                      is_active, created_by, created_at, updated_at)
                 VALUES
-                    (gen_random_uuid(), :name, :channel, :target_audience,
+                    (:id, :name, :channel, :target_audience,
                      :body, CAST(:variables AS JSONB), TRUE, NULL,
                      NOW(), NOW())
                 """
             ),
             {
+                "id": tpl["id"],
                 "name": tpl["name"],
                 "channel": tpl["channel"],
                 "target_audience": tpl["target_audience"],
                 "body": tpl["body"],
-                "variables": __import__("json").dumps(tpl["variables"]),
+                "variables": json.dumps(tpl["variables"]),
             },
         )
 
 
 def downgrade() -> None:
     """
-    downgrade מסיר רק את התבניות ה*מקוריות* לפי השם, לא תבניות חדשות
-    של נועה. השמות חייבים להתאים ל-_TEMPLATES.
+    downgrade מוחק *רק* תבניות עם ה-ids הקבועים של הסיד. תבניות שנועה
+    יצרה ידנית (ב-UUIDs רנדומליים אחרים) נשארות. זה בטוח גם אם נועה
+    יצרה תבנית עם שם זהה לאחת המקוריות.
     """
     bind = op.get_bind()
-    names = tuple(tpl["name"] for tpl in _TEMPLATES)
+    ids = [tpl["id"] for tpl in _TEMPLATES]
     bind.execute(
         sa.text(
-            "DELETE FROM templates WHERE name = ANY(:names) AND created_by IS NULL"
+            "DELETE FROM templates WHERE id::text = ANY(:ids)"
         ),
-        {"names": list(names)},
+        {"ids": ids},
     )

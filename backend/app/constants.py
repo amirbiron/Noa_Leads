@@ -202,21 +202,16 @@ class ProgramType(StrEnum):
     DIGITAL_COURSE_12 = "digital_course_12"    # קורס דיגיטלי - 12 מפגשים
 
 
-# ===== כללי פולואפ — באיחור per-type =====
-# לפי האפיון יב סעיף 482: 5 סוגי פולואפ עם זמני התראה שונים. החלטה
-# §7.4 ב-phase-2.5-plan.md: מימוש hardcoded, בלי UI ל-settings.
+# ===== כללי פולואפ =====
+# לפי האפיון יב סעיף 482, ה-spec מגדיר 5 סוגי פולואפ. כרגע 2 בשימוש
+# (FIRST_RESPONSE, PROPOSAL_ORG). ה-3 הנוספים (WARM, DORMANT,
+# LECTURE_INQUIRY) יוגדרו כשנשתמש בהם בפועל — כדי לא להחזיק קבועים
+# לא-בשימוש שמתבדרים מהspec.
 #
-# הערכים בשעות. הקריאה: כמה זמן אחרי due_at של ה-task צריך לעבור
-# כדי להחשיב אותו "באיחור" (= מוצג עם badge / נספר ב"לא טופלו בזמן").
-#
-# החיבור ל-TaskType: הלוגיקה תלויה גם בסוג הליד (org vs private),
-# לכן resolve_followup_grace(task, lead) הוא wrapper שמחזיר את הערך
-# הנכון לפי ההקשר. ראה app/utils/followup_rules.py.
+# הקבועים האלה משמשים ביצירת tasks (ל-due_at), לא בdisplay layer.
+# ה-spec הספציפי שמור ב-docs/product-spec.md לחיפוש עתידי.
 
 from datetime import timedelta as _timedelta
 
 FOLLOWUP_GRACE_FIRST_RESPONSE = _timedelta(hours=24)
-FOLLOWUP_GRACE_WARM = _timedelta(hours=60)            # 48-72h, ממוצע
-FOLLOWUP_GRACE_PROPOSAL_ORG = _timedelta(days=4)      # 3-5 ימי עסקים
-FOLLOWUP_GRACE_DORMANT = _timedelta(days=75)          # 60-90 יום
-FOLLOWUP_GRACE_LECTURE_INQUIRY = _timedelta(hours=24)
+FOLLOWUP_GRACE_PROPOSAL_ORG = _timedelta(days=4)  # 3-5 ימי עסקים

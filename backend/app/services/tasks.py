@@ -153,24 +153,20 @@ async def sync_lead_next_action_cache(
 
 def _due_at_for_first_response(now: datetime) -> datetime:
     """
-    due_at של FIRST_RESPONSE = now + 24h, מותאם לשעות עבודה.
+    due_at של FIRST_RESPONSE = now + FOLLOWUP_GRACE_FIRST_RESPONSE,
+    מותאם לשעות עבודה.
 
     לפי האפיון יב סעיף 482: "ליד חדש שלא טופל: 24 שעות". ה-due_at
-    מייצג את הזמן שבו ה-task נחשב overdue (= "באיחור" + נספר ב"לא
-    טופלו בזמן"). לפני הזמן הזה הליד מוצג ב"פניות חדשות" של דף הבית
-    (לידים NEW בלי outbound), ומגיע push לטלגרם — לא נופל בין הכיסאות.
+    מייצג את הזמן שבו ה-task נחשב overdue. לפני הזמן הזה הליד מוצג
+    ב"פניות חדשות" של דף הבית, ומגיע push לטלגרם — לא נופל בין הכיסאות.
 
-    אם 24h מ-now נופלים מחוץ לשעות עבודה (לילה/שבת/חג) — נדחה לתחילת
-    יום העבודה הבא, כדי שה-alert יקרה בזמן שנועה עובדת.
-
-    שינוי מ-grace pattern: בעבר due_at=now ו-is_overdue היה מחושב עם
-    grace per-type ב-display layer. זה יצר מורכבות (snooze, צביעה,
-    PROPOSAL_FOLLOWUP מקבל clock-reset כשנוצר באיחור). מעבר ל-"due_at
-    הוא alert time" מפשט הכל ונותן due_at = source of truth.
+    אם הזמן נופל מחוץ לשעות עבודה (לילה/שבת/חג) — נדחה לתחילת יום
+    העבודה הבא, כדי שה-alert יקרה בזמן שנועה עובדת.
     """
+    from app.constants import FOLLOWUP_GRACE_FIRST_RESPONSE
     from app.utils.work_hours import is_working_time  # avoid circular at import
 
-    alert_time = now + timedelta(hours=24)
+    alert_time = now + FOLLOWUP_GRACE_FIRST_RESPONSE
     if is_working_time(alert_time):
         return alert_time
     return next_working_day_start(alert_time).astimezone(timezone.utc)
