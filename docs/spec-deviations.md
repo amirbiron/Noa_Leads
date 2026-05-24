@@ -1,14 +1,15 @@
 # Spec Deviations & Gaps
 
-> **גרסה:** 1.0 (מאי 2026)
-> **מטרה:** רישום מסודר של *כל* הפערים הידועים בין `docs/Spec.md` (גרסה 2.0) לבין הקוד הקיים, עם acceptance checklists ברורים לכל פער.
+> **גרסה:** 1.1 (מאי 2026)
+> **מטרה:** רישום מסודר של *כל* הפערים הידועים בין `docs/SpecV2.1.md` (גרסה 2.1) לבין הקוד הקיים, עם acceptance checklists ברורים לכל פער.
 > **למה זה קיים:** בסבבי bugbot הקודמים גילינו שמשפחת ה-chips, ה-Telegram, ה-cron jobs ועוד סטו מהאפיון בלי שנדע. ה-CLAUDE.md המחודש מבהיר: **המסמך מנצח את הקוד**. המסמך הזה הוא ה-source of truth לתיקונים שצריך לבצע לפני שנועה רואה את המערכת.
+> **עדכון v1.1:** SpecV2.1 פותר 7 מתוך 9 ה-Open Decisions שהיו ב-v1.0. ראה §4.
 
 ---
 
 ## 0. רקע ומתודולוגיה
 
-**מקור הנתונים:** סריקה שיטתית של 26 הסעיפים ב-`docs/Spec.md` מול הקוד תחת `backend/app/`, `backend/jobs/`, `frontend/`, ו-`render.yaml`. סבב כפול — סוכן Explore + אימות ידני של line numbers ולוגיקה.
+**מקור הנתונים:** סריקה שיטתית של 28 הסעיפים ב-`docs/SpecV2.1.md` מול הקוד תחת `backend/app/`, `backend/jobs/`, `frontend/`, ו-`render.yaml`. סבב כפול — סוכן Explore + אימות ידני של line numbers ולוגיקה.
 
 **עקרונות סיווג:**
 - 🔴 **קריטי** — שובר תפקודיות / מציג נתון שגוי / לא תואם דרישה מפורשת מהאפיון.
@@ -396,6 +397,38 @@
 
 ---
 
+### F-21: סתירה פנימית ב-SpecV2.1 — daily_summary בטבלת §23 — 🟠 (Spec cleanup)
+
+**Spec §23:** `daily_summary | כל יום ב-19:00 | שליחת סיכום יומי **לטלגרם** של נועה`.
+
+**Spec §16.3 + Changelog v2.1:** "הדבר היחיד שמקבל פוש מיידי הוא ליד חדש שנכנס" + "daily_summary לא נשלח לטלגרם אלא מופיע בדשבורד".
+
+**Severity:** בינוני — הסתירה הפנימית עלולה לבלבל מימוש עתידי. ההכרעה ברורה (Changelog מנצח), אבל §23 צריך עדכון.
+
+**הכרעה למימוש:** daily_summary **מופיע בדשבורד**, *לא* בטלגרם.
+
+**Acceptance:**
+- [ ] קוד `daily_summary` לא קורא ל-`telegram_service.send_message`.
+- [ ] במקום — תוצאת ה-summary נשמרת ב-DB (טבלה חדשה? או JSONB ב-`users`?) כדי שדשבורד יציג כשנועה נכנסת.
+- [ ] (לא חובה במסמך, אבל מומלץ) SpecV2.1 §23 מתעדכן בעדכון הבא ל-"בדשבורד" במקום "לטלגרם".
+
+---
+
+### F-22: סתירה פנימית ב-SpecV2.1 — release_stale_locks לא רלוונטי — 🟢 (Spec cleanup)
+
+**Spec §23:** `release_stale_locks | כל 10 דקות | שחרור משימות בסטטוס PROCESSING מעל timeout`.
+
+**הכרעת המשתמש:** "להוריד את זה לגמרי מה-Spec. זה היה בקונטקסט של מנגנון נעילה למניעת race conditions ב-multi-channel publisher (פרויקט אחר), והוא חלחל לכאן בטעות."
+
+**Severity:** accepted-deviation. לא לממש. SpecV2.1 צריך עדכון בעדכון הבא.
+
+**Acceptance:**
+- [ ] לא ליצור `release_stale_locks.py`.
+- [ ] לא להוסיף ל-render.yaml.
+- [ ] (לא חובה במסמך, אבל מומלץ) SpecV2.1 §23 מסיר את השורה בעדכון הבא.
+
+---
+
 ## 3. סיכום
 
 ### ספירה לפי חומרה
@@ -403,12 +436,14 @@
 | חומרה | כמות | פירוט |
 |---|---|---|
 | 🔴 קריטי | 7 | F-01, F-04, F-05, F-06, F-07, F-13, F-15 |
-| 🟠 בינוני | 5 | F-03, F-08, F-09, F-10, F-12 |
+| 🟠 בינוני | 6 | F-03, F-08, F-09, F-10, F-12, F-21 |
 | 🟡 מינורי | 3 | F-11, F-14, F-20 |
-| 🟢 accepted | 4 | F-02, F-16, F-18, F-19 (חלקי) |
+| 🟢 accepted | 5 | F-02, F-16, F-18, F-19 (חלקי), F-22 |
 | ✓ verify only | 1 | F-17 |
 
-**סה"כ findings:** 20.
+**סה"כ findings:** 22.
+
+**אחרי v2.1:** 7 מתוך 9 ה-OD-ים נפתרו ב-Spec, השאר resolved-by-user או נדחו. **אפשר להתחיל מימוש Wave A.**
 
 ### דפוסים מנחים
 
@@ -419,21 +454,26 @@
 
 ---
 
-## 4. Open Decisions (חובה לפני מימוש)
+## 4. Open Decisions — סטטוס
 
-לפני שמתחילים תיקונים, צריך תשובות לשאלות הבאות:
+### ✅ נסגרו ב-SpecV2.1 (7)
 
-| # | Finding | שאלה | אופציות |
-|---|---|---|---|
-| OD-1 | F-01 | האם להרחיב את §5.7 schema לכלול `waiting_on` + `followup_type`? | (א) רק §5.7 (b) §5.7+§16.3 (c) להסיר אחד מהסעיפים מה-Spec |
-| OD-2 | F-03 + F-12 | DB editable או hardcoded? | (א) DB+UI (b) constants hardcoded |
-| OD-3 | F-07 | סתירה Telegram daily_summary | (א) רק ליד חדש (b) ליד חדש + daily (c) header נפרד |
-| OD-4 | F-08 | מתי נוצרים `warm_followup`/`dormant_check`/`lecture_inquiry`? | פירוט טריגרים |
-| OD-5 | F-09 | מימוש ownership state 3 | (א) enum (b) flag נפרד (c) field ייעודי |
-| OD-6 | F-10 | `/tasks/stuck` קריטריון | (א) 7+ ימים (Spec) (b) due_at <= now (קיים) |
-| OD-7 | F-11 | ARCHIVED reopen | (א) כן (b) לא |
-| OD-8 | F-14 | מה זה `release_stale_locks`? | (א) פאזה 3 (b) להסיר מהSpec (c) משהו אחר |
-| OD-9 | F-15 | post_meeting timing | (א) 30 דק' (Spec) (b) יומי |
+| # | Finding | סגירה ב-v2.1 |
+|---|---|---|
+| OD-1 | F-01 chips schema | §5.7 מוסיף `waiting_on` + `followup_task_type` + `auto_followup_days`. §16.4 מפרט per-chip. |
+| OD-2 | F-03 service_rates | §5.10 — טבלה חדשה, DB editable. |
+| OD-3 | F-07 Telegram daily_summary | Changelog: "daily_summary לא נשלח לטלגרם אלא מופיע בדשבורד". §16.3 מאשר Telegram רק לליד חדש. *(§23 נשאר עם טקסט ישן — ראה F-21)* |
+| OD-4 | F-08 followup triggers | §16.4 ממפה צ'יפים → followup types. §17.1 + §17.2 פירוט חישוב. |
+| OD-5 | F-09 ownership state 3 | §5.11 — enum value חדש `ASSISTANT_PENDING_NOAH`. |
+| OD-6 | F-10 stuck threshold | §16.2 הבחנה מפורשת: "לא טופלו בזמן" (תובנה שבועית, כל overdue) ≠ "ממתין לטיפול" (עמוד נפרד, 7+ ימים). |
+| OD-7 | F-11 ARCHIVED reopen | §27.5 acceptance: "ARCHIVED יכול לחזור ל-IN_PROGRESS". |
+| OD-9 | F-15 post_meeting timing | §11.4 + §23 — cron כל 30 דק'. |
+
+### ⏳ סגירות פתורות אבל לא דחופות
+
+| # | Finding | סטטוס |
+|---|---|---|
+| OD-8 | F-14 release_stale_locks | המשתמש: "להוריד את זה לגמרי מה-Spec". §23 בv2.1 *עדיין כולל אותו* — ראה F-22. |
 
 ---
 
@@ -441,23 +481,23 @@
 
 ### Wave A — Critical pre-launch (1-2 ימים)
 
-תיקונים שצריכים להיות לפני שנועה רואה את המערכת בכלל. רובם פשוטים יחסית.
+תיקונים שצריכים להיות לפני שנועה רואה את המערכת בכלל. **כל ה-blockers נפתרו ב-SpecV2.1, אפשר להתחיל.**
 
-1. **F-13** — הוספת 3 services ל-render.yaml (5 דקות, no decision needed).
+1. **F-13** — הוספת 3 services ל-render.yaml (5 דקות).
 2. **F-04** — service_category אופציונלי (1 שעה — schema + migration + frontend).
 3. **F-06** — הסרת Telegram מ-booking request (10 דקות).
-4. **F-01 + F-05** — chips schema fix + seed correction (תלוי ב-OD-1; חצי יום אחרי החלטה).
-5. **F-17** — verify only (כבר נעשה).
+4. **F-07** — daily_summary → דשבורד במקום Telegram (1-2 שעות — migration + service + UI bubble).
+5. **F-01 + F-05** — chips schema fix לפי §5.7 + seed correction לפי §16.4 (חצי יום).
+6. **F-17** — verify only (כבר נעשה).
 
 ### Wave B — Pre פאזה 3 (3-5 ימים)
 
 תיקונים חשובים שצריכים להיות לפני שמתחילים פאזה 3, אבל לא חוסמים שימוש בסיסי.
 
-6. **F-08** — 3 כללי פולואפ + integration נכון (תלוי ב-OD-4).
-7. **F-09** — ownership state 3 (תלוי ב-OD-5).
-8. **F-03 + F-12** — service_rates (תלוי ב-OD-2).
-9. **F-15** — post_meeting timing אחיד (תלוי ב-OD-9).
-10. **F-07** — Telegram daily_summary resolved (תלוי ב-OD-3).
+7. **F-08** — 3 כללי פולואפ + integration. הטריגרים מוגדרים ב-§16.4 (chips) ו-§17.
+8. **F-09** — ownership state `ASSISTANT_PENDING_NOAH` לפי §5.11.
+9. **F-03 + F-12** — service_rates table לפי §5.10.
+10. **F-15** — post_meeting cron כל 30 דק' לפי §11.4 + §23.
 
 ### Wave C — Nice to have
 
