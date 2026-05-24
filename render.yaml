@@ -38,6 +38,10 @@ services:
     plan: starter
     rootDir: backend
     buildCommand: pip install --upgrade pip && pip install -r requirements.txt
+    # רץ פעם אחת בכל deploy לפני שה-startCommand עולה. אם נכשל — ה-deploy
+    # נעצר וה-version הישנה ממשיכה לרוץ (אין downtime). Alembic idempotent
+    # אז אפשר להריץ שוב ושוב בבטחה.
+    preDeployCommand: alembic upgrade head
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
     envVars:

@@ -16,6 +16,7 @@ from app.api.routes import intake as intake_routes
 from app.api.routes import leads as leads_routes
 from app.api.routes import programs as programs_routes
 from app.api.routes import settings as settings_routes
+from app.api.routes import setup as setup_routes
 from app.api.routes import tasks as tasks_routes
 from app.api.routes import templates as templates_routes
 from app.api.routes import users as users_routes
@@ -105,6 +106,7 @@ def create_app() -> FastAPI:
     app.include_router(users_routes.router)
     app.include_router(programs_routes.router)
     app.include_router(settings_routes.router)
+    app.include_router(setup_routes.router)
 
     return app
 

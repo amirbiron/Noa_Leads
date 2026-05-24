@@ -13,7 +13,18 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (isLoggedIn()) router.replace("/");
+    if (isLoggedIn()) {
+      router.replace("/");
+      return;
+    }
+    // בדיקה אם המערכת דורשת setup ראשוני (אין משתמשים) — מפנים ל-/setup.
+    // אם backend לא זמין, פשוט נשאר ב-login (המשתמשת תקבל שגיאה ידידותית בשליחה).
+    api
+      .getSetupStatus()
+      .then((s) => {
+        if (s.setup_needed) router.replace("/setup");
+      })
+      .catch(() => {});
   }, [router]);
 
   async function handleSubmit(e: React.FormEvent) {
