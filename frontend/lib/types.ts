@@ -101,8 +101,44 @@ export interface Lead {
   closed_value: string | null;
   actual_hours: string | null;
   personal_note: string | null;
+  booking_token: string;
   created_at: string;
   updated_at: string;
+}
+
+// ===== Booking page (ציבורי) =====
+
+export interface BookingPageInfo {
+  lead_name: string;
+  service_category: string;
+  service_subtype: string | null;
+  default_duration_minutes: number;
+  timezone: string;
+  has_active_booking: boolean;
+  active_booking_at: string | null;
+  active_booking_status: string | null;
+}
+
+export interface TimeSlot {
+  start: string;
+  end: string;
+}
+
+export interface DayAvailability {
+  date: string;
+  slots: TimeSlot[];
+}
+
+export interface AvailabilityResponse {
+  days: DayAvailability[];
+  includes_google_busy: boolean;
+}
+
+export interface CreateBookingResponse {
+  booking_id: string;
+  status: string;
+  slot_start: string;
+  slot_end: string;
 }
 
 export interface LeadCreate {

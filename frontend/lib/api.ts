@@ -4,6 +4,9 @@
 import { clearTokens, getAccessToken, getRefreshToken, setTokens } from "./auth";
 import type {
   Activity,
+  AvailabilityResponse,
+  BookingPageInfo,
+  CreateBookingResponse,
   HomeDashboard,
   Lead,
   LeadCard,
@@ -274,4 +277,28 @@ export const api = {
 
   disconnectGoogle: () =>
     fetcher<void>("/google/disconnect", { method: "POST" }),
+
+  // ----- Booking page (ציבורי, ללא auth) -----
+  getBookingPageInfo: (token: string) =>
+    fetcher<BookingPageInfo>(`/booking/${token}`, { retryAuth: false }),
+
+  getBookingAvailability: (
+    token: string,
+    dateFrom: string,
+    dateTo: string,
+  ) =>
+    fetcher<AvailabilityResponse>(
+      `/booking/${token}/availability?date_from=${dateFrom}&date_to=${dateTo}`,
+      { retryAuth: false },
+    ),
+
+  createBooking: (
+    token: string,
+    payload: { slot_start: string; slot_end: string; notes?: string },
+  ) =>
+    fetcher<CreateBookingResponse>(`/booking/${token}`, {
+      method: "POST",
+      body: payload,
+      retryAuth: false,
+    }),
 };

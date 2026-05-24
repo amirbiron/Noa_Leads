@@ -7,7 +7,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from sqlalchemy import Boolean, ForeignKey, Index, Numeric, String, Text
+from sqlalchemy import Boolean, ForeignKey, Index, Numeric, String, Text, func
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy import DateTime
@@ -124,6 +124,17 @@ class Lead(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     # ===== הערה אישית =====
     personal_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # ===== Booking page token =====
+    # UUID אקראי שמייצג את הליד בדף קביעת תור ציבורי (/book/{token}).
+    # נשלח ידנית ע"י נועה ב-WhatsApp/מייל. unique כדי שלא יקרסו 2 לידים
+    # על אותו URL.
+    booking_token: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        nullable=False,
+        unique=True,
+        server_default=func.gen_random_uuid(),
+    )
 
     # ===== relationships =====
     owner: Mapped["User | None"] = relationship(

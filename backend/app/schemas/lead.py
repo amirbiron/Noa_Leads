@@ -196,6 +196,7 @@ class LeadRead(BaseModel):
     closed_value: Decimal | None
     actual_hours: Decimal | None
     personal_note: str | None
+    booking_token: UUID
 
     created_at: datetime
     updated_at: datetime

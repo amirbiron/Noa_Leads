@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import {
   ArrowRightLeft,
+  CalendarPlus,
   FileText,
   Mail,
   MessageCircle,
@@ -205,6 +206,11 @@ export default function LeadDetailPage() {
             </div>
           )}
 
+          {/* קישור לדף קביעת תור — להעתקה ושיתוף עם הליד */}
+          {!["WON", "LOST", "ARCHIVED"].includes(lead.status) && (
+            <CopyBookingLinkButton token={lead.booking_token} />
+          )}
+
           {/* תוכניות מתמשכות */}
           {(programs.length > 0 ||
             !["WON", "LOST", "ARCHIVED"].includes(lead.status)) && (
@@ -317,5 +323,37 @@ function Meta({ label, value }: { label: string; value: string }) {
       </div>
       <div className="text-xs font-medium text-gray-800 mt-0.5">{value}</div>
     </div>
+  );
+}
+
+function CopyBookingLinkButton({ token }: { token: string }) {
+  const [copied, setCopied] = useState(false);
+  // נבנה ידנית במקום process.env כדי לעבוד גם בdev עם host אחר
+  const url =
+    typeof window !== "undefined"
+      ? `${window.location.origin}/book/${token}`
+      : "";
+
+  async function copy() {
+    if (!url) return;
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1800);
+    } catch {
+      // fallback: בחלק מהדפדפנים clipboard API נחסם — נציג את הקישור
+      // עצמו ל-copy ידני (כרגע פשוט נדפיס כשגיאה)
+      window.prompt("העתיקי את הקישור:", url);
+    }
+  }
+
+  return (
+    <button
+      onClick={copy}
+      className="w-full rounded-lg bg-white border border-gray-200 py-2.5 text-sm font-medium flex items-center justify-center gap-1.5"
+    >
+      <CalendarPlus size={15} aria-hidden />
+      {copied ? "הקישור הועתק ✓" : "העתקת קישור לקביעת תור"}
+    </button>
   );
 }
