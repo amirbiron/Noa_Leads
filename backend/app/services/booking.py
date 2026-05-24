@@ -106,7 +106,10 @@ async def get_lead_by_booking_token(db: AsyncSession, token: UUID) -> Lead:
 
 
 async def _get_active_booking(db: AsyncSession, lead_id: UUID) -> Booking | None:
-    """בודק אם יש תור פעיל ל-lead — pending_approval או approved."""
+    """בודק אם יש תור פעיל ל-lead — pending_approval או approved
+    שהסלוט שלו עדיין בעתיד. סלוט שעבר לא נחשב כ-active גם אם הסטטוס
+    לא הועבר ידנית (תופס מקרים שבהם נועה לא דחתה/אישרה לפני המועד)."""
+    now_utc = datetime.now(timezone.utc)
     result = await db.execute(
         select(Booking)
         .where(
@@ -117,11 +120,40 @@ async def _get_active_booking(db: AsyncSession, lead_id: UUID) -> Booking | None
                     BookingStatus.APPROVED.value,
                 ]
             ),
+            Booking.requested_slot_end > now_utc,
         )
         .order_by(Booking.requested_slot_start.desc())
         .limit(1)
     )
     return result.scalar_one_or_none()
+
+
+async def _expire_stale_bookings(db: AsyncSession, lead_id: UUID) -> None:
+    """
+    מסמן bookings שהסלוט שלהם עבר אבל הסטטוס נשאר pending_approval/approved
+    כ-CANCELED. הצורך: ה-partial unique index idx_bookings_active_lead חוסם
+    כל active חדש לליד שיש לו active קיים — אם תור ישן לא הועבר לסטטוס סופי,
+    הליד חסום מ-rebook גם זמן רב אחרי שהמועד עבר. כשsteps 14-15 (Google
+    sync + post-meeting update) ייבנו, התרחיש יהפוך נדיר; כרגע cleanup
+    בנקודות הכניסה ל-write מספיק. אינדמפוטנטי.
+    """
+    from sqlalchemy import update
+
+    now_utc = datetime.now(timezone.utc)
+    await db.execute(
+        update(Booking)
+        .where(
+            Booking.lead_id == lead_id,
+            Booking.status.in_(
+                [
+                    BookingStatus.PENDING_APPROVAL.value,
+                    BookingStatus.APPROVED.value,
+                ]
+            ),
+            Booking.requested_slot_end < now_utc,
+        )
+        .values(status=BookingStatus.CANCELED.value)
+    )
 
 
 # ===== Public page info =====
@@ -268,9 +300,15 @@ async def _fetch_google_busy(
     except (
         gc_service.GoogleNotConfiguredError,
         gc_service.GoogleNotConnectedError,
-        gc_service.GoogleAuthInvalidError,
     ):
+        # באמת לא מחובר — fallback ל-DB-only סביר.
         return [], False
+    except gc_service.GoogleAuthInvalidError as e:
+        # מחובר אבל auth שבור (refresh נכשל / revoke). מבחינת UX זה
+        # "מחובר" — settings מציג חיבור פעיל. דילוג שקט יציג סלוטים
+        # שעלולים להיות תפוסים ביומן האמיתי. fail-safe = לחסום עד
+        # שהבעלים יחבר מחדש (מסומן ב-auth_invalid_at).
+        raise CalendarTemporarilyUnavailable() from e
 
     try:
         busy = await asyncio.to_thread(
@@ -377,6 +415,11 @@ async def create_booking_request(
         raise ValidationError(
             "המועד לא בטווח הסלוטים המוצעים. בחרי מועד מהרשימה."
         )
+
+    # cleanup ראשון: bookings ישנים ב-pending/approved שהמועד שלהם עבר
+    # מועברים ל-CANCELED. בלי זה ה-partial unique index חוסם rebook אחרי
+    # שתור עבר בלי שעבר transition סופי (ראה _expire_stale_bookings).
+    await _expire_stale_bookings(db, lead.id)
 
     # ולידציה: אין כבר תור פעיל (בדיקה רכה, ה-DB unique index יתפוס race)
     existing = await _get_active_booking(db, lead.id)

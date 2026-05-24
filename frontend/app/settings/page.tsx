@@ -98,9 +98,14 @@ export default function SettingsPage() {
         <NavRow href="/proposals" icon={<Send size={18} className="rtl:-scale-x-100" />} label="הצעות פתוחות" />
       </ul>
 
-      {/* אינטגרציות */}
-      <SectionHeader title="אינטגרציות" />
-      <GoogleCalendarSection />
+      {/* אינטגרציות — owner-only: כל מסלולי /google/* דורשים OwnerOnly,
+          אז לעוזרת זה היה נראה כשגיאת 403 קבועה במקום אזור מוסתר. */}
+      {me?.role === "owner" && (
+        <>
+          <SectionHeader title="אינטגרציות" />
+          <GoogleCalendarSection />
+        </>
+      )}
 
       {/* חוקי פולואפ */}
       <SectionHeader
