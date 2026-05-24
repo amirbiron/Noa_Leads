@@ -351,7 +351,17 @@ def _freebusy_query(
 async def _fetch_db_busy(
     db: AsyncSession, start_utc: datetime, end_utc: datetime
 ) -> list[tuple[datetime, datetime]]:
-    """כל ה-bookings הפעילים בטווח — pending_approval או approved."""
+    """
+    כל ה-bookings הפעילים בטווח — pending_approval או approved, ועדיין בעתיד.
+
+    תוספת requested_slot_end > now_utc: _expire_stale_bookings רץ רק
+    לליד ספציפי ב-create_booking_request, אז bookings תקועים של לידים
+    *אחרים* (פג מועדם אך לא עברו ל-canceled) ממשיכים להחזיק את הסלוט
+    באוויר ולחסום זמינות. סינון ב-query הוא ההגנה הרוחבית הנכונה — לא
+    דורש cleanup job גלובלי.
+    """
+    now_utc = datetime.now(timezone.utc)
+    effective_start = max(start_utc, now_utc)
     stmt = select(
         Booking.requested_slot_start, Booking.requested_slot_end
     ).where(
@@ -361,7 +371,7 @@ async def _fetch_db_busy(
                 BookingStatus.APPROVED.value,
             ]
         ),
-        Booking.requested_slot_end > start_utc,
+        Booking.requested_slot_end > effective_start,
         Booking.requested_slot_start < end_utc,
     )
     rows = (await db.execute(stmt)).all()
