@@ -123,17 +123,25 @@ export default function HomePage() {
                 value={data.weekly_insights.responded_in_time_count}
                 label="קיבלו מענה בזמן"
               />
+              {/* תובנת §13.9 — תצוגה בלבד. ה-stat הזה סופר *כל* ליד שעבר
+                  due_at (אפילו יום אחד), ואילו /tasks/stuck מציג רק 7+ ימים
+                  לפי §22.7 + §16.2. קישור ישיר היה מבלבל כי המספר וה-list
+                  לא היו מתאימים. הקישור הנפרד למטה מוביל לחתך ה-7+ ימים. */}
               <Stat
                 value={data.weekly_insights.stuck_count}
                 label="לא טופלו בזמן"
                 tone={data.weekly_insights.stuck_count > 0 ? "red" : "gray"}
-                href={
-                  data.weekly_insights.stuck_count > 0
-                    ? "/tasks/stuck"
-                    : undefined
-                }
               />
             </div>
+            {/* כניסה לעמוד "ממתין לטיפול" — חתך מצומצם של הלידים שתקועים
+                7+ ימים (Spec §22.7). זמין תמיד מהדשבורד, גם אם stuck_count=0
+                (העמוד יראה empty state). זה ה-entry point היחיד למסך הזה. */}
+            <Link
+              href="/tasks/stuck"
+              className="mt-3 flex items-center justify-center gap-1 text-xs text-gray-600 hover:text-gray-900 py-1 active:opacity-70"
+            >
+              צפי במשימות תקועות (7+ ימים) ←
+            </Link>
           </div>
 
           {/* "השעה הרווחית שלך השבוע" — תובנה עסקית מהאפיון */}
@@ -258,29 +266,19 @@ function Stat({
   value,
   label,
   tone = "gray",
-  href,
 }: {
   value: number;
   label: string;
   tone?: "gray" | "red";
-  href?: string;
 }) {
-  const inner = (
-    <>
+  return (
+    <div>
       <div
         className={`text-2xl font-semibold ${tone === "red" ? "text-state-red" : "text-gray-900"}`}
       >
         {value}
       </div>
       <div className="text-xs text-gray-500 mt-0.5">{label}</div>
-    </>
+    </div>
   );
-  if (href) {
-    return (
-      <Link href={href} className="block active:opacity-70">
-        {inner}
-      </Link>
-    );
-  }
-  return <div>{inner}</div>;
 }
