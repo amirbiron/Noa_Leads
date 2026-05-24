@@ -31,32 +31,17 @@ ORANGE_LOOKAHEAD = timedelta(hours=48)
 TODAY_ACTIONS_LIMIT = 20
 DEFAULT_DASHBOARD_LIMIT = 50
 
-# grace period per-type ל-is_overdue. לפי האפיון יב סעיף 482 — 5 כללים
-# שונים. החלטה §7.4 ב-phase-2.5-plan.md: hardcoded, בלי UI ל-settings.
+# הערה על overdue: בעבר היה כאן _OVERDUE_GRACE dict שחישב alert מ-
+# created_at + grace per-type. זה יצר בעיות:
+# - PROPOSAL_FOLLOWUP שנוצר באיחור ע"י check_stuck_proposals קיבל
+#   clock-reset (4 ימים מ-task.created_at במקום מ-proposal_sent).
+# - snooze לא השפיע על הצביעה (created_at לא משתנה).
+# - דורש CASE מורכב ב-SQL.
 #
-# הערות:
-# - FIRST_RESPONSE: 24h. ה-task מופיע מיד ב-/today, badge רק אחרי יום.
-# - FOLLOWUP (כללי): 60h = ממוצע 48-72h (לקוח שהתעניין ולא סגר).
-# - PROPOSAL_FOLLOWUP: 4 ימים = ממוצע 3-5 ימי עסקים (הצעה לארגון).
-# - DORMANT_REACHOUT: 75 יום = ממוצע 60-90 יום (חידוש קשר).
-# - AFTER_HOURS_REPLY: 24h (כמו FIRST_RESPONSE).
-#
-# POST_MEETING_UPDATE ו-PROGRAM_END לא ברשימה — משתמשים ב-due_at ישיר.
-# מקור יחיד לטובת SQL CASE ול-Python helper גם יחד.
-from app.constants import (
-    FOLLOWUP_GRACE_DORMANT,
-    FOLLOWUP_GRACE_FIRST_RESPONSE,
-    FOLLOWUP_GRACE_PROPOSAL_ORG,
-    FOLLOWUP_GRACE_WARM,
-)
-
-_OVERDUE_GRACE: dict[str, timedelta] = {
-    TaskType.FIRST_RESPONSE.value: FOLLOWUP_GRACE_FIRST_RESPONSE,
-    TaskType.FOLLOWUP.value: FOLLOWUP_GRACE_WARM,
-    TaskType.PROPOSAL_FOLLOWUP.value: FOLLOWUP_GRACE_PROPOSAL_ORG,
-    TaskType.DORMANT_REACHOUT.value: FOLLOWUP_GRACE_DORMANT,
-    TaskType.AFTER_HOURS_REPLY.value: FOLLOWUP_GRACE_FIRST_RESPONSE,
-}
+# המודל החדש: כל task נוצר עם due_at = alert time. is_overdue פשוט
+# due_at <= now. ה-grace הספציפי per-type מקודד ב-due_at של ה-task
+# בעת יצירתו (FIRST_RESPONSE = now+24h, PROPOSAL_FOLLOWUP = next
+# workday כשcheck_stuck_proposals מאתר 3+ ימים מ-proposal_sent, וכו').
 
 
 # ===================== חישוב צבע מצב =====================
@@ -203,22 +188,10 @@ async def get_today_actions(db: AsyncSession) -> list[TodayActionItem]:
     end_today_exclusive = _start_of_tomorrow_israel(now_utc)
     closed = [s.value for s in CLOSED_LEAD_STATUSES]
 
-    # ביטוי is_overdue per-type — אותה לוגיקה כמו _calc_is_overdue ב-Python.
-    # סדר: SNOOZED קודם (snooze דורס grace), אחר כך per-type, אחרת due_at.
-    is_overdue_expr = case(
-        (Task.status == TaskStatus.SNOOZED.value, Task.due_at <= now_utc),
-        *[
-            (
-                and_(
-                    Task.status == TaskStatus.OPEN.value,
-                    Task.type == task_type,
-                ),
-                Task.created_at + grace <= now_utc,
-            )
-            for task_type, grace in _OVERDUE_GRACE.items()
-        ],
-        else_=Task.due_at <= now_utc,
-    )
+    # is_overdue — פשוט: due_at <= now. snooze מעדכן due_at ישירות
+    # אז גם snoozed-expired נתפס. אין יותר grace per-type — המידע מקודד
+    # ב-due_at בעת יצירת ה-task.
+    is_overdue_expr = Task.due_at <= now_utc
 
     stmt = (
         select(Task, Lead)
@@ -271,20 +244,10 @@ async def get_today_actions(db: AsyncSession) -> list[TodayActionItem]:
 
 
 def _calc_is_overdue(task, now_utc: datetime) -> bool:
-    """
-    מחשב is_overdue עם grace per-type ועם טיפול בsnooze:
-    - SNOOZED (כל סוג): due_at <= now (המשתמש בחר את זמן הalert במפורש).
-    - OPEN עם type ב-_OVERDUE_GRACE: created_at + grace <= now.
-    - OPEN אחרים: due_at <= now.
-
-    הלוגיקה משוכפלת ב-SQL ב-get_today_actions (is_overdue_expr) ובחישוב
-    stuck_count (overdue_task_condition) — מקור יחיד דרך _OVERDUE_GRACE.
-    """
-    if task.status == TaskStatus.SNOOZED.value:
-        return task.due_at <= now_utc
-    grace = _OVERDUE_GRACE.get(task.type)
-    if grace is not None:
-        return task.created_at + grace <= now_utc
+    """is_overdue פשוט — due_at <= now. snooze מעדכן due_at אז גם snoozed-
+    expired נתפס נכון. ה-grace per-type מקודד ב-due_at של ה-task בעת
+    יצירתו (FIRST_RESPONSE = now+24h, PROPOSAL_FOLLOWUP = next workday
+    כשcheck_stuck_proposals זיהה stale הצעה, וכו')."""
     return task.due_at <= now_utc
 
 
@@ -455,35 +418,13 @@ async def get_weekly_insights(db: AsyncSession) -> WeeklyInsights:
     )
     responded_in_time_count = (await db.execute(responded_stmt)).scalar_one()
 
-    # "לא טופלו בזמן": ליד פתוח עם task פעיל שעבר זמן הטיפול. ה-grace
-    # per-type נשאב מ-_OVERDUE_GRACE (5 כללים מהאפיון יב סעיף 482):
-    # FIRST_RESPONSE/AFTER_HOURS_REPLY=24h, FOLLOWUP=60h, PROPOSAL_FOLLOWUP=4d,
-    # DORMANT_REACHOUT=75d. שאר ה-types: due_at <= now (בלי grace).
+    # "לא טופלו בזמן": ליד פתוח עם task פעיל שעבר ה-due_at שלו.
+    # ה-grace per-type מקודד ב-due_at של ה-task בעת יצירתו, אז
+    # is_overdue פשוט = due_at <= now. ראה הערה למעלה (אחרי TODAY_ACTIONS_LIMIT).
     #
-    # ליד חדש שזה עתה נוצר *לא* נספר כי ה-grace של 24h עוד לא חלף.
-    # ליד פתוח בלי tasks פעילים *לא* נספר (זה bug אחר — לטפל בו דרך
-    # יצירה אוטומטית של tasks, לא דרך הספירה הזו).
-    # snooze דורס grace per-type: המשתמש בחר זמן alert במפורש.
-    typed_overdue_conditions = [
-        and_(
-            Task.status == TaskStatus.OPEN.value,
-            Task.type == task_type,
-            Task.created_at + grace <= now_utc,
-        )
-        for task_type, grace in _OVERDUE_GRACE.items()
-    ]
-    overdue_task_condition = or_(
-        and_(
-            Task.status == TaskStatus.SNOOZED.value,
-            Task.due_at <= now_utc,
-        ),
-        *typed_overdue_conditions,
-        and_(
-            Task.status == TaskStatus.OPEN.value,
-            Task.type.notin_(list(_OVERDUE_GRACE.keys())),
-            Task.due_at <= now_utc,
-        ),
-    )
+    # ליד חדש שזה עתה נוצר *לא* נספר כי FIRST_RESPONSE due_at=+24h.
+    # ליד פתוח בלי tasks פעילים *לא* נספר (לפי תכנון).
+    # snooze מעדכן due_at — מטופל אוטומטית.
     overdue_task_exists = (
         select(Task.id)
         .where(
@@ -491,7 +432,7 @@ async def get_weekly_insights(db: AsyncSession) -> WeeklyInsights:
             Task.status.in_(
                 [TaskStatus.OPEN.value, TaskStatus.SNOOZED.value]
             ),
-            overdue_task_condition,
+            Task.due_at <= now_utc,
         )
         .correlate(Lead)
         .exists()

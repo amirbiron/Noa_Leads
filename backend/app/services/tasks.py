@@ -120,19 +120,13 @@ async def sync_lead_next_action_cache(
     הקונספט: tasks = source of truth, leads.next_action_* = cache.
     ראה docs/phase-2.5-plan.md §7.3.
 
-    *זמן ה-alert* (לקאש) מותאם ל-grace per-type:
-    - OPEN FIRST_RESPONSE: created_at + 24h (לפי האפיון יב §482).
-      מבטיח שליד חדש לא יצבע אדום מיד — derive_state_color יחזיר orange
-      ב-48h הראשונות.
-    - SNOOZED (כל סוג): due_at (המשתמש בחר את זמן הפעולה במפורש).
-      בלי זה, snooze לא היה משפיע על הצביעה ועל "לא טופלו בזמן".
-    - שאר ה-OPEN: due_at רגיל.
+    שמירה ישירה של task.due_at — אין יותר grace adjustment. ה-due_at
+    של כל task מייצג את ה-alert time (כשהוא נוצר, חשבו את ה-grace
+    לתוכו). שינוי מהמודל הקודם — ראה הערות ב-_due_at_for_first_response.
     """
-    from app.constants import FOLLOWUP_GRACE_FIRST_RESPONSE
-
     earliest = (
         await db.execute(
-            select(Task.type, Task.due_at, Task.created_at, Task.status)
+            select(Task.type, Task.due_at)
             .where(
                 Task.lead_id == lead_id,
                 Task.status.in_(
@@ -144,16 +138,8 @@ async def sync_lead_next_action_cache(
         )
     ).first()
 
-    if earliest is None:
-        next_type, next_due = None, None
-    else:
-        next_type = earliest.type
-        if earliest.status == TaskStatus.SNOOZED.value:
-            next_due = earliest.due_at
-        elif earliest.type == TaskType.FIRST_RESPONSE.value:
-            next_due = earliest.created_at + FOLLOWUP_GRACE_FIRST_RESPONSE
-        else:
-            next_due = earliest.due_at
+    next_type = earliest.type if earliest is not None else None
+    next_due = earliest.due_at if earliest is not None else None
 
     await db.execute(
         update(Lead)
@@ -167,20 +153,27 @@ async def sync_lead_next_action_cache(
 
 def _due_at_for_first_response(now: datetime) -> datetime:
     """
-    due_at של FIRST_RESPONSE.
-    - בשעות עבודה: now → מופיע מיד ב-/today.
-    - מחוץ לשעות עבודה (לילה/שבת/חג): תחילת יום העבודה הבא → לא מופיע
-      ב-/today עד הבוקר. מתאים להתנהגות "מענה אחרי שעות" — נועה רואה
-      את המשימה כשהיא חוזרת לעבוד.
+    due_at של FIRST_RESPONSE = now + 24h, מותאם לשעות עבודה.
 
-    הbadge "באיחור" נשלט בנפרד ב-dashboard._calc_is_overdue עם grace
-    של 24h מ-created_at, כדי שתזכורת לא תקפוץ על ליד בן שעה.
+    לפי האפיון יב סעיף 482: "ליד חדש שלא טופל: 24 שעות". ה-due_at
+    מייצג את הזמן שבו ה-task נחשב overdue (= "באיחור" + נספר ב"לא
+    טופלו בזמן"). לפני הזמן הזה הליד מוצג ב"פניות חדשות" של דף הבית
+    (לידים NEW בלי outbound), ומגיע push לטלגרם — לא נופל בין הכיסאות.
+
+    אם 24h מ-now נופלים מחוץ לשעות עבודה (לילה/שבת/חג) — נדחה לתחילת
+    יום העבודה הבא, כדי שה-alert יקרה בזמן שנועה עובדת.
+
+    שינוי מ-grace pattern: בעבר due_at=now ו-is_overdue היה מחושב עם
+    grace per-type ב-display layer. זה יצר מורכבות (snooze, צביעה,
+    PROPOSAL_FOLLOWUP מקבל clock-reset כשנוצר באיחור). מעבר ל-"due_at
+    הוא alert time" מפשט הכל ונותן due_at = source of truth.
     """
     from app.utils.work_hours import is_working_time  # avoid circular at import
 
-    if is_working_time(now):
-        return now
-    return next_working_day_start(now).astimezone(timezone.utc)
+    alert_time = now + timedelta(hours=24)
+    if is_working_time(alert_time):
+        return alert_time
+    return next_working_day_start(alert_time).astimezone(timezone.utc)
 
 
 # ===================== Snooze =====================
@@ -352,42 +345,21 @@ async def _get_task_or_404(db: AsyncSession, task_id: UUID) -> Task:
 
 async def list_stuck_tasks(db: AsyncSession) -> list[tuple[Task, Lead]]:
     """
-    "ממתין לטיפול" — משימות שעבר זמן ה-alert שלהן (overdue) ועדיין לא
-    טופלו. לפי האפיון יב סעיף 477: "אם לא טופל אחרי כל ההתראות → עובר
-    לעמוד נפרד".
+    "ממתין לטיפול" — משימות פעילות שעבר ה-due_at שלהן (overdue).
 
-    הקריטריון זהה ל-stuck_count ב-dashboard (per-type grace + טיפול
-    בsnooze) — כך שהקליק על "לא טופלו בזמן" בדף הבית מוביל לרשימה
-    המכילה את אותן יחידות. ראה dashboard._OVERDUE_GRACE.
+    הקריטריון זהה ל-stuck_count ב-dashboard (due_at <= now) — כך שהקליק
+    על "לא טופלו בזמן" בדף הבית מוביל לרשימה המכילה את אותן יחידות.
+
+    מודל פשוט (אחרי הסרת grace per-type): due_at = alert time תמיד.
+    snooze מעדכן due_at, FIRST_RESPONSE נוצר עם due_at=now+24h, וכו'.
+    אין צורך בלוגיקת CASE.
 
     מסונן ללידים פתוחים (defense in depth — close_lead מבטל tasks).
     מיון לפי due_at עולה (ישנים קודם).
     """
     from app.constants import CLOSED_LEAD_STATUSES
-    from app.services.dashboard import _OVERDUE_GRACE
 
     now_utc = datetime.now(timezone.utc)
-
-    typed_overdue_conditions = [
-        and_(
-            Task.status == TaskStatus.OPEN.value,
-            Task.type == task_type,
-            Task.created_at + grace <= now_utc,
-        )
-        for task_type, grace in _OVERDUE_GRACE.items()
-    ]
-    overdue_condition = or_(
-        and_(
-            Task.status == TaskStatus.SNOOZED.value,
-            Task.due_at <= now_utc,
-        ),
-        *typed_overdue_conditions,
-        and_(
-            Task.status == TaskStatus.OPEN.value,
-            Task.type.notin_(list(_OVERDUE_GRACE.keys())),
-            Task.due_at <= now_utc,
-        ),
-    )
 
     stmt = (
         select(Task, Lead)
@@ -396,7 +368,7 @@ async def list_stuck_tasks(db: AsyncSession) -> list[tuple[Task, Lead]]:
             Task.status.in_(
                 [TaskStatus.OPEN.value, TaskStatus.SNOOZED.value]
             ),
-            overdue_condition,
+            Task.due_at <= now_utc,
             Lead.status.notin_([s.value for s in CLOSED_LEAD_STATUSES]),
         )
         .order_by(Task.due_at.asc())
