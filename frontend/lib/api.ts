@@ -26,6 +26,7 @@ import type {
   ProgramUpdate,
   ProgramWithLead,
   ServiceRate,
+  ServiceRateUpdate,
   StuckTaskItem,
   Template,
   TemplateCreate,
@@ -235,6 +236,14 @@ export const api = {
   deleteChip: (id: string) =>
     fetcher<void>(`/chips/${id}`, { method: "DELETE" }),
 
+  // הפעלת צ'יפ על ליד — Spec v2.1 §16.4. הendpoint מבצע אטומית את 4
+  // הפעולות: status / waiting_on / יצירת task / activity. מחזיר את הליד
+  // המעודכן. 400 על ליד סגור או צ'יפ לא מאוכלס.
+  applyChip: (leadId: string, chipId: string) =>
+    fetcher<Lead>(`/leads/${leadId}/apply-chip/${chipId}`, {
+      method: "POST",
+    }),
+
   snoozeTask: (taskId: string, preset: SnoozePreset, customUntil?: string) =>
     fetcher<Task>(`/tasks/${taskId}/snooze`, {
       method: "POST",
@@ -284,6 +293,13 @@ export const api = {
   // ----- Settings -----
   listServiceRates: () =>
     fetcher<ServiceRate[]>("/settings/service-rates"),
+
+  // owner-only. PATCH partial — שלחי רק שדות שמשתנים.
+  updateServiceRate: (subtype: string, payload: ServiceRateUpdate) =>
+    fetcher<ServiceRate>(`/settings/service-rates/${subtype}`, {
+      method: "PATCH",
+      body: payload,
+    }),
 
   // ----- Google Calendar -----
   getGoogleStatus: () =>

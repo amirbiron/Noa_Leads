@@ -35,6 +35,7 @@ export const WAITING_ON_LABELS: Record<string, string> = {
   NOAH: "אצלי",
   CLIENT: "אצל הלקוח",
   ASSISTANT: "אצל העוזרת",
+  ASSISTANT_PENDING_NOAH: "ממתין לאישורי",
   SYSTEM: "פעולה אוטומטית",
   NONE: "—",
 };
@@ -52,11 +53,17 @@ export const PREFERRED_CONTACT_LABELS: Record<string, string> = {
 };
 
 export const TASK_TYPE_LABELS: Record<string, string> = {
+  // 5 כללי הפולואפ של Spec §17.1
   first_response: "תגובה ראשונה",
-  followup: "פולואפ",
+  warm_followup: "פולואפ חם",
   proposal_followup: "פולואפ הצעה",
+  dormant_check: "בדיקת חידוש קשר",
+  lecture_inquiry: "פנייה לארגון בנושא הרצאה",
+  // סוגים שצ'יפים יוצרים (Spec §16.4) ושאר המערכת
+  followup: "פולואפ",
+  retry_call: "ניסיון שיחה חוזר",
+  send_proposal: "שליחת הצעת מחיר",
   post_meeting_update: "עדכון אחרי פגישה",
-  dormant_reachout: "חידוש קשר",
   program_end: "סיום תוכנית",
   after_hours_reply: "מענה אחרי שעות",
 };
@@ -84,6 +91,7 @@ export const ACTIVITY_TYPE_LABELS: Record<string, string> = {
   lead_reopened: "ליד נפתח מחדש",
   inbound_message_logged: "הודעה נכנסת",
   outbound_message_logged: "הודעה יוצאת",
+  chip_applied: "סיכום מהיר",
   program_created: "תוכנית חדשה",
   program_session_done: "מפגש בוצע",
   program_completed: "תוכנית הסתיימה",
@@ -118,7 +126,8 @@ export function labelStatus(s: string): string {
   return STATUS_LABELS[s] ?? s;
 }
 
-export function labelCategory(s: string): string {
+export function labelCategory(s: string | null): string {
+  if (!s) return "ללא קטגוריה";  // F-04: service_category אופציונלי
   return SERVICE_CATEGORY_LABELS[s] ?? s;
 }
 

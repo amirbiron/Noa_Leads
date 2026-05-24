@@ -30,7 +30,7 @@ class PendingBookingItem(BaseModel):
     lead_id: UUID
     lead_name: str
     lead_phone: str | None
-    service_category: str
+    service_category: str | None  # אופציונלי (F-04)
     service_subtype: str | None
     requested_slot_start: datetime
     requested_slot_end: datetime

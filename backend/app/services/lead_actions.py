@@ -273,11 +273,19 @@ async def _perform_with_optional_progress(
 # - POST_MEETING_UPDATE — קשור לפגישה ספציפית, מסולק רק ע"י close_lead
 #   או ידנית.
 # - PROGRAM_END — תזכורת לסיום תוכנית מתמשכת, ענין נפרד.
-_AUTO_CLOSE_TASK_TYPES = (
+# רשימת ה-task types שנסגרים אוטומטית בעת touchpoint (פעולה שמסמנת
+# set_last_outbound או set_last_inbound). public כדי ש-quick_action_chips
+# יוכל להשתמש באותה רשימה ב-apply_chip — הצ'יפ הוא touchpoint לכל דבר.
+AUTO_CLOSE_TASK_TYPES = (
     TaskType.FIRST_RESPONSE.value,
+    TaskType.LECTURE_INQUIRY.value,  # מקבילה ל-FIRST_RESPONSE לארגונים — נסגרת על touchpoint
     TaskType.FOLLOWUP.value,
     TaskType.AFTER_HOURS_REPLY.value,
-    TaskType.DORMANT_REACHOUT.value,
+    TaskType.DORMANT_CHECK.value,    # היה DORMANT_REACHOUT — שונה לפי Spec §17.1
+    TaskType.WARM_FOLLOWUP.value,    # touchpoint סוגר גם פולואפ חם (§17.1)
+    TaskType.RETRY_CALL.value,       # אחרי שיחה מוצלחת — אין יותר צורך לנסות שוב
+    # SEND_PROPOSAL לא בכאן: הוא נסגר רק על mark_proposal_sent הספציפי
+    # (touchpoint כללי לא מבטל את הצורך לשלוח הצעה).
 )
 
 
@@ -309,7 +317,7 @@ async def _close_addressed_tasks(
         update(Task)
         .where(
             Task.lead_id == lead_id,
-            Task.type.in_(_AUTO_CLOSE_TASK_TYPES),
+            Task.type.in_(AUTO_CLOSE_TASK_TYPES),
             Task.status.in_(
                 [TaskStatus.OPEN.value, TaskStatus.SNOOZED.value]
             ),

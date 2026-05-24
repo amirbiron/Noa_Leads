@@ -11,7 +11,13 @@ export type LeadStatus =
   | "LOST"
   | "ARCHIVED";
 
-export type WaitingOn = "NOAH" | "CLIENT" | "ASSISTANT" | "SYSTEM" | "NONE";
+export type WaitingOn =
+  | "NOAH"
+  | "CLIENT"
+  | "ASSISTANT"
+  | "ASSISTANT_PENDING_NOAH"  // Spec v2.1 §5.11 — F-09
+  | "SYSTEM"
+  | "NONE";
 
 export type ServiceCategory = "clinic" | "workshops" | "production" | "digital_course";
 
@@ -20,6 +26,21 @@ export type PriorityLevel = "normal" | "hot" | "vip";
 export type PreferredContact = "phone" | "whatsapp" | "email";
 
 export type StateColor = "red" | "orange" | "green" | "gray";
+
+// משקף את TaskType ב-backend/app/constants.py — Spec v2.1 §17.1 + §16.4.
+// בהוספת ערך חדש לbackend, יש לעדכן גם כאן וגם ב-TASK_TYPE_LABELS.
+export type TaskType =
+  | "first_response"
+  | "warm_followup"
+  | "proposal_followup"
+  | "dormant_check"
+  | "lecture_inquiry"
+  | "followup"
+  | "retry_call"
+  | "send_proposal"
+  | "post_meeting_update"
+  | "program_end"
+  | "after_hours_reply";
 
 export type SourceChannel =
   | "form"
@@ -55,7 +76,7 @@ export interface LeadListItem {
   id: string;
   full_name: string;
   organization_name: string | null;
-  service_category: string;
+  service_category: string | null;  // F-04: אופציונלי
   service_subtype: string | null;
   status: string;
   waiting_on: string;
@@ -73,7 +94,7 @@ export interface Lead {
   phone: string | null;
   email: string | null;
   organization_name: string | null;
-  service_category: string;
+  service_category: string | null;  // F-04: אופציונלי
   service_subtype: string | null;
   status: string;
   waiting_on: string;
@@ -110,7 +131,7 @@ export interface Lead {
 
 export interface BookingPageInfo {
   lead_name: string;
-  service_category: string;
+  service_category: string | null;  // F-04: אופציונלי
   service_subtype: string | null;
   default_duration_minutes: number;
   timezone: string;
@@ -167,7 +188,7 @@ export interface PendingBookingItem {
   lead_id: string;
   lead_name: string;
   lead_phone: string | null;
-  service_category: string;
+  service_category: string | null;  // F-04: אופציונלי
   service_subtype: string | null;
   requested_slot_start: string;
   requested_slot_end: string;
@@ -183,7 +204,7 @@ export interface LeadCreate {
   phone?: string | null;
   email?: string | null;
   organization_name?: string | null;
-  service_category: ServiceCategory;
+  service_category?: ServiceCategory | null;  // אופציונלי לפי Spec §7.1 (F-04)
   service_subtype?: string | null;
   source_channel: SourceChannel;
   source_detail?: string | null;
@@ -209,7 +230,7 @@ export interface LeadCard {
   id: string;
   full_name: string;
   organization_name: string | null;
-  service_category: string;
+  service_category: string | null;  // F-04: אופציונלי
   service_subtype: string | null;
   status: string;
   waiting_on: string;
@@ -228,27 +249,36 @@ export interface ProposalCard extends LeadCard {
   days_since_proposal: number | null;
 }
 
+// QuickActionChip לפי Spec v2.1 §5.7 + §16.4 — declarative.
+// 4 השדות הסמנטיים nullable: צ'יפים שנועה הוסיפה ידנית בלי למלא הכל.
+// ה-UI מציג רק chips ש-target_status שלהם לא null.
 export interface QuickActionChip {
   id: string;
   label: string;
-  action_type: string;
-  requires_content: boolean;
+  target_status: LeadStatus | null;
+  waiting_on: WaitingOn | null;
+  followup_task_type: TaskType | null;
+  auto_followup_days: number | null;
   sort_order: number;
   is_active: boolean;
 }
 
 export interface QuickActionChipCreate {
   label: string;
-  action_type: string;
-  requires_content?: boolean;
+  target_status?: LeadStatus | null;
+  waiting_on?: WaitingOn | null;
+  followup_task_type?: TaskType | null;
+  auto_followup_days?: number | null;
   sort_order?: number;
   is_active?: boolean;
 }
 
 export interface QuickActionChipUpdate {
   label?: string;
-  action_type?: string;
-  requires_content?: boolean;
+  target_status?: LeadStatus | null;
+  waiting_on?: WaitingOn | null;
+  followup_task_type?: TaskType | null;
+  auto_followup_days?: number | null;
   sort_order?: number;
   is_active?: boolean;
 }
@@ -261,7 +291,7 @@ export interface StuckTaskItem {
   lead_id: string;
   lead_name: string;
   lead_status: string;
-  service_category: string;
+  service_category: string | null;  // F-04: אופציונלי
   waiting_on: string;
 }
 
@@ -276,11 +306,11 @@ export interface TodayActionItem {
   state_color: StateColor;
   priority_level: string;
   preferred_contact: string;
-  service_category: string;
+  service_category: string | null;  // F-04: אופציונלי
 }
 
 export interface ProfitableServiceInsight {
-  service_category: string;
+  service_category: string | null;  // F-04: אופציונלי
   hourly_rate: string; // Decimal as string
   total_revenue: string;
   total_hours: string;
@@ -297,13 +327,39 @@ export interface WeeklyInsights {
   most_profitable_service: ProfitableServiceInsight | null;
 }
 
+// תעריף שירות לפי Spec v2.1 §5.10. נטען מ-DB דרך GET /settings/service-rates.
+// total_hours ו-hourly_rate מחושבים בbackend לפי duration*sessions/60.
 export interface ServiceRate {
-  subtype: string;
+  id: string;
+  service_category: string;
+  service_subtype: string;
   label: string;
-  category: string;
   default_price: string | null;
-  default_hours: string | null;
+  default_duration_minutes: number | null;
+  default_sessions_count: number | null;
+  total_hours: string | null;
   hourly_rate: string | null;
+  notes: string | null;
+  is_active: boolean;
+}
+
+export interface ServiceRateUpdate {
+  default_price?: number | null;
+  default_duration_minutes?: number | null;
+  default_sessions_count?: number | null;
+  notes?: string | null;
+  is_active?: boolean;
+}
+
+// F-07: ה-row האחרון מ-daily_summaries — מוצג כbubble בדשבורד.
+// null אם cron עדיין לא רץ או הטבלה ריקה.
+export interface DailySummary {
+  summary_date: string; // YYYY-MM-DD
+  new_leads_today: number;
+  tasks_done_today: number;
+  tasks_for_tomorrow: number;
+  urgent_open: number;
+  generated_at: string;
 }
 
 export interface HomeDashboard {
@@ -311,6 +367,7 @@ export interface HomeDashboard {
   new_leads: LeadCard[];
   pending: LeadCard[];
   weekly_insights: WeeklyInsights;
+  daily_summary: DailySummary | null;
 }
 
 // ===== Tasks =====

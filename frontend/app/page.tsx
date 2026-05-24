@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Sparkles, TrendingUp } from "lucide-react";
+import { Moon, Sparkles, TrendingUp } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
 import { EmptyState } from "@/components/EmptyState";
 import { LeadCardRow } from "@/components/LeadCardRow";
@@ -10,7 +10,7 @@ import { SectionHeader } from "@/components/SectionHeader";
 import { TodayActionRow } from "@/components/TodayActionRow";
 import { api, ApiError } from "@/lib/api";
 import { labelCategory } from "@/lib/hebrew";
-import type { HomeDashboard } from "@/lib/types";
+import type { DailySummary, HomeDashboard } from "@/lib/types";
 
 export default function HomePage() {
   const [data, setData] = useState<HomeDashboard | null>(null);
@@ -47,6 +47,12 @@ export default function HomePage() {
 
       {data && (
         <>
+          {/* F-07: סיכום יומי — bubble. נשמר ב-daily_summaries ע"י cron 19:00.
+              לפי Spec §16.2: לא נשלח לטלגרם — מוצג רק בדשבורד. */}
+          {data.daily_summary && (
+            <DailySummaryBubble summary={data.daily_summary} />
+          )}
+
           {/* פעולות היום */}
           <SectionHeader
             title={
@@ -117,17 +123,25 @@ export default function HomePage() {
                 value={data.weekly_insights.responded_in_time_count}
                 label="קיבלו מענה בזמן"
               />
+              {/* תובנת §13.9 — תצוגה בלבד. ה-stat הזה סופר *כל* ליד שעבר
+                  due_at (אפילו יום אחד), ואילו /tasks/stuck מציג רק 7+ ימים
+                  לפי §22.7 + §16.2. קישור ישיר היה מבלבל כי המספר וה-list
+                  לא היו מתאימים. הקישור הנפרד למטה מוביל לחתך ה-7+ ימים. */}
               <Stat
                 value={data.weekly_insights.stuck_count}
                 label="לא טופלו בזמן"
                 tone={data.weekly_insights.stuck_count > 0 ? "red" : "gray"}
-                href={
-                  data.weekly_insights.stuck_count > 0
-                    ? "/tasks/stuck"
-                    : undefined
-                }
               />
             </div>
+            {/* כניסה לעמוד "ממתין לטיפול" — חתך מצומצם של הלידים שתקועים
+                7+ ימים (Spec §22.7). זמין תמיד מהדשבורד, גם אם stuck_count=0
+                (העמוד יראה empty state). זה ה-entry point היחיד למסך הזה. */}
+            <Link
+              href="/tasks/stuck"
+              className="mt-3 flex items-center justify-center gap-1 text-xs text-gray-600 hover:text-gray-900 py-1 active:opacity-70"
+            >
+              צפי במשימות תקועות (7+ ימים) ←
+            </Link>
           </div>
 
           {/* "השעה הרווחית שלך השבוע" — תובנה עסקית מהאפיון */}
@@ -178,33 +192,93 @@ export default function HomePage() {
   );
 }
 
-function Stat({
+function DailySummaryBubble({ summary }: { summary: DailySummary }) {
+  // summary_date מגיע כ-"YYYY-MM-DD" (date-only). Date(string) מפרסר אותו
+  // כ-UTC midnight, מה שגורם להזזת יום כשמשתמש נמצא ב-TZ שלילי. נוסיף
+  // T00:00 ונציין timeZone="Asia/Jerusalem" כדי שהיום/חודש/שם-יום יהיו
+  // יציבים בכל סביבה.
+  const dateLabel = new Date(`${summary.summary_date}T00:00:00`).toLocaleDateString(
+    "he-IL",
+    {
+      weekday: "long",
+      day: "numeric",
+      month: "long",
+      timeZone: "Asia/Jerusalem",
+    },
+  );
+  return (
+    <div className="bg-gradient-to-bl from-indigo-500/10 to-indigo-500/5 border border-indigo-300/40 rounded-xl p-4">
+      <div className="flex items-start gap-3">
+        <Moon
+          size={20}
+          className="text-indigo-500 shrink-0 mt-0.5"
+          aria-hidden
+        />
+        <div className="min-w-0 w-full">
+          <div className="text-xs text-gray-600 mb-1">סיכום יומי · {dateLabel}</div>
+          <div className="grid grid-cols-2 gap-2 mt-2">
+            <SummaryStat
+              value={summary.new_leads_today}
+              label="פניות חדשות היום"
+            />
+            <SummaryStat
+              value={summary.tasks_done_today}
+              label="משימות שבוצעו"
+            />
+            <SummaryStat
+              value={summary.tasks_for_tomorrow}
+              label="משימות למחר"
+            />
+            <SummaryStat
+              value={summary.urgent_open}
+              label="לידים דחופים פתוחים"
+              tone={summary.urgent_open > 0 ? "red" : "gray"}
+            />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SummaryStat({
   value,
   label,
   tone = "gray",
-  href,
 }: {
   value: number;
   label: string;
   tone?: "gray" | "red";
-  href?: string;
 }) {
-  const inner = (
-    <>
+  return (
+    <div className="bg-white/60 rounded-lg px-3 py-2">
+      <div
+        className={`text-xl font-semibold tabular-nums ${tone === "red" ? "text-state-red" : "text-gray-900"}`}
+      >
+        {value}
+      </div>
+      <div className="text-[11px] text-gray-500 mt-0.5">{label}</div>
+    </div>
+  );
+}
+
+function Stat({
+  value,
+  label,
+  tone = "gray",
+}: {
+  value: number;
+  label: string;
+  tone?: "gray" | "red";
+}) {
+  return (
+    <div>
       <div
         className={`text-2xl font-semibold ${tone === "red" ? "text-state-red" : "text-gray-900"}`}
       >
         {value}
       </div>
       <div className="text-xs text-gray-500 mt-0.5">{label}</div>
-    </>
+    </div>
   );
-  if (href) {
-    return (
-      <Link href={href} className="block active:opacity-70">
-        {inner}
-      </Link>
-    );
-  }
-  return <div>{inner}</div>;
 }

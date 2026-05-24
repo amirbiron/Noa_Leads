@@ -10,26 +10,65 @@ import {
   X,
 } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
-import { SectionHeader } from "@/components/SectionHeader";
 import { api, ApiError } from "@/lib/api";
-import type { QuickActionChip } from "@/lib/types";
+import {
+  STATUS_LABELS,
+  TASK_TYPE_LABELS,
+  WAITING_ON_LABELS,
+  labelStatus,
+  labelTaskType,
+  labelWaiting,
+} from "@/lib/hebrew";
+import type {
+  LeadStatus,
+  QuickActionChip,
+  TaskType,
+  WaitingOn,
+} from "@/lib/types";
 
-// רשימת ה-action_types הניתנים לבחירה. סנכרון ידני מול
-// backend/app/core/state_machine.py — actions שלא ב-state_machine
-// יידחו בvalidation. כללנו רק actions ידידותיים לשימוש בצ'יפ
-// (לא request_meeting/approve_meeting שיש להם UI ייעודי).
-const ACTION_OPTIONS: { value: string; label: string }[] = [
-  { value: "mark_template_sent", label: "שליחת תבנית" },
-  { value: "log_call_completed", label: "תיעוד שיחה" },
-  { value: "log_call_no_answer", label: "אין מענה" },
-  { value: "mark_proposal_sent", label: "שליחת הצעה" },
-  { value: "add_internal_note", label: "הוספת הערה (דורש טקסט)" },
-  { value: "log_inbound_message", label: "הודעה נכנסת" },
-  { value: "log_outbound_message", label: "הודעה יוצאת" },
+// אופציות לעריכה: רק IN_PROGRESS. ה-backend חוסם את כל השאר
+// (_CHIP_FORBIDDEN_TARGETS ב-schemas/quick_action_chip.py):
+// - NEW: chip click מרמז על אינטראקציה.
+// - PROPOSAL_SENT: ProposalSentConfirmModal הוא ה-flow הייעודי
+//   (שולח WhatsApp ואז מסמן).
+// - BOOKING_PENDING / BOOKED: booking flow ייעודי.
+// - WON / LOST / ARCHIVED: close_lead flow ייעודי.
+// 6 הצ'יפים מ-§16.4 כולם target IN_PROGRESS — מתואם.
+const STATUS_OPTIONS: LeadStatus[] = ["IN_PROGRESS"];
+
+// SYSTEM ו-NONE לא רלוונטיים לchip — נועה לא בוחרת אותם ידנית.
+const WAITING_ON_OPTIONS: WaitingOn[] = [
+  "NOAH",
+  "CLIENT",
+  "ASSISTANT",
+  "ASSISTANT_PENDING_NOAH",
 ];
 
-function labelForActionType(action_type: string): string {
-  return ACTION_OPTIONS.find((a) => a.value === action_type)?.label ?? action_type;
+// TaskType — לפי Spec §17.1 + §16.4. הצ'יפים השכיחים יוצרים את 6 האלה.
+// אלה ה-task types שמתאימים לchip; שאר הערכים ב-TaskType (first_response,
+// post_meeting_update, program_end, after_hours_reply, proposal_followup)
+// נוצרים אוטומטית ע"י המערכת, לא ע"י סיכום שיחה.
+const TASK_TYPE_OPTIONS: TaskType[] = [
+  "retry_call",
+  "followup",
+  "send_proposal",
+  "dormant_check",
+  "warm_followup",
+  "lecture_inquiry",
+];
+
+function chipSummary(c: QuickActionChip): string {
+  if (
+    !c.target_status ||
+    !c.waiting_on ||
+    !c.followup_task_type ||
+    c.auto_followup_days === null
+  ) {
+    return "לא מאוכלס — לחצי 'ערוך' כדי להשלים";
+  }
+  const days = c.auto_followup_days;
+  const unit = days === 1 ? "יום" : "ימים";
+  return `→ ${labelStatus(c.target_status)} · ${labelWaiting(c.waiting_on)} · ${labelTaskType(c.followup_task_type)} בעוד ${days} ${unit}`;
 }
 
 export default function ChipsSettingsPage() {
@@ -150,14 +189,9 @@ export default function ChipsSettingsPage() {
                           לא פעיל
                         </span>
                       )}
-                      {chip.requires_content && (
-                        <span className="text-[10px] bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded">
-                          דורש טקסט
-                        </span>
-                      )}
                     </div>
-                    <div className="text-xs text-gray-500">
-                      {labelForActionType(chip.action_type)}
+                    <div className="text-xs text-gray-500 truncate">
+                      {chipSummary(chip)}
                     </div>
                   </div>
                   <button
@@ -224,19 +258,25 @@ function ChipEditor({
   onCancel: () => void;
   onSave: (payload: {
     label: string;
-    action_type: string;
-    requires_content: boolean;
+    target_status: LeadStatus;
+    waiting_on: WaitingOn;
+    followup_task_type: TaskType;
+    auto_followup_days: number;
     sort_order?: number;
     is_active?: boolean;
   }) => Promise<void>;
 }) {
   const [label, setLabel] = useState(initial?.label ?? "");
-  const [actionType, setActionType] = useState(
-    initial?.action_type ?? ACTION_OPTIONS[0].value,
+  const [targetStatus, setTargetStatus] = useState<LeadStatus>(
+    (initial?.target_status as LeadStatus | null) ?? "IN_PROGRESS",
   );
-  const [requiresContent, setRequiresContent] = useState(
-    initial?.requires_content ?? false,
+  const [waitingOn, setWaitingOn] = useState<WaitingOn>(
+    (initial?.waiting_on as WaitingOn | null) ?? "NOAH",
   );
+  const [taskType, setTaskType] = useState<TaskType>(
+    initial?.followup_task_type ?? "followup",
+  );
+  const [days, setDays] = useState<number>(initial?.auto_followup_days ?? 1);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -245,13 +285,19 @@ function ChipEditor({
       setErr("חובה להזין שם");
       return;
     }
+    if (!Number.isInteger(days) || days < 1 || days > 365) {
+      setErr("מספר ימים חייב להיות מספר שלם בין 1 ל-365");
+      return;
+    }
     setBusy(true);
     setErr(null);
     try {
       await onSave({
         label: label.trim(),
-        action_type: actionType,
-        requires_content: requiresContent,
+        target_status: targetStatus,
+        waiting_on: waitingOn,
+        followup_task_type: taskType,
+        auto_followup_days: days,
       });
     } catch (e) {
       setErr(e instanceof Error ? e.message : "שגיאה");
@@ -263,37 +309,79 @@ function ChipEditor({
   return (
     <div className="bg-white rounded-xl border border-gray-300 p-3 space-y-3">
       <div>
-        <label className="text-xs text-gray-600 block mb-1">{"שם הצ'יפ"}</label>
+        <label className="text-xs text-gray-600 block mb-1">
+          {"שם הצ'יפ"}
+        </label>
         <input
           value={label}
           onChange={(e) => setLabel(e.target.value)}
-          placeholder="למשל: שלחתי הצעה"
+          placeholder="למשל: רוצה הצעה"
           className="w-full text-sm border border-gray-300 rounded-md px-2 py-1.5 focus:outline-none focus:border-gray-900"
           maxLength={100}
         />
       </div>
+
       <div>
-        <label className="text-xs text-gray-600 block mb-1">פעולה</label>
+        <label className="text-xs text-gray-600 block mb-1">סטטוס יעד</label>
         <select
-          value={actionType}
-          onChange={(e) => setActionType(e.target.value)}
+          value={targetStatus}
+          onChange={(e) => setTargetStatus(e.target.value as LeadStatus)}
           className="w-full text-sm border border-gray-300 rounded-md px-2 py-1.5 focus:outline-none focus:border-gray-900 bg-white"
         >
-          {ACTION_OPTIONS.map((opt) => (
-            <option key={opt.value} value={opt.value}>
-              {opt.label}
+          {STATUS_OPTIONS.map((s) => (
+            <option key={s} value={s}>
+              {STATUS_LABELS[s] ?? s}
             </option>
           ))}
         </select>
       </div>
-      <label className="flex items-center gap-2 text-sm">
+
+      <div>
+        <label className="text-xs text-gray-600 block mb-1">
+          {"מי 'מחזיק' בליד אחרי הלחיצה"}
+        </label>
+        <select
+          value={waitingOn}
+          onChange={(e) => setWaitingOn(e.target.value as WaitingOn)}
+          className="w-full text-sm border border-gray-300 rounded-md px-2 py-1.5 focus:outline-none focus:border-gray-900 bg-white"
+        >
+          {WAITING_ON_OPTIONS.map((w) => (
+            <option key={w} value={w}>
+              {WAITING_ON_LABELS[w] ?? w}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <div>
+        <label className="text-xs text-gray-600 block mb-1">סוג פולואפ</label>
+        <select
+          value={taskType}
+          onChange={(e) => setTaskType(e.target.value as TaskType)}
+          className="w-full text-sm border border-gray-300 rounded-md px-2 py-1.5 focus:outline-none focus:border-gray-900 bg-white"
+        >
+          {TASK_TYPE_OPTIONS.map((t) => (
+            <option key={t} value={t}>
+              {TASK_TYPE_LABELS[t] ?? t}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <div>
+        <label className="text-xs text-gray-600 block mb-1">
+          {"פולואפ בעוד כמה ימים"}
+        </label>
         <input
-          type="checkbox"
-          checked={requiresContent}
-          onChange={(e) => setRequiresContent(e.target.checked)}
+          type="number"
+          min={1}
+          max={365}
+          step={1}
+          value={days}
+          onChange={(e) => setDays(parseInt(e.target.value, 10))}
+          className="w-full text-sm border border-gray-300 rounded-md px-2 py-1.5 focus:outline-none focus:border-gray-900"
         />
-        <span>דורש טקסט חופשי (כמו הערה פנימית)</span>
-      </label>
+      </div>
 
       {err && (
         <div className="text-sm text-state-red bg-state-red/10 rounded-lg px-3 py-2">

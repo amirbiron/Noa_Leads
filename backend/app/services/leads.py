@@ -63,7 +63,13 @@ async def create_lead(
         phone=payload.phone,
         email=payload.email,
         organization_name=payload.organization_name,
-        service_category=str(payload.service_category),
+        # אופציונלי (F-04) — אם payload מכיל None, הליד נשמר ללא קטגוריה.
+        # str(None) היה הופך ל-"None" string שמעקם את ה-enum.
+        service_category=(
+            str(payload.service_category)
+            if payload.service_category is not None
+            else None
+        ),
         service_subtype=payload.service_subtype,
         source_channel=str(payload.source_channel),
         source_detail=payload.source_detail,

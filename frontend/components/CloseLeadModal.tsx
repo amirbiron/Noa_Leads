@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { X } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
-import type { ClosureReason, Lead } from "@/lib/types";
+import type { ClosureReason, Lead, ServiceRate } from "@/lib/types";
 
 // 7 סיבות סגירה לפי האפיון. closure_reason חובה רק כשסוגרים כ-LOST.
 const CLOSURE_REASONS: { value: ClosureReason; label: string }[] = [
@@ -21,21 +21,15 @@ const CLOSURE_REASONS: { value: ClosureReason; label: string }[] = [
 // parseFloat("12abc") מחזיר 12, לכן regex הכרחי לפני הפרסור.
 const NUMERIC_RE = /^\d+(\.\d{1,2})?$/;
 
-// ברירות מחדל ל-deal value+hours לפי subtype — מאפיין product-spec.md.
-// מועברות אוטומטית לטופס כשסוגרים כ-WON, ניתנות לעריכה.
-// אם הברירות במקור (backend/app/utils/service_rates.py) משתנות — צריך לעדכן גם פה.
-const SUBTYPE_DEFAULTS: Record<string, { price: string; hours: string }> = {
-  voice_development: { price: "300", hours: "1" },
-  public_speaking: { price: "2400", hours: "8" },
-  voice_rehab: { price: "2400", hours: "8" },
-  workshop_speaking: { price: "2000", hours: "2" },
-  stage_arts: { price: "7000", hours: "4" },
-  lecture_organization: { price: "2000", hours: "2" },
-  lecture_academic: { price: "2000", hours: "2" },
-  production_guidance: { price: "9600", hours: "28" },
-  production_directing: { price: "", hours: "" },
-  digital_course: { price: "", hours: "" },
-};
+function defaultsFromRate(
+  rate: ServiceRate | undefined,
+): { price: string; hours: string } {
+  if (!rate) return { price: "", hours: "" };
+  return {
+    price: rate.default_price !== null ? String(rate.default_price) : "",
+    hours: rate.total_hours !== null ? String(rate.total_hours) : "",
+  };
+}
 
 interface Props {
   lead: Lead;
@@ -52,21 +46,48 @@ export function CloseLeadModal({ lead, open, onClose, onClosed }: Props) {
   const [actualHours, setActualHours] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // התעריפים נטענים פעם אחת ב-mount של המודאל מ-/settings/service-rates.
+  // אם נועה עורכת מחיר ב-/settings/rates, הסגירה הבאה תראה את הערך החדש
+  // (כל פתיחה של עמוד הליד מ-mount-ת את המודאל מחדש).
+  // null = עוד לא נטען (defaults יישארו ריקים בפתיחה); [] = נטען אבל כשל.
+  const [rates, setRates] = useState<ServiceRate[] | null>(null);
 
-  // איפוס + הצבת defaults לפי subtype בכל פתיחה
+  useEffect(() => {
+    api
+      .listServiceRates()
+      .then(setRates)
+      .catch(() => setRates([])); // fail silent — נועה תזין ידנית
+  }, []);
+
+  // איפוס מלא של הטופס בכל פתיחה — דורס קלט קודם (זה התרחיש הצפוי
+  // כשפותחים מחדש). לא תלוי ב-rates — ערכי ברירת מחדל יתמלאו ב-effect
+  // הבא ברגע שיהיו זמינים.
   useEffect(() => {
     if (!open) return;
-    const defaults = lead.service_subtype
-      ? SUBTYPE_DEFAULTS[lead.service_subtype] ?? { price: "", hours: "" }
-      : { price: "", hours: "" };
     setTarget("WON");
     setReason("no_response");
     setNote("");
-    setClosedValue(defaults.price);
-    setActualHours(defaults.hours);
+    setClosedValue("");
+    setActualHours("");
     setBusy(false);
     setError(null);
   }, [open, lead.id, lead.service_subtype]);
+
+  // הצבת defaults מ-rates: ברגע שrates זמינים *ו* המודאל פתוח, ממלאים
+  // את closedValue/actualHours רק אם הם ריקים. כך נשמרים גם:
+  // (א) ערכי defaults כשrates מגיעים אחרי הפתיחה,
+  // (ב) קלט של נועה אם היא כבר התחילה להקליד.
+  useEffect(() => {
+    if (!open || !rates) return;
+    // filter על is_active: ה-UI של /settings/rates מתאר "תעריף פעיל
+    // (יוצע ב-CloseLeadModal)". תעריף שנועה ביטלה לא צריך לזרום ל-defaults.
+    const subtypeMatch = rates.find(
+      (r) => r.service_subtype === lead.service_subtype && r.is_active,
+    );
+    const defaults = defaultsFromRate(subtypeMatch);
+    setClosedValue((prev) => (prev === "" ? defaults.price : prev));
+    setActualHours((prev) => (prev === "" ? defaults.hours : prev));
+  }, [open, lead.id, lead.service_subtype, rates]);
 
   const hourlyRate =
     closedValue &&

@@ -279,7 +279,10 @@ async def get_pending(
     """
     לידים פתוחים שדורשים תשומת לב:
     - needs_attention=True (התראה שלא טופלה),
-    - או פולואפ שעבר מועדו ועוד לא נסגר.
+    - או פולואפ שעבר מועדו ועוד לא נסגר,
+    - או בקשת תור שמחכה לאישור (BOOKING_PENDING — F-06): אחרי שהסרנו את
+      ה-Telegram על בקשת תור (לפי Spec §16.3), הדשבורד הוא הערוץ היחיד
+      שבו נועה רואה את הבקשה. כל ליד ב-BOOKING_PENDING ממתין לפעולה שלה.
     """
     now_utc = datetime.now(timezone.utc)
     stmt = (
@@ -292,6 +295,7 @@ async def get_pending(
                     Lead.next_action_due_at.is_not(None),
                     Lead.next_action_due_at <= now_utc,
                 ),
+                Lead.status == LeadStatus.BOOKING_PENDING.value,
             ),
         )
         .order_by(*_dashboard_order(now_utc))
@@ -468,3 +472,19 @@ async def get_weekly_insights(db: AsyncSession) -> WeeklyInsights:
         total_open=total_open,
         most_profitable_service=profitable,
     )
+
+
+async def get_latest_daily_summary(db: AsyncSession):
+    """
+    מחזיר את ה-DailySummary העדכני ביותר (לפי summary_date desc), או None
+    אם הטבלה ריקה. F-07: מוצג כ-bubble בדשבורד.
+
+    אין סינון לפי "סיכום של היום" — אם cron של 19:00 עוד לא רץ היום,
+    מציגים את של אתמול. הfrontend מציג generated_at כדי שנועה תדע מתי.
+    """
+    from app.models.daily_summary import DailySummary
+
+    result = await db.execute(
+        select(DailySummary).order_by(DailySummary.summary_date.desc()).limit(1)
+    )
+    return result.scalar_one_or_none()

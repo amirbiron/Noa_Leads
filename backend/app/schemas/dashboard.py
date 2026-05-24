@@ -2,7 +2,7 @@
 סכמות dashboard — תשובות לכל endpoints מסך הבית.
 """
 
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from uuid import UUID
 
@@ -19,7 +19,7 @@ class LeadCard(BaseModel):
     id: UUID
     full_name: str
     organization_name: str | None
-    service_category: str
+    service_category: str | None  # אופציונלי (F-04)
     service_subtype: str | None
     status: str
     waiting_on: str
@@ -52,7 +52,7 @@ class TodayActionItem(BaseModel):
     state_color: str
     priority_level: str
     preferred_contact: str
-    service_category: str
+    service_category: str | None  # אופציונלי לפי Spec §7.1 (F-04)
 
 
 # ===== הצעות פתוחות =====
@@ -72,7 +72,7 @@ class ProfitableServiceInsight(BaseModel):
     הגבוה ביותר השבוע (לפי עסקאות WON שנסגרו).
     """
 
-    service_category: str
+    service_category: str | None  # אופציונלי לפי Spec §7.1 (F-04)
     hourly_rate: Decimal
     total_revenue: Decimal
     total_hours: Decimal
@@ -95,6 +95,22 @@ class WeeklyInsights(BaseModel):
     most_profitable_service: ProfitableServiceInsight | None = None
 
 
+# ===== סיכום יומי (F-07) =====
+
+class DailySummaryRead(BaseModel):
+    """ה-row האחרון מ-daily_summaries — מוצג כbubble בדשבורד.
+    null אם cron עדיין לא רץ או הטבלה ריקה."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    summary_date: date
+    new_leads_today: int
+    tasks_done_today: int
+    tasks_for_tomorrow: int
+    urgent_open: int
+    generated_at: datetime
+
+
 # ===== מסך הבית =====
 
 class HomeDashboardResponse(BaseModel):
@@ -104,6 +120,7 @@ class HomeDashboardResponse(BaseModel):
     new_leads: list[LeadCard]
     pending: list[LeadCard]
     weekly_insights: WeeklyInsights
+    daily_summary: DailySummaryRead | None = None  # F-07: bubble בדשבורד
 
 
 class PendingResponse(BaseModel):

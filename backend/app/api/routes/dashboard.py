@@ -22,16 +22,19 @@ async def home(db: DbSession, user: CurrentUser) -> HomeDashboardResponse:
     """
     תמונת מצב מרוכזת למסך הבית.
     הסדר תואם את האפיון: פעולות היום → פניות חדשות → ממתין → תובנות.
+    daily_summary (F-07) מוצג כbubble כשיש סיכום עדכני (cron אחרי 19:00).
     """
     today_actions = await dashboard_service.get_today_actions(db)
     new_leads = await dashboard_service.get_new_leads(db)
     pending = await dashboard_service.get_pending(db)
     weekly_insights = await dashboard_service.get_weekly_insights(db)
+    daily_summary = await dashboard_service.get_latest_daily_summary(db)
     return HomeDashboardResponse(
         today_actions=today_actions,
         new_leads=new_leads,
         pending=pending,
         weekly_insights=weekly_insights,
+        daily_summary=daily_summary,
     )
 
 

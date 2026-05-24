@@ -65,6 +65,26 @@
 ### כלל 11: שמות מ-enum, לא מהאינטואיציה
 > כשמציבים ערך לעמודה ש-string שמוגדרת על-ידי enum (status, type, waiting_on וכו'), קח את הערך *מ-`Enum.MEMBER.value`*, לא ממחרוזת hardcoded. דוגמה: `waiting_on=WaitingOn.CLIENT.value` ולא `waiting_on="CLIENT"` (ובוודאי לא `"THEM"`). זה מונע: typos שעוברים בלי שגיאה, drift בין enum ל-DB, ומקל על rename בעתיד.
 
+### כלל 12: לפני יצירת/שינוי Task — checklist השוואה
+> כל פונקציה שיוצרת `Task` (auto-cron, chip apply, service call) צריכה להיות עקבית עם peer-functions קיימים. לפני commit, חפש דוגמה דומה (`grep -n "Task(" backend/app/services backend/jobs`) ובדוק:
+> 1. `assigned_to=lead.owner_id` נקבע? (אחרת ה-task לא מופיע ב-owner-scoped views).
+> 2. `due_at` ב-UTC? (`next_working_day_start(x).astimezone(timezone.utc)` — לא רק `next_working_day_start(x)`).
+> 3. `origin_rule` ייחודי ומתעד את המקור? (debug / analytics).
+> 4. `sync_lead_next_action_cache(db, lead_id)` נקרא אחרי `flush()` ולפני `commit()`? (cache stale = `next_action_due_at` שגוי בdashboard).
+> 5. Idempotency: יש check מתאים? "כל open task" או "type ספציפי + נוצר אחרי last_outbound_at" — לפי הסמנטיקה.
+
+### כלל 13: לפני שינוי `lead.status` — חפש side-effects
+> כל שינוי `Lead.status` (chip, action, cron) צריך לטפל ב-side-effects שתלויים בסטטוס היעד:
+> - `PROPOSAL_SENT` → `proposal_sent_at = COALESCE(proposal_sent_at, now)` (אחרת check_stuck_proposals שובר).
+> - `BOOKING_PENDING` / `BOOKED` → דורש שורת `Booking` תואמת (אסור להציב ישירות בלי booking flow).
+> - `WON` / `LOST` / `ARCHIVED` → רק דרך `close_lead` (closure_reason, closed_at, ביטול tasks).
+> - `IN_PROGRESS` → אם הליד היה ב-BOOKING_PENDING/BOOKED עם active booking → דורש קודם לטפל ב-booking.
+>
+> חוקיות: chip / custom action שמציב status — חוסם targets שדורשים flow ייעודי. ראה `_CHIP_FORBIDDEN_TARGETS` ב-`backend/app/schemas/quick_action_chip.py` כדוגמה.
+
+### כלל 14: כל touchpoint סוגר tasks מ-AUTO_CLOSE_TASK_TYPES
+> כל פעולה ש-Noah מבצעת על ליד (chip click, action, mark sent) היא touchpoint = "טיפלה". צריכה לסגור tasks תקועים מאותם sub-types שlist `AUTO_CLOSE_TASK_TYPES` ב-`backend/app/services/lead_actions.py` (FIRST_RESPONSE, LECTURE_INQUIRY, FOLLOWUP, AFTER_HOURS_REPLY, DORMANT_CHECK, WARM_FOLLOWUP, RETRY_CALL). אחרת ה-`/today` ו-`next_action_due_at` יציגו עבודה כפולה. ראה `_close_addressed_tasks` ב-lead_actions.py + שלב 2b ב-`apply_chip`.
+
 ---
 
 ## מסמכי ייחוס חיצוניים
@@ -78,6 +98,8 @@
 
 | מסמך | מתי |
 |---|---|
+| `docs/SpecV2.1.md` | **המקור היחיד והאמיתי לדרישות** (גרסה 2.1, מאוחדת). לקרוא את הסעיף הרלוונטי **מחדש** לפני כל מימוש פיצ'ר. אם פיצ'ר כולל רשימה קונקרטית (צ'יפים, סטטוסים, תבניות) — להעתיק את הרשימה ל-commit description ולוודא 1:1 מול §27 (Acceptance Criteria). |
+| `docs/spec-deviations.md` | **חובה לקרוא לפני מימוש של פיצ'ר** — רישום כל הפערים הידועים בין `SpecV2.1.md` לבין הקוד, עם acceptance checklists. לפני קוד: `grep -A 30 "F-NN" docs/spec-deviations.md`. אחרי מימוש: לסמן `[x]` ב-acceptance. |
 | `docs/progress.md` | **קודם כל** בתחילת כל סשן חדש (אחרי compacting). מסכם מה נבנה, איפה אנחנו, מה הצעדים הפתוחים, וההחלטות הארכיטקטוניות. |
 | `docs/references/google-calendar-blueprint.md` | בעת מימוש פאזה 2 (Google Calendar). מכסה OAuth flow + PKCE, הצפנת tokens, FreeBusy API, watch channels + syncToken, `bookingId=` anchor לסנכרון דו-כיווני, וטיפול ב-RefreshError. **שים לב:** הפרויקט המקורי משתמש ב-Telegram/WhatsApp bots לקביעת תור, אצלנו זה דף ווב — קח רק את חלקי ה-Google integration. |
 | `docs/google-calendar-setup.md` | לקראת deploy של פאזה 2 — מדריך setup ב-Google Cloud Console (יצירת project, Calendar API, OAuth client) + רשימת env vars שצריך להגדיר ב-Render. **הקובץ הזה מיועד לאדיר** (המתאם), לא לקוד. |

@@ -32,8 +32,10 @@ class Lead(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     organization_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
 
     # ===== קטגוריזציה =====
+    # nullable לפי Spec §7.1: שדות חובה הם רק שם/טלפון/מקור. service_category
+    # מסווג אחר כך מהכרטיס (ידנית או ע"י AI בפאזה 3). ראה F-04 ב-spec-deviations.
     # clinic / workshops / production / digital_course
-    service_category: Mapped[str] = mapped_column(String(50), nullable=False)
+    service_category: Mapped[str | None] = mapped_column(String(50), nullable=True)
     # voice_development / public_speaking / וכו'
     service_subtype: Mapped[str | None] = mapped_column(String(100), nullable=True)
 
@@ -41,8 +43,9 @@ class Lead(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     status: Mapped[str] = mapped_column(
         String(30), nullable=False, default="NEW", server_default="NEW"
     )
+    # VARCHAR(30) לפי Spec §5.1 — מספיק ל-ASSISTANT_PENDING_NOAH (22 תווים).
     waiting_on: Mapped[str] = mapped_column(
-        String(20), nullable=False, default="NOAH", server_default="NOAH"
+        String(30), nullable=False, default="NOAH", server_default="NOAH"
     )
     priority_level: Mapped[str] = mapped_column(
         String(20), nullable=False, default="normal", server_default="normal"

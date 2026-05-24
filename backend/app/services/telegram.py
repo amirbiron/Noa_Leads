@@ -54,15 +54,20 @@ async def notify_new_lead(lead: Lead) -> None:
     משתמש ב-escape_telegram_html (כלל 6) על כל נתון מהמשתמש.
     """
     name = escape_telegram_html(lead.full_name)
-    category = SERVICE_CATEGORY_HE.get(
-        lead.service_category, lead.service_category
+    # F-04: service_category אופציונלי. ב-intake/email או manual ייתכן None —
+    # במקרה כזה מדלגים על שורת הקטגוריה במקום להעביר None ל-escape (TypeError).
+    category = (
+        SERVICE_CATEGORY_HE.get(lead.service_category, lead.service_category)
+        if lead.service_category
+        else None
     )
     source = SOURCE_CHANNEL_HE.get(lead.source_channel, lead.source_channel)
 
     lines = ["🔔 <b>ליד חדש</b>", f"<b>{name}</b>"]
     if lead.organization_name:
         lines[-1] += f" — {escape_telegram_html(lead.organization_name)}"
-    lines.append(f"📋 {escape_telegram_html(category)}")
+    if category:
+        lines.append(f"📋 {escape_telegram_html(category)}")
     if lead.phone:
         lines.append(f"📞 {escape_telegram_html(lead.phone)}")
     if lead.source_detail:
@@ -74,28 +79,7 @@ async def notify_new_lead(lead: Lead) -> None:
     await send_message("\n".join(lines))
 
 
-async def notify_booking_requested(
-    lead_name: str, slot_start_iso: str
-) -> None:
-    """
-    התראה לנועה על בקשת תור חדשה מהדף הציבורי. ה-slot מועבר כ-ISO
-    כדי לא לכפות import של datetime פה ולא להפיל אם הtz משונה.
-    """
-    from datetime import datetime
-    from zoneinfo import ZoneInfo
-
-    name = escape_telegram_html(lead_name)
-    try:
-        dt = datetime.fromisoformat(slot_start_iso).astimezone(
-            ZoneInfo("Asia/Jerusalem")
-        )
-        when = dt.strftime("%d/%m %H:%M")
-    except (ValueError, TypeError):
-        when = escape_telegram_html(slot_start_iso)
-
-    await send_message(
-        f"📅 <b>בקשת תור חדשה</b>\n"
-        f"<b>{name}</b>\n"
-        f"מועד מבוקש: <b>{when}</b>\n\n"
-        f"לאישור או דחייה — היכנסי לאפליקציה."
-    )
+# notify_booking_requested הוסרה — לפי Spec §16.3, טלגרם הוא ערוץ ייחודי
+# לליד חדש בלבד ("הדבר היחיד שמקבל פוש מיידי"). בקשת תור מליד קיים מופיעה
+# בדשבורד דרך next_action_due_at + מצב BOOKING_PENDING. ראה F-06 ב-
+# docs/spec-deviations.md.

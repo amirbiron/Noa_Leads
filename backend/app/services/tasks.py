@@ -10,7 +10,7 @@ from sqlalchemy import and_, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
-from app.constants import TaskStatus, TaskType
+from app.constants import CLOSED_LEAD_STATUSES, TaskStatus, TaskType
 from app.core.exceptions import (
     InvalidStateTransitionError,
     NotFoundError,
@@ -90,20 +90,36 @@ async def create_first_response_task(
     assigned_to: UUID | None = None,
 ) -> Task:
     """
-    נוצרת אוטומטית עם פתיחת ליד חדש: משימת "החזרה ראשונה" לליד.
-    אם הליד נכנס בשעות עבודה — due_at = עכשיו (יופיע מיד ב"פעולות היום").
-    אם נכנס מחוץ לשעות — due_at = תחילת יום העבודה הבא, 09:00.
+    נוצרת אוטומטית עם פתיחת ליד חדש: משימת תזכורת לטיפול ראשון.
+    אותו SLA של 24h (Spec §17.1), אבל סוג ה-task משתנה לפי subtype:
+    - lecture_organization / lecture_academic → LECTURE_INQUIRY (F-08).
+    - אחרת → FIRST_RESPONSE (ברירת מחדל).
+
+    ההבחנה נותנת סמנטיקה ברורה בדשבורד ("פניות מארגונים") ובסיס
+    לשימוש בתבנית "פתיחה לארגון" (§18) בעתיד.
+
+    אם הליד נכנס בשעות עבודה — due_at = עכשיו+24h. אם נופל מחוץ לשעות
+    עבודה — נדחה לתחילת יום העבודה הבא, 09:00.
     """
+    from app.constants import LECTURE_SUBTYPES
+
     now = datetime.now(timezone.utc)
     due_at = _due_at_for_first_response(now)
 
+    if lead.service_subtype in LECTURE_SUBTYPES:
+        task_type = TaskType.LECTURE_INQUIRY.value
+        origin = "auto_lecture_inquiry"
+    else:
+        task_type = TaskType.FIRST_RESPONSE.value
+        origin = "auto_first_response"
+
     task = Task(
         lead_id=lead.id,
-        type=TaskType.FIRST_RESPONSE.value,
+        type=task_type,
         assigned_to=assigned_to or lead.owner_id,
         due_at=due_at,
         status=TaskStatus.OPEN.value,
-        origin_rule="auto_first_response",
+        origin_rule=origin,
     )
     db.add(task)
     await db.flush()
@@ -123,6 +139,11 @@ async def sync_lead_next_action_cache(
     שמירה ישירה של task.due_at — אין יותר grace adjustment. ה-due_at
     של כל task מייצג את ה-alert time (כשהוא נוצר, חשבו את ה-grace
     לתוכו). שינוי מהמודל הקודם — ראה הערות ב-_due_at_for_first_response.
+
+    F-23: WHERE כולל בדיקה ש-status פתוח. ליד סגור לעולם לא יקבל
+    next_action_due_at חי (כלל §6.5 בSpec). אם sync נקרא על ליד סגור
+    בעקבות race (task נוצר בו במקביל לסגירה) — ה-UPDATE לא תופס, ה-cache
+    נשאר NULL כפי שclose_lead הגדיר. silent no-op מכוון.
     """
     earliest = (
         await db.execute(
@@ -141,9 +162,13 @@ async def sync_lead_next_action_cache(
     next_type = earliest.type if earliest is not None else None
     next_due = earliest.due_at if earliest is not None else None
 
+    closed = [s.value for s in CLOSED_LEAD_STATUSES]
     await db.execute(
         update(Lead)
-        .where(Lead.id == lead_id)
+        .where(
+            Lead.id == lead_id,
+            Lead.status.notin_(closed),
+        )
         .values(
             next_action_type=next_type,
             next_action_due_at=next_due,
@@ -341,21 +366,25 @@ async def _get_task_or_404(db: AsyncSession, task_id: UUID) -> Task:
 
 async def list_stuck_tasks(db: AsyncSession) -> list[tuple[Task, Lead]]:
     """
-    "ממתין לטיפול" — משימות פעילות שעבר ה-due_at שלהן (overdue).
+    "ממתין לטיפול" — Spec v2.1 §16.2 + §22.7: לידים שתקועים **7+ ימים**
+    (due_at <= now - 7d), לא סתם overdue זמני.
 
-    הקריטריון זהה ל-stuck_count ב-dashboard (due_at <= now) — כך שהקליק
-    על "לא טופלו בזמן" בדף הבית מוביל לרשימה המכילה את אותן יחידות.
+    הבחנה ברורה לפי §16.2:
+    - `weekly_insights.stuck_count` (תובנה שבועית, §13.9) — כל overdue,
+      אפילו יום אחד. נשאר ב-due_at <= now.
+    - `/tasks/stuck` (העמוד הנפרד) — רק 7+ ימים. כאן.
+
+    הסף הוגדר באפיון כדי שהעמוד יציג רק מקרים שבאמת דורשים פעולה
+    דחופה, ולא רעש של overdue זמני שבמילא יוצג ב"פעולות היום".
 
     מודל פשוט (אחרי הסרת grace per-type): due_at = alert time תמיד.
     snooze מעדכן due_at, FIRST_RESPONSE נוצר עם due_at=now+24h, וכו'.
-    אין צורך בלוגיקת CASE.
 
     מסונן ללידים פתוחים (defense in depth — close_lead מבטל tasks).
     מיון לפי due_at עולה (ישנים קודם).
     """
-    from app.constants import CLOSED_LEAD_STATUSES
-
     now_utc = datetime.now(timezone.utc)
+    stuck_threshold = now_utc - timedelta(days=7)
 
     stmt = (
         select(Task, Lead)
@@ -364,7 +393,7 @@ async def list_stuck_tasks(db: AsyncSession) -> list[tuple[Task, Lead]]:
             Task.status.in_(
                 [TaskStatus.OPEN.value, TaskStatus.SNOOZED.value]
             ),
-            Task.due_at <= now_utc,
+            Task.due_at <= stuck_threshold,
             Lead.status.notin_([s.value for s in CLOSED_LEAD_STATUSES]),
         )
         .order_by(Task.due_at.asc())
@@ -372,9 +401,8 @@ async def list_stuck_tasks(db: AsyncSession) -> list[tuple[Task, Lead]]:
     rows = (await db.execute(stmt)).all()
 
     # dedup לפי lead_id — שורה אחת לכל ליד, ה-task הישן ביותר שלו (כי
-    # ה-order_by מציב ישנים קודם). מבטיח שספירת הרשימה = stuck_count
-    # ב-dashboard (שסופר לידים), אחרת ליד עם 2+ tasks overdue היה
-    # מנפח את העמוד.
+    # ה-order_by מציב ישנים קודם). מבטיח עמוד נקי גם אם לליד יש כמה
+    # tasks תקועים.
     seen_leads: set = set()
     deduped: list[tuple[Task, Lead]] = []
     for task, lead in rows:

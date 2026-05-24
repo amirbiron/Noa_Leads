@@ -1,22 +1,23 @@
 """
 daily_summary — רץ ב-19:00 כל יום (לפי TZ ישראל; מתוזמן ב-UTC ב-render.yaml).
 
-שולח לנועה בטלגרם סיכום קצר של היום: כמה לידים נכנסו, כמה משימות
-בוצעו, וכמה ממתינות למחר. נשמר מינימליסטי לפי האפיון —
-"סיכום יומי קצר — מה קרה היום, מה ממתין מחר".
+מחשב סיכום יומי קצר ושומר ב-DB (טבלת `daily_summaries`). הדשבורד שולף
+ומציג. *לא* נשלח לטלגרם — לפי Spec §16.3 + Changelog v2.1: טלגרם הוא
+ערוץ ייחודי לליד חדש בלבד. ראה F-07 ב-docs/spec-deviations.md.
 """
 
 import logging
 from datetime import datetime, time, timedelta, timezone
 
 from sqlalchemy import and_, func, or_, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.constants import CLOSED_LEAD_STATUSES, TaskStatus
 from app.db.session import AsyncSessionLocal
+from app.models.daily_summary import DailySummary
 from app.models.lead import Lead
 from app.models.task import Task
-from app.services import telegram as telegram_service
 from app.utils.work_hours import ISRAEL_TZ, to_israel_tz
 from jobs._runner import run_job
 
@@ -111,29 +112,38 @@ async def _gather_stats(db: AsyncSession) -> dict[str, int]:
     }
 
 
-def _format_summary(stats: dict[str, int]) -> str:
-    lines = ["📊 <b>סיכום יומי</b>", ""]
-    lines.append(f"📥 לידים חדשים היום: <b>{stats['new_leads_today']}</b>")
-    lines.append(f"✅ משימות שבוצעו: <b>{stats['tasks_done_today']}</b>")
-    lines.append(f"📅 משימות מחר: <b>{stats['tasks_for_tomorrow']}</b>")
-    if stats["urgent_open"] > 0:
-        lines.append("")
-        lines.append(
-            f"⚠️ <b>{stats['urgent_open']}</b> לידים דחופים ממתינים לטיפול"
-        )
-    return "\n".join(lines)
-
-
 async def daily_summary() -> None:
+    """
+    מחשב את ה-stats לתאריך הנוכחי בישראל, ושומר/מעדכן את ה-row המתאים
+    ב-`daily_summaries`. ON CONFLICT (summary_date) DO UPDATE — בטוח אם
+    cron רץ פעמיים באותו יום (recovery / manual re-run).
+    """
     async with AsyncSessionLocal() as db:
         stats = await _gather_stats(db)
+        today_israel = to_israel_tz(datetime.now(timezone.utc)).date()
 
-    text = _format_summary(stats)
-    sent = await telegram_service.send_message(text)
-    if sent:
-        logger.info("Daily summary sent: %s", stats)
-    else:
-        logger.info("Daily summary not sent (telegram not configured)")
+        stmt = pg_insert(DailySummary).values(
+            summary_date=today_israel,
+            new_leads_today=stats["new_leads_today"],
+            tasks_done_today=stats["tasks_done_today"],
+            tasks_for_tomorrow=stats["tasks_for_tomorrow"],
+            urgent_open=stats["urgent_open"],
+        )
+        # upsert לפי summary_date — re-run באותו יום מעדכן את הקיים
+        upsert_stmt = stmt.on_conflict_do_update(
+            index_elements=["summary_date"],
+            set_={
+                "new_leads_today": stmt.excluded.new_leads_today,
+                "tasks_done_today": stmt.excluded.tasks_done_today,
+                "tasks_for_tomorrow": stmt.excluded.tasks_for_tomorrow,
+                "urgent_open": stmt.excluded.urgent_open,
+                "generated_at": func.now(),
+            },
+        )
+        await db.execute(upsert_stmt)
+        await db.commit()
+
+    logger.info("Daily summary saved to DB for %s: %s", today_israel, stats)
 
 
 if __name__ == "__main__":

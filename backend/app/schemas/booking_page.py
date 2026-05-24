@@ -12,7 +12,7 @@ class BookingPageInfo(BaseModel):
     """מידע בסיסי לדף קביעת התור — מוצג ללקוח."""
 
     lead_name: str
-    service_category: str
+    service_category: str | None  # אופציונלי (F-04)
     service_subtype: str | None
     default_duration_minutes: int
     timezone: str = "Asia/Jerusalem"

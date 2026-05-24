@@ -18,7 +18,9 @@ export function NewLeadModal({
   const router = useRouter();
   const [fullName, setFullName] = useState("");
   const [phone, setPhone] = useState("");
-  const [category, setCategory] = useState<ServiceCategory>("clinic");
+  // אופציונלי לפי Spec §7.1 — ברירת מחדל "ללא קטגוריה". נועה תסווג
+  // אחר כך מהכרטיס. ראה F-04 ב-docs/spec-deviations.md.
+  const [category, setCategory] = useState<ServiceCategory | "">("");
   const [source, setSource] = useState<SourceChannel>("manual");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -33,7 +35,7 @@ export function NewLeadModal({
       const lead = await api.createLead({
         full_name: fullName.trim(),
         phone: phone.trim() || null,
-        service_category: category,
+        service_category: category || null,
         source_channel: source,
       });
       onClose();
@@ -82,12 +84,15 @@ export function NewLeadModal({
             />
           </Field>
 
-          <Field label="קטגוריה">
+          <Field label="קטגוריה (אופציונלי)">
             <select
               value={category}
-              onChange={(e) => setCategory(e.target.value as ServiceCategory)}
+              onChange={(e) =>
+                setCategory(e.target.value as ServiceCategory | "")
+              }
               className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-base focus:border-gray-900 focus:outline-none"
             >
+              <option value="">— לבחור מאוחר יותר —</option>
               <option value="clinic">קליניקה</option>
               <option value="workshops">סדנאות והרצאות</option>
               <option value="production">ליווי והפקות</option>
