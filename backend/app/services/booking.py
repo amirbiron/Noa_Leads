@@ -595,11 +595,15 @@ async def approve_booking(
 
     # 1. UPDATE אטומי על ה-booking. WHERE status=pending מבטיח שאישור
     # מקבילי לא יעבור פעמיים.
+    # WHERE כולל requested_slot_end > now — אטומי, מונע אישור של תור שפג.
+    # אחרת ה-UI מסתיר את הbooking (list_pending מסנן עבר) אבל POST ידני
+    # היה מצליח ויוצר אירוע ביומן בעבר + מעביר ליד ל-BOOKED.
     booking_update = await db.execute(
         update(Booking)
         .where(
             Booking.id == booking_id,
             Booking.status == BookingStatus.PENDING_APPROVAL.value,
+            Booking.requested_slot_end > now_utc,
         )
         .values(
             status=BookingStatus.APPROVED.value,
@@ -607,6 +611,20 @@ async def approve_booking(
         )
     )
     if booking_update.rowcount != 1:
+        # מבדילים בין שני המקרים כדי לתת הודעה מדויקת לנועה.
+        existing = (
+            await db.execute(
+                select(Booking.status, Booking.requested_slot_end).where(
+                    Booking.id == booking_id
+                )
+            )
+        ).first()
+        if existing is None:
+            raise ConflictError("בקשת התור לא נמצאה.")
+        if existing.requested_slot_end <= now_utc:
+            raise ConflictError(
+                "התור חלף ולא ניתן עוד לאשרו. בקשי מהליד לבחור מועד חדש."
+            )
         raise ConflictError(
             "הבקשה כבר עברה לסטטוס אחר. רעני את הדף ונסי שוב."
         )
