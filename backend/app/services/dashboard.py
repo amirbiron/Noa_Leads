@@ -468,3 +468,19 @@ async def get_weekly_insights(db: AsyncSession) -> WeeklyInsights:
         total_open=total_open,
         most_profitable_service=profitable,
     )
+
+
+async def get_latest_daily_summary(db: AsyncSession):
+    """
+    מחזיר את ה-DailySummary העדכני ביותר (לפי summary_date desc), או None
+    אם הטבלה ריקה. F-07: מוצג כ-bubble בדשבורד.
+
+    אין סינון לפי "סיכום של היום" — אם cron של 19:00 עוד לא רץ היום,
+    מציגים את של אתמול. הfrontend מציג generated_at כדי שנועה תדע מתי.
+    """
+    from app.models.daily_summary import DailySummary
+
+    result = await db.execute(
+        select(DailySummary).order_by(DailySummary.summary_date.desc()).limit(1)
+    )
+    return result.scalar_one_or_none()

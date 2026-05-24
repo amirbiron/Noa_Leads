@@ -2,7 +2,7 @@
 סכמות dashboard — תשובות לכל endpoints מסך הבית.
 """
 
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from uuid import UUID
 
@@ -95,6 +95,22 @@ class WeeklyInsights(BaseModel):
     most_profitable_service: ProfitableServiceInsight | None = None
 
 
+# ===== סיכום יומי (F-07) =====
+
+class DailySummaryRead(BaseModel):
+    """ה-row האחרון מ-daily_summaries — מוצג כbubble בדשבורד.
+    null אם cron עדיין לא רץ או הטבלה ריקה."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    summary_date: date
+    new_leads_today: int
+    tasks_done_today: int
+    tasks_for_tomorrow: int
+    urgent_open: int
+    generated_at: datetime
+
+
 # ===== מסך הבית =====
 
 class HomeDashboardResponse(BaseModel):
@@ -104,6 +120,7 @@ class HomeDashboardResponse(BaseModel):
     new_leads: list[LeadCard]
     pending: list[LeadCard]
     weekly_insights: WeeklyInsights
+    daily_summary: DailySummaryRead | None = None  # F-07: bubble בדשבורד
 
 
 class PendingResponse(BaseModel):

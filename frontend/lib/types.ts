@@ -306,11 +306,23 @@ export interface ServiceRate {
   hourly_rate: string | null;
 }
 
+// F-07: ה-row האחרון מ-daily_summaries — מוצג כbubble בדשבורד.
+// null אם cron עדיין לא רץ או הטבלה ריקה.
+export interface DailySummary {
+  summary_date: string; // YYYY-MM-DD
+  new_leads_today: number;
+  tasks_done_today: number;
+  tasks_for_tomorrow: number;
+  urgent_open: number;
+  generated_at: string;
+}
+
 export interface HomeDashboard {
   today_actions: TodayActionItem[];
   new_leads: LeadCard[];
   pending: LeadCard[];
   weekly_insights: WeeklyInsights;
+  daily_summary: DailySummary | null;
 }
 
 // ===== Tasks =====

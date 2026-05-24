@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Sparkles, TrendingUp } from "lucide-react";
+import { Moon, Sparkles, TrendingUp } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
 import { EmptyState } from "@/components/EmptyState";
 import { LeadCardRow } from "@/components/LeadCardRow";
@@ -10,7 +10,7 @@ import { SectionHeader } from "@/components/SectionHeader";
 import { TodayActionRow } from "@/components/TodayActionRow";
 import { api, ApiError } from "@/lib/api";
 import { labelCategory } from "@/lib/hebrew";
-import type { HomeDashboard } from "@/lib/types";
+import type { DailySummary, HomeDashboard } from "@/lib/types";
 
 export default function HomePage() {
   const [data, setData] = useState<HomeDashboard | null>(null);
@@ -47,6 +47,12 @@ export default function HomePage() {
 
       {data && (
         <>
+          {/* F-07: סיכום יומי — bubble. נשמר ב-daily_summaries ע"י cron 19:00.
+              לפי Spec §16.2: לא נשלח לטלגרם — מוצג רק בדשבורד. */}
+          {data.daily_summary && (
+            <DailySummaryBubble summary={data.daily_summary} />
+          )}
+
           {/* פעולות היום */}
           <SectionHeader
             title={
@@ -175,6 +181,69 @@ export default function HomePage() {
         </>
       )}
     </AppShell>
+  );
+}
+
+function DailySummaryBubble({ summary }: { summary: DailySummary }) {
+  // תאריך הסיכום בפורמט עברי קצר: "ב׳ בכסלו" וכו'. מספיק לקריאה מהירה.
+  const dateLabel = new Date(summary.summary_date).toLocaleDateString("he-IL", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+  });
+  return (
+    <div className="bg-gradient-to-bl from-indigo-500/10 to-indigo-500/5 border border-indigo-300/40 rounded-xl p-4">
+      <div className="flex items-start gap-3">
+        <Moon
+          size={20}
+          className="text-indigo-500 shrink-0 mt-0.5"
+          aria-hidden
+        />
+        <div className="min-w-0 w-full">
+          <div className="text-xs text-gray-600 mb-1">סיכום יומי · {dateLabel}</div>
+          <div className="grid grid-cols-2 gap-2 mt-2">
+            <SummaryStat
+              value={summary.new_leads_today}
+              label="פניות חדשות היום"
+            />
+            <SummaryStat
+              value={summary.tasks_done_today}
+              label="משימות שבוצעו"
+            />
+            <SummaryStat
+              value={summary.tasks_for_tomorrow}
+              label="משימות למחר"
+            />
+            <SummaryStat
+              value={summary.urgent_open}
+              label="לידים דחופים פתוחים"
+              tone={summary.urgent_open > 0 ? "red" : "gray"}
+            />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SummaryStat({
+  value,
+  label,
+  tone = "gray",
+}: {
+  value: number;
+  label: string;
+  tone?: "gray" | "red";
+}) {
+  return (
+    <div className="bg-white/60 rounded-lg px-3 py-2">
+      <div
+        className={`text-xl font-semibold tabular-nums ${tone === "red" ? "text-state-red" : "text-gray-900"}`}
+      >
+        {value}
+      </div>
+      <div className="text-[11px] text-gray-500 mt-0.5">{label}</div>
+    </div>
   );
 }
 

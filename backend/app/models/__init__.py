@@ -4,6 +4,7 @@
 
 from app.models.activity import Activity
 from app.models.booking import Booking
+from app.models.daily_summary import DailySummary
 from app.models.google_credentials import GoogleCalendarCredentials
 from app.models.lead import Lead
 from app.models.program import Program
@@ -15,6 +16,7 @@ from app.models.user import User
 __all__ = [
     "Activity",
     "Booking",
+    "DailySummary",
     "GoogleCalendarCredentials",
     "Lead",
     "Program",

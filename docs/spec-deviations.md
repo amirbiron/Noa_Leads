@@ -149,24 +149,24 @@
 
 ---
 
-### F-07: סתירה פנימית באפיון — Telegram ב-daily_summary — 🔴 (Open Decision)
+### F-07: daily_summary — bubble בדשבורד, לא Telegram — 🟢 הושלם
 
-**Spec §16.2:** "הדבר היחיד שמקבל פוש מיידי הוא ליד חדש שנכנס" — מוציא Telegram מכל שאר ה-flows.
+**Spec §16.2 (v2.1):** "הדבר היחיד שמקבל פוש מיידי הוא ליד חדש שנכנס" — Telegram יוצא מכל שאר ה-flows.
 
-**Spec §23:** Cron `daily_summary` — "שליחת סיכום יומי **לטלגרם** של נועה".
+**Changelog v2.1:** "תיקון סתירה: daily_summary לא נשלח לטלגרם אלא מופיע בדשבורד".
 
-**Code:** `backend/jobs/daily_summary.py` שולח Telegram ב-19:00 כל יום.
+**Code (תיקון):**
+- טבלה חדשה `daily_summaries` (migration 0012).
+- `backend/jobs/daily_summary.py` עושה UPSERT לתוך הטבלה במקום שליחת Telegram.
+- `GET /dashboard/home` מחזיר `daily_summary` (ה-row האחרון או null).
+- `frontend/app/page.tsx` מציג bubble בראש העמוד כש-`data.daily_summary` קיים.
 
-**Severity:** קריטי — סתירה בתוך ה-Spec עצמו. צריך הכרעה.
-
-**Open decision:** **השאלה למשתמש:** איזה משני הסעיפים לעקוב?
-- (א) §16.2 = יחיד. סיכום יומי עובר ל-bubble בדשבורד / מייל.
-- (ב) §23 = יחיד. §16.2 נשאר "פוש מיידי" (לא תקופתי) — סיכום יומי הוא פוש תקופתי, לא נכלל ב-"מיידי".
-- (ג) §16.2 + sender notification: סיכום יומי דרך Telegram אבל עם header "[סיכום]" כדי להפריד ויזואלית.
-
-**Acceptance (תלוי בהחלטה):**
-- [ ] Spec.md מתעדכן: שני הסעיפים מתיישבים זה עם זה.
-- [ ] `daily_summary` ו-`weekly_summary` נוקטים בגישה שהוחלטה.
+**Acceptance:**
+- [x] `jobs/daily_summary.py` לא מייבא יותר את `telegram_service` ולא קורא לפונקציה ששולחת.
+- [x] טבלת `daily_summaries` קיימת (`summary_date UNIQUE`, 4 counters, `generated_at`).
+- [x] cron מבצע `ON CONFLICT (summary_date) DO UPDATE` — re-run באותו יום מעדכן.
+- [x] `HomeDashboardResponse.daily_summary: DailySummaryRead | None`.
+- [x] frontend מציג bubble עם 4 הספירות + תאריך הסיכום.
 
 ---
 
