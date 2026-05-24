@@ -58,6 +58,10 @@ async function fetcher<T>(path: string, opts: FetcherOpts = {}): Promise<T> {
     ...rest,
     headers,
     body: body !== undefined ? JSON.stringify(body) : undefined,
+    // נדרש כדי שcookies של ה-backend (SessionMiddleware ל-OAuth flow)
+    // ייקלטו ב-cross-origin XHR. בלי זה ה-Set-Cookie של /google/auth/start
+    // נדחה ע"י הדפדפן וה-callback רואה session ריק.
+    credentials: "include",
   });
 
   // 401 → ננסה refresh פעם אחת ואז retry

@@ -177,9 +177,15 @@ async def get_credentials_or_404(db: AsyncSession) -> Credentials:
     """
     טוען credentials מה-DB, מבצע refresh אם פג, מטפל ב-RefreshError.
     זורק:
+    - GoogleNotConfiguredError אם env vars חסרים (client_id/secret/redirect)
     - GoogleNotConnectedError אם אין שורה ב-DB
     - GoogleAuthInvalidError אם auth_invalid_at מסומן או refresh נכשל
     """
+    # ולידציה שכל ה-Google env vars מוגדרים — אחרת build_credentials עם
+    # client_id=None יעבור init אבל יפיל בrefresh עם הודעת libc גנרית.
+    # _client_config זורק GoogleNotConfiguredError אם משהו חסר.
+    _client_config()
+
     row = await _load_row(db)
     if row is None:
         raise GoogleNotConnectedError()

@@ -62,8 +62,12 @@ services:
         sync: false
       - key: GOOGLE_REDIRECT_URI
         sync: false
+      # Fernet key — חייב פורמט ספציפי (32 bytes URL-safe base64, 44 תווים).
+      # Render's generateValue יוצר מחרוזת אלפא-נומרית אקראית שלא תקפה כ-Fernet
+      # → encryption.py יחזיר plaintext fallback ו-secrets ישמרו לא מוצפנים.
+      # ייצור ידני: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
       - key: SECRETS_ENCRYPTION_KEY
-        generateValue: true
+        sync: false
       - key: FRONTEND_URL
         sync: false
       - fromGroup: noa-leads-shared

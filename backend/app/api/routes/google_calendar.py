@@ -24,6 +24,26 @@ from app.services import google_calendar as gc_service
 
 router = APIRouter(prefix="/google", tags=["google"])
 
+# allowlist של error codes מ-OAuth — מומרים לקודים שלנו שה-frontend
+# יכול להציג בצורה ידידותית. כל ערך אחר → "unknown_error" כדי לא להעביר
+# מחרוזות חופשיות מה-provider אל ה-URL הציבורי.
+_OAUTH_ERROR_REASONS: dict[str, str] = {
+    "access_denied": "consent_denied",
+    "invalid_request": "invalid_request",
+    "invalid_scope": "invalid_scope",
+    "temporarily_unavailable": "provider_unavailable",
+    "server_error": "provider_error",
+    "unauthorized_client": "unauthorized_client",
+    "unsupported_response_type": "unsupported_response_type",
+    "interaction_required": "interaction_required",
+    "login_required": "login_required",
+    "consent_required": "consent_required",
+}
+
+
+def _map_oauth_error(error: str) -> str:
+    return _OAUTH_ERROR_REASONS.get(error, "unknown_error")
+
 
 @router.get("/status", response_model=GoogleConnectionStatus)
 async def status(db: DbSession, user: CurrentUser) -> GoogleConnectionStatus:
@@ -68,8 +88,14 @@ async def auth_callback(
         return RedirectResponse(f"{redirect_to_settings}?{qs}")
 
     if error:
-        # המשתמשת לחצה "ביטול" או Google דחה
-        return _redirect_with_error(error)
+        # המשתמשת לחצה "ביטול" או Google דחה. ממירים לקוד מ-allowlist
+        # ומלוגגים את הערך הגולמי לdebug — לא חושפים אותו ב-URL.
+        import logging
+
+        logging.getLogger(__name__).info(
+            "OAuth callback returned error: %s", error
+        )
+        return _redirect_with_error(_map_oauth_error(error))
 
     saved_state = request.session.pop("google_oauth_state", None)
     code_verifier = request.session.pop("google_oauth_code_verifier", None)

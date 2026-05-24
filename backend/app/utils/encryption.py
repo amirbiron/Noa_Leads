@@ -23,22 +23,43 @@ _FERNET_CHECKED = False
 
 
 def _get_fernet() -> Fernet | None:
-    """lazy-init של Fernet. מחזיר None אם המפתח לא מוגדר."""
+    """
+    lazy-init של Fernet. מחזיר None אם המפתח לא מוגדר *ב-dev*.
+    בפרודקשן — fail-closed: זריקת RuntimeError כדי שה-app לא יתחיל לאחסן
+    secrets ב-plaintext בלי שמישהו ישים לב.
+    """
     global _FERNET, _FERNET_CHECKED
     if _FERNET_CHECKED:
         return _FERNET
     _FERNET_CHECKED = True
-    key = get_settings().secrets_encryption_key
+
+    settings = get_settings()
+    is_production = settings.app_env == "production"
+    key = settings.secrets_encryption_key
+
     if not key:
-        logger.warning(
-            "SECRETS_ENCRYPTION_KEY not set — tokens will be stored in plaintext. "
-            "OK for dev, but unsafe in production."
+        msg = (
+            "SECRETS_ENCRYPTION_KEY not set. Generate with: "
+            "python -c \"from cryptography.fernet import Fernet; "
+            "print(Fernet.generate_key().decode())\""
         )
+        if is_production:
+            raise RuntimeError(msg + " — required in production.")
+        logger.warning(msg + " Falling back to plaintext (dev only).")
         return None
+
     try:
         _FERNET = Fernet(key.encode() if isinstance(key, str) else key)
     except (ValueError, TypeError) as e:
-        logger.error("Invalid SECRETS_ENCRYPTION_KEY: %s. Falling back to plaintext.", e)
+        msg = (
+            f"Invalid SECRETS_ENCRYPTION_KEY: {e}. Must be a valid Fernet key "
+            "(32 bytes URL-safe base64, 44 chars). Re-generate with: "
+            "python -c \"from cryptography.fernet import Fernet; "
+            "print(Fernet.generate_key().decode())\""
+        )
+        if is_production:
+            raise RuntimeError(msg) from e
+        logger.error(msg + " Falling back to plaintext (dev only).")
         _FERNET = None
     return _FERNET
 

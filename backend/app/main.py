@@ -94,13 +94,17 @@ def create_app() -> FastAPI:
 
     # SessionMiddleware נדרש ל-OAuth flow של Google (שמירת state +
     # code_verifier בין /google/auth/start ל-/google/auth/callback).
+    # ראה: docs/references/google-calendar-blueprint.md סעיף 1 (PKCE+state).
     # ה-cookie חתום (HMAC) עם JWT_SECRET_KEY — לא נעוף לתוכן רגיש מעבר
     # למזהי state רנדומליים, אז שיתוף המפתח עם JWT הוא acceptable trade-off.
+    # same_site=none + https_only=True — חובה כי frontend ו-backend הם
+    # subdomains שונים ב-Render (cross-origin). דפדפנים מודרניים מאפשרים
+    # Secure cookies גם על localhost דרך HTTP — אז זה עובד גם בדב.
     app.add_middleware(
         SessionMiddleware,
         secret_key=settings.jwt_secret_key,
-        same_site="lax",  # נדרש כדי שה-cookie יישלח ב-redirect מ-Google
-        https_only=(settings.app_env == "production"),
+        same_site="none",
+        https_only=True,
         max_age=600,  # 10 דקות — מספיק ל-OAuth flow, מינימום surface
     )
 
