@@ -104,6 +104,23 @@ async function tryRefreshToken(): Promise<boolean> {
 // ===== API surface =====
 
 export const api = {
+  // ----- Setup (deploy ראשון, ללא auth) -----
+  getSetupStatus: () =>
+    fetcher<{ setup_needed: boolean; users_count: number }>("/setup/status", {
+      retryAuth: false,
+    }),
+
+  createInitialOwner: (payload: {
+    email: string;
+    name: string;
+    password: string;
+  }) =>
+    fetcher<TokenResponse>("/setup/initial-owner", {
+      method: "POST",
+      body: payload,
+      retryAuth: false,
+    }),
+
   // ----- Auth -----
   login: (email: string, password: string) =>
     fetcher<TokenResponse>("/auth/login", {
