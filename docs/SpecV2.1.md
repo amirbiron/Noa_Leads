@@ -1326,7 +1326,6 @@ PATCH  /settings/service-rates
 | `mark_overdue_leads` | כל 15 דקות | סימון `needs_attention` ללידים שעברו `next_action_due_at` |
 | `check_stuck_proposals` | כל שעה | זיהוי הצעות שלא קיבלו פולואפ |
 | `detect_dormant_leads` | פעם ביום (03:00) | סימון `dormant_flag` ללקוחות שלא חזרו 60+ ימים |
-| `release_stale_locks` | כל 10 דקות | שחרור משימות בסטטוס PROCESSING מעל timeout |
 | `daily_summary` | כל יום ב-19:00 | שליחת סיכום יומי לטלגרם של נועה |
 | `weekly_summary` | ראשון ב-08:00 | יצירת סיכום שבועי לדשבורד |
 | `post_meeting_check` | כל 30 דקות | בדיקת פגישות שהסתיימו, יצירת משימת `post_meeting_update` |
@@ -1556,6 +1555,7 @@ PATCH  /settings/service-rates
 - הוספת 3 סקילים נוספים (hebrew-tailwind-preset, gws-hebrew-email-automation, hebrew-llm-eval-suite)
 - הוספת סעיף 27 - Acceptance Criteria
 - הוספת סעיף 28 - הבחנה בין פאזות
+- הסרת `release_stale_locks` מטבלת ה-cron jobs (§23): מערכת חד-משתמש עם cron jobs פנימיים — אין race ראלי שמצדיק את המנגנון. תועדה בהחלטה ב-`docs/spec-deviations.md` F-14 + F-22.
 
 **v2.0 (מאי 2026):**
 - איחוד כל המסמכים (product-spec, tech-spec, templates-seed, ai-token-management) למסמך אחד

@@ -1,9 +1,9 @@
 # Spec Deviations & Gaps
 
-> **גרסה:** 1.1 (מאי 2026)
+> **גרסה:** 1.2 (מאי 2026)
 > **מטרה:** רישום מסודר של *כל* הפערים הידועים בין `docs/SpecV2.1.md` (גרסה 2.1) לבין הקוד הקיים, עם acceptance checklists ברורים לכל פער.
 > **למה זה קיים:** בסבבי bugbot הקודמים גילינו שמשפחת ה-chips, ה-Telegram, ה-cron jobs ועוד סטו מהאפיון בלי שנדע. ה-CLAUDE.md המחודש מבהיר: **המסמך מנצח את הקוד**. המסמך הזה הוא ה-source of truth לתיקונים שצריך לבצע לפני שנועה רואה את המערכת.
-> **עדכון v1.1:** SpecV2.1 פותר 7 מתוך 9 ה-Open Decisions שהיו ב-v1.0. ראה §4.
+> **עדכון v1.2:** כל 9 ה-Open Decisions סגורים. SpecV2.1 ענה על 8 מתוכם; F-14 (release_stale_locks) נסגר בהחלטת משתמש (להוריד מ-Spec). נוסף F-23 (defense in depth ל-sync_lead_next_action_cache).
 
 ---
 
@@ -212,37 +212,37 @@
 
 ---
 
-### F-10: `/tasks/stuck` קריטריון לא תואם לאפיון — 🟠 (Open Decision)
+### F-10: `/tasks/stuck` קריטריון לא תואם לאפיון — 🟠
 
 **Spec §22.7:** `GET /tasks/stuck` — "תקועים מ-7+ ימים".
 
-**Code:** `backend/app/services/tasks.py:list_stuck_tasks` — קריטריון: `Task.due_at <= now_utc` (כל overdue, ללא סף 7 ימים). הוחלף ב-bugbot iteration קודם כדי להתאים ל-stuck_count בדשבורד.
+**Spec §16.2 (v2.1):** הבחנה מפורשת בין שני המושגים:
+- "לא טופלו בזמן" (תובנה שבועית §13.9) — **כל ליד שעבר `next_action_due_at`**, אפילו יום אחד.
+- "ממתין לטיפול" (§22.7 `tasks/stuck`) — **רק לידים שתקועים 7+ ימים**.
 
-**Severity:** בינוני — שונה מהאפיון, אבל עקבי עם תובנות הדשבורד.
+**Code:** `backend/app/services/tasks.py:list_stuck_tasks` — קריטריון: `Task.due_at <= now_utc` (כל overdue, ללא סף 7 ימים).
 
-**Open decision:** **השאלה למשתמש:** איזה משני הקריטריונים נכון?
-- (א) Spec §22.7 = 7 ימים. /tasks/stuck יציג פחות items. תובנת "לא טופלו בזמן" צריכה להתאים — שינוי כפול.
-- (ב) `due_at <= now` (קיים). יש לתקן את §22.7 ב-Spec.
+**Severity:** בינוני — קריטריון שגוי, מציג רעש (overdue זמני) במקום lattes ימים.
 
-**Acceptance (תלוי):**
-- [ ] קריטריון אחיד בין `list_stuck_tasks` לבין `weekly_insights.stuck_count`.
-- [ ] Spec.md מתעדכן אם נבחרה אופציה ב.
+**Acceptance:**
+- [ ] `list_stuck_tasks`: `Task.due_at <= now_utc - 7 days`.
+- [ ] `weekly_insights.stuck_count` נשאר על כל overdue (תובנת §13.9 השבועית).
+- [ ] בדיקה: ליד שעבר את due_at לפני 3 ימים לא יופיע ב-`/tasks/stuck` אבל ייספר ב-stuck_count.
 
 ---
 
-### F-11: `ARCHIVED → IN_PROGRESS` reopen לא מוגדר — 🟡
+### F-11: `ARCHIVED → IN_PROGRESS` reopen — 🟢 הושלם
 
-**Spec §6.3:** "WON/LOST → IN_PROGRESS (`lead_reopened`, ידני)". **ARCHIVED לא מצוין** כסטטוס שניתן לפתוח מחדש.
+**Spec §6.3 + §27.5 (v2.1):** "ARCHIVED → IN_PROGRESS (`lead_reopened`, ידני)" + "ARCHIVED יכול לחזור ל-IN_PROGRESS".
 
-**Code:** `backend/app/services/leads.py:reopen_lead` — בדיקה אם תומך ב-ARCHIVED.
+**Code:** `backend/app/core/state_machine.py:174` — `REOPEN_ALLOWED_FROM = frozenset({WON, LOST, ARCHIVED})`. `backend/app/services/leads.py:408-444` — `reopen_lead` תומך בכל שלושת הסטטוסים.
 
-**Severity:** מינורי — קצה.
-
-**Open decision:** האם ARCHIVED לעולם סופי, או שניתן לפתוח מחדש?
+**Severity:** מינורי — תוקן/מומש בעבר.
 
 **Acceptance:**
-- [ ] התנהגות `reopen_lead` תואמת להחלטה.
-- [ ] Spec §6.3 מעודכן עם ההחלטה.
+- [x] `REOPEN_ALLOWED_FROM` כולל ARCHIVED.
+- [x] `reopen_lead` קורא לreset אטומי של closed_at/closed_value/actual_hours.
+- [x] Spec §6.3 + §27.5 כוללים את המעבר.
 
 ---
 
@@ -290,40 +290,35 @@
 
 ---
 
-### F-14: `release_stale_locks` לא קיים — 🟡 (Open Decision)
+### F-14: `release_stale_locks` — 🟢 closed-as-out-of-scope
 
-**Spec §23:** Cron `release_stale_locks` — "כל 10 דקות. שחרור משימות בסטטוס PROCESSING מעל timeout".
+**Spec §23 (v2.1):** Cron `release_stale_locks` — "כל 10 דקות. שחרור משימות בסטטוס PROCESSING מעל timeout".
 
 **Code:** אין קובץ `release_stale_locks.py` ב-`backend/jobs/`. אין `PROCESSING` כ-`TaskStatus` (יש OPEN/DONE/CANCELED/SNOOZED).
 
-**Severity:** מינורי — לא משפיע על פיצ'רים קיימים.
+**הכרעת משתמש:** "להוריד את זה לגמרי מה-Spec. במערכת חד-משתמש + cron jobs שרצים פעם אחת אין race ראלי שמצדיק את המנגנון". ראה גם F-22.
 
-**Open decision:** **השאלה למשתמש:** מה ה-job הזה אמור לעשות?
-- (א) פאזה 3 — לרעיון לכשנממש classification: tasks במצב "מעובד" שצריך לשחרר אם נתקעו.
-- (ב) מנגנון distributed locking לcrons (לא רלוונטי כי Render Cron Jobs רץ פעם בלבד).
-- (ג) Spec מטעה — להסיר מהקטלוג.
+**Severity:** accepted-deviation — לא ייושם.
 
-**Acceptance (תלוי):**
-- [ ] תוצאת ההחלטה: או קובץ job חדש + status חדש, או הסרת השורה מ-§23.
+**Acceptance:**
+- [x] לא נוצר קובץ `release_stale_locks.py`.
+- [x] לא נוסף ל-render.yaml.
+- [x] SpecV2.1 §23 מתעדכן בcommit הזה (השורה מוסרת מהטבלה) — ראה F-22.
 
 ---
 
-### F-15: `post_meeting_tasks` schedule — 🔴 (Open Decision)
+### F-15: `post_meeting_tasks` schedule — 🟢 הושלם
 
-**Spec §11.4 + §23:** "30 דקות אחרי סיום אירוע, הקפצת מסך מהיר" + cron כל 30 דקות.
+**Spec §11.4 + §23 (v2.1):** "30 דקות אחרי סיום אירוע" + cron כל 30 דקות.
 
-**Code:** `post_meeting_tasks.py` קיים. תיעוד שלנו (`docs/google-calendar-setup.md`) קובע ריצה יומית 02:00. ב-render.yaml זה לא מתוזמן בכלל (F-13).
+**Code:** `render.yaml` מתזמן `noa-post-meeting-tasks` ב-`*/30 * * * *` (תוקן ב-F-13). הקוד כבר כולל idempotency דרך `NOT EXISTS` per booking_id.
 
-**Severity:** קריטי — תלוי ב-decision של תדירות.
+**Severity:** קריטי — תוקן ב-F-13.
 
-**Open decision:** **השאלה למשתמש:** כל 30 דקות (Spec) או יומי (קיים)?
-- (א) 30 דקות: התראה כמעט מיידית אחרי פגישה. דורש schedule `*/30 * * * *` + `run_in_window` בקוד כדי לא ליצור tasks כפולים.
-- (ב) יומי 02:00: פשוט יותר. נועה רואה בבוקר את כל הפגישות מאתמול. אבל אם פגישה הסתיימה ב-08:00 — תזכורת תופיע רק יום אחר כך.
-
-**Acceptance (אופציה א):**
-- [ ] schedule משתנה ל-`*/30 * * * *`.
-- [ ] Idempotency: ה-job בודק שלא קיים task `post_meeting_update` פתוח לאותו booking (כבר קיים — `NOT EXISTS` ב-query).
-- [ ] חלון: רק bookings ש-`end_time + 30min <= now < end_time + 24h`.
+**Acceptance:**
+- [x] schedule = `*/30 * * * *` ב-render.yaml.
+- [x] Idempotency דרך bookings ללא task קיים.
+- [x] חלון: bookings ש-`end_time` בעבר (cron עצמו מחליט מה לעבד).
 
 **Acceptance (אופציה ב — Spec יתעדכן):**
 - [ ] שמירה על schedule יומי 02:00.
@@ -416,18 +411,38 @@
 
 ---
 
-### F-22: סתירה פנימית ב-SpecV2.1 — release_stale_locks לא רלוונטי — 🟢 (Spec cleanup)
+### F-22: SpecV2.1 §23 — release_stale_locks הוסר — 🟢 הושלם
 
-**Spec §23:** `release_stale_locks | כל 10 דקות | שחרור משימות בסטטוס PROCESSING מעל timeout`.
+**Spec §23 (לפני התיקון):** `release_stale_locks | כל 10 דקות | שחרור משימות בסטטוס PROCESSING מעל timeout`.
 
-**הכרעת המשתמש:** "להוריד את זה לגמרי מה-Spec. זה היה בקונטקסט של מנגנון נעילה למניעת race conditions ב-multi-channel publisher (פרויקט אחר), והוא חלחל לכאן בטעות."
+**הכרעת המשתמש:** "להוריד את זה לגמרי מה-Spec. במערכת חד-משתמש + cron jobs פנימיים אין race ראלי שמצדיק את המנגנון."
 
-**Severity:** accepted-deviation. לא לממש. SpecV2.1 צריך עדכון בעדכון הבא.
+**Severity:** accepted-deviation. spec עודכן.
 
 **Acceptance:**
-- [ ] לא ליצור `release_stale_locks.py`.
-- [ ] לא להוסיף ל-render.yaml.
-- [ ] (לא חובה במסמך, אבל מומלץ) SpecV2.1 §23 מסיר את השורה בעדכון הבא.
+- [x] לא נוצר `release_stale_locks.py`.
+- [x] לא נוסף ל-render.yaml.
+- [x] SpecV2.1 §23 הסיר את השורה (commit הזה).
+- [x] Changelog v2.1 כולל הערת הסרה.
+
+---
+
+### F-23: ליד סגור עלול לקבל `next_action_due_at` (פרצה בכלל §6.5) — 🟠
+
+**Spec §6.5 (v2.1):** "ליד סגור (WON/LOST/ARCHIVED): אין `next_action`".
+
+**Code:** `backend/app/services/tasks.py:114-151` — `sync_lead_next_action_cache` מעדכן `Lead.next_action_due_at` בכל קריאה ללא בדיקת `status`. אם task נוצר על ליד סגור (race / cron / chip לא תקין), הליד יקבל `next_action_due_at` חי בניגוד לאפיון.
+
+`close_lead` (services/leads.py:236+) **כן** מנקה את השדות *בזמן* הסגירה ומבטל משימות פתוחות — אבל אין defense in depth כש-sync רץ אחר כך מקוד אחר. הפרצה ריאלית בתרחיש: עוזרת סוגרת ליד באותה שנייה שנועה לוחצת chip עליו.
+
+**Severity:** בינוני — תרחיש race ספציפי אבל ה-side effect (ליד "סגור" שמופיע ב-pending) פוגע באמינות המודל.
+
+**Acceptance:**
+- [ ] `sync_lead_next_action_cache` מוסיף `AND status NOT IN CLOSED_LEAD_STATUSES` ל-WHERE של ה-UPDATE.
+- [ ] התנהגות: ליד סגור עם task פתוח (תרחיש race) — sync לא דורס את `next_action_due_at = NULL`, ולא זורק שגיאה.
+- [ ] `apply_chip` endpoint (חדש ב-F-01/F-05) דוחה ליד סגור עם 400 לפני יצירת task.
+
+**Fix sketch:** WHERE clause קטן ב-UPDATE; guard נוסף ב-apply_chip ברמת הAPI.
 
 ---
 
@@ -458,24 +473,19 @@
 
 ## 4. Open Decisions — סטטוס
 
-### ✅ נסגרו ב-SpecV2.1 (7)
+**כל ה-9 ה-Open Decisions נסגרו (8 ב-SpecV2.1 + 1 בהחלטת משתמש).**
 
-| # | Finding | סגירה ב-v2.1 |
+| # | Finding | סגירה |
 |---|---|---|
-| OD-1 | F-01 chips schema | §5.7 מוסיף `waiting_on` + `followup_task_type` + `auto_followup_days`. §16.4 מפרט per-chip. |
-| OD-2 | F-03 service_rates | §5.10 — טבלה חדשה, DB editable. |
-| OD-3 | F-07 Telegram daily_summary | Changelog: "daily_summary לא נשלח לטלגרם אלא מופיע בדשבורד". §16.3 מאשר Telegram רק לליד חדש. *(§23 נשאר עם טקסט ישן — ראה F-21)* |
-| OD-4 | F-08 followup triggers | §16.4 ממפה צ'יפים → followup types. §17.1 + §17.2 פירוט חישוב. |
-| OD-5 | F-09 ownership state 3 | §5.11 — enum value חדש `ASSISTANT_PENDING_NOAH`. |
-| OD-6 | F-10 stuck threshold | §16.2 הבחנה מפורשת: "לא טופלו בזמן" (תובנה שבועית, כל overdue) ≠ "ממתין לטיפול" (עמוד נפרד, 7+ ימים). |
-| OD-7 | F-11 ARCHIVED reopen | §27.5 acceptance: "ARCHIVED יכול לחזור ל-IN_PROGRESS". |
-| OD-9 | F-15 post_meeting timing | §11.4 + §23 — cron כל 30 דק'. |
-
-### ⏳ סגירות פתורות אבל לא דחופות
-
-| # | Finding | סטטוס |
-|---|---|---|
-| OD-8 | F-14 release_stale_locks | המשתמש: "להוריד את זה לגמרי מה-Spec". §23 בv2.1 *עדיין כולל אותו* — ראה F-22. |
+| OD-1 | F-01 chips schema | ✅ v2.1 §5.7 מוסיף `waiting_on` + `followup_task_type` + `auto_followup_days`. §16.4 מפרט per-chip. |
+| OD-2 | F-03 service_rates | ✅ v2.1 §5.10 — טבלה חדשה, DB editable. |
+| OD-3 | F-07 Telegram daily_summary | ✅ v2.1 Changelog: "daily_summary לא נשלח לטלגרם אלא מופיע בדשבורד". §16.3 מאשר Telegram רק לליד חדש. *(§23 נשאר עם טקסט ישן — ראה F-21)* |
+| OD-4 | F-08 followup triggers | ✅ v2.1 §16.4 ממפה צ'יפים → followup types. §17.1 + §17.2 פירוט חישוב. |
+| OD-5 | F-09 ownership state 3 | ✅ v2.1 §5.11 — enum value חדש `ASSISTANT_PENDING_NOAH`. |
+| OD-6 | F-10 stuck threshold | ✅ v2.1 §16.2 הבחנה מפורשת: "לא טופלו בזמן" (תובנה שבועית, כל overdue) ≠ "ממתין לטיפול" (עמוד נפרד, 7+ ימים). |
+| OD-7 | F-11 ARCHIVED reopen | ✅ v2.1 §6.3 + §27.5 acceptance: "ARCHIVED יכול לחזור ל-IN_PROGRESS". כבר מומש בקוד (`reopen_lead`). |
+| OD-8 | F-14 release_stale_locks | ✅ **החלטת משתמש:** להסיר מהspec. v2.1 §23 מתעדכן ב-commit הזה (ראה F-22). |
+| OD-9 | F-15 post_meeting timing | ✅ v2.1 §11.4 + §23 — cron כל 30 דק'. מומש ב-F-13. |
 
 ---
 
@@ -483,31 +493,32 @@
 
 ### Wave A — Critical pre-launch (1-2 ימים)
 
-תיקונים שצריכים להיות לפני שנועה רואה את המערכת בכלל. **כל ה-blockers נפתרו ב-SpecV2.1, אפשר להתחיל.**
+תיקונים שצריכים להיות לפני שנועה רואה את המערכת בכלל. **כל ה-blockers נפתרו ב-SpecV2.1.**
 
-1. **F-13** — הוספת 3 services ל-render.yaml (5 דקות).
-2. **F-04** — service_category אופציונלי (1 שעה — schema + migration + frontend).
-3. **F-06** — הסרת Telegram מ-booking request (10 דקות).
-4. **F-07** — daily_summary → דשבורד במקום Telegram (1-2 שעות — migration + service + UI bubble).
-5. **F-01 + F-05** — chips schema fix לפי §5.7 + seed correction לפי §16.4 (חצי יום).
-6. **F-17** — verify only (כבר נעשה).
+1. **F-13** — הוספת 3 services ל-render.yaml. ✅ הושלם.
+2. **F-04** — service_category אופציונלי. ✅ הושלם.
+3. **F-06** — הסרת Telegram מ-booking request. ✅ הושלם.
+4. **F-07** — daily_summary → דשבורד במקום Telegram. ✅ הושלם.
+5. **F-22** — הסרת `release_stale_locks` מ-SpecV2.1 §23. ✅ הושלם.
+6. **F-23** — guard ב-`sync_lead_next_action_cache` נגד דריסת next_action על ליד סגור. ⏳ commit הזה.
+7. **F-01 + F-05** — chips schema fix לפי §5.7 + seed correction לפי §16.4. ⏳ commit הזה.
+8. **F-17** — verify only (כבר נעשה).
 
 ### Wave B — Pre פאזה 3 (3-5 ימים)
 
 תיקונים חשובים שצריכים להיות לפני שמתחילים פאזה 3, אבל לא חוסמים שימוש בסיסי.
 
-7. **F-08** — 3 כללי פולואפ + integration. הטריגרים מוגדרים ב-§16.4 (chips) ו-§17.
-8. **F-09** — ownership state `ASSISTANT_PENDING_NOAH` לפי §5.11.
-9. **F-03 + F-12** — service_rates table לפי §5.10.
-10. **F-15** — post_meeting cron כל 30 דק' לפי §11.4 + §23.
+9. **F-08** — 3 כללי פולואפ + integration. ה-task types החדשים (`retry_call`, `send_proposal`, `warm_followup`, `lecture_inquiry`, `dormant_check`) נוספים ל-enum במסגרת F-01/F-05; ב-Wave B נוסיף את ה-cron jobs שיוצרים אותם.
+10. **F-09** — ownership state `ASSISTANT_PENDING_NOAH` לפי §5.11.
+11. **F-10** — stuck threshold = `due_at <= now - 7d` לפי §16.2 + §22.7.
+12. **F-03 + F-12** — service_rates table לפי §5.10.
 
 ### Wave C — Nice to have
 
-11. **F-11** — ARCHIVED reopen (תלוי ב-OD-7).
-12. **F-10** — stuck threshold aligned (תלוי ב-OD-6).
-13. **F-14** — release_stale_locks (תלוי ב-OD-8).
+13. **F-15** — verify only (post_meeting ✅ הושלם ב-F-13).
 14. **F-19** — סקילים חסרים (המשתמש יוסיף).
 15. **F-20** — /today UX direct actions.
+16. **F-21** — Spec cleanup של §23 (daily_summary לטלגרם → לדשבורד).
 
 ### Deferred (פאזה 3)
 
@@ -522,9 +533,9 @@
 
 ### איך נדע שהמסמך מוכן וטוב
 
-1. **כיסוי:** `grep -c "^### F-" docs/spec-deviations.md` מחזיר 22.
+1. **כיסוי:** `grep -c "^### F-" docs/spec-deviations.md` מחזיר 23.
 2. **Acceptance bullets:** לכל finding יש לפחות 2 acceptance bullets קונקרטיים.
-3. **Open decisions:** 9 שאלות פתוחות מצוטטות במפורש בסעיף 4.
+3. **Open decisions:** 9 ה-ODs סגורים (8 ב-v2.1 + 1 בהחלטת משתמש). אין יותר בלוקרים פתוחים.
 4. **Cross-link:** כל finding מצביע ל-Spec section ו-code path עם line numbers.
 5. **CLAUDE.md** מעודכן עם הפניה למסמך הזה.
 
@@ -559,3 +570,10 @@ psql $DATABASE_URL -c "SELECT label, target_status, auto_followup_days FROM quic
 ## Changelog
 
 - **v1.0 (מאי 2026):** מסמך ראשוני — 20 findings מ-audit מקיף של Spec.md (v2.0) מול הקוד אחרי פאזות 1+2+2.5.
+- **v1.1 (מאי 2026):** סנכרון מול SpecV2.1 (חלקי). הוספת F-21 + F-22.
+- **v1.2 (מאי 2026):** סיום audit מול SpecV2.1.
+  - כל 9 ה-ODs סגורים (8 ב-v2.1 + 1 בהחלטת משתמש על F-14).
+  - F-10/F-11/F-15 — סטטוס עודכן (הושלמו ב-iterations קודמים או ב-spec).
+  - F-14 — closed-as-out-of-scope; SpecV2.1 §23 מוסר את השורה.
+  - F-22 — הושלם (הסרת השורה מ-spec ב-commit הזה).
+  - F-23 חדש — defense in depth ב-`sync_lead_next_action_cache` כנגד דריסת `next_action_due_at` על ליד סגור.
