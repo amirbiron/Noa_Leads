@@ -2,7 +2,9 @@
 
 > **מטרה:** מסמך תכנון לפאזה האחרונה. **לא להתחיל מימוש לפני אישור.**
 >
-> **תלות:** פאזה 2.5 צריכה להסתיים קודם — היא מתקנת את הבסיס שעליו ה-AI יבנה.
+> **תלות:**
+> - פאזה 2.5 צריכה להסתיים קודם — היא מתקנת את הבסיס שעליו ה-AI יבנה.
+> - **לקרוא תחילה: [`phase-3-ai-token-management.md`](./phase-3-ai-token-management.md)** — מפרט פונקציית `clean_email_body_for_ai` והסינון לפני AI. חובה לפני כל קוד שמעביר תוכן ל-AI (מנע את באג ה-10K טוקנים של EmailFlow).
 
 ---
 
@@ -120,9 +122,11 @@
 
 **עיקרון:** כל פונקציה מקבלת dict פשוט ומחזירה Result מוגדר (Pydantic). הכוונה: לעטוף את ה-API מאחורי abstraction יציב.
 
+**ניקוי תוכן + token cap:** כל פונקציה שמקבלת תוכן מייל גולמי **חייבת** להעביר אותו דרך `clean_email_body_for_ai(body, purpose)` לפני קריאה ל-Anthropic. ראה `docs/phase-3-ai-token-management.md` למפרט מלא (תקרות per-purpose, שלבי ניקוי HTML, retry policy, סינון לפני AI). זה נון-נגוציאבל — באג שקרה ב-EmailFlow ולא נחזור עליו.
+
 **Error handling:**
 - Timeout → fallback definido (לסינון: treat as business; לסיכום: stats-only).
-- Rate limit → retry עם exponential backoff (max 3 פעמים).
+- Rate limit → retry עם exponential backoff (max 3 פעמים) — מפורט ב-`phase-3-ai-token-management.md` §retry.
 - שגיאת מפתח → log + fallback. *אסור* שהאפליקציה תפול בגלל AI.
 
 **Skill קיים:** `docs/Skills/hebrew-llm-eval-suite/` — לקרוא לפני בחירת מודל ל-prompts.
@@ -153,8 +157,10 @@
 
 1. service חדש `ai.py` עם wrapper סביב Anthropic SDK.
 2. config: `anthropic_api_key` (קיים ב-config).
-3. כתיבת prompts ב-prompts/ folder עם versioning.
-4. error handling, retries, timeout.
+3. **`clean_email_body_for_ai(body, purpose)`** ב-`app/utils/email_clean.py` לפי המפרט ב-`docs/phase-3-ai-token-management.md`. בלי זה — לא ממשיכים לשלב 17.
+4. כתיבת prompts ב-prompts/ folder עם versioning.
+5. error handling, retries (exponential backoff), timeout.
+6. לוגינג עלות per-call (לפי `phase-3-ai-token-management.md` §מדידה).
 
 ### שלב 17 — Gmail OAuth + watch
 

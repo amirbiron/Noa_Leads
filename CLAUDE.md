@@ -65,6 +65,8 @@
 | `docs/progress.md` | **קודם כל** בתחילת כל סשן חדש (אחרי compacting). מסכם מה נבנה, איפה אנחנו, מה הצעדים הפתוחים, וההחלטות הארכיטקטוניות. |
 | `docs/references/google-calendar-blueprint.md` | בעת מימוש פאזה 2 (Google Calendar). מכסה OAuth flow + PKCE, הצפנת tokens, FreeBusy API, watch channels + syncToken, `bookingId=` anchor לסנכרון דו-כיווני, וטיפול ב-RefreshError. **שים לב:** הפרויקט המקורי משתמש ב-Telegram/WhatsApp bots לקביעת תור, אצלנו זה דף ווב — קח רק את חלקי ה-Google integration. |
 | `docs/google-calendar-setup.md` | לקראת deploy של פאזה 2 — מדריך setup ב-Google Cloud Console (יצירת project, Calendar API, OAuth client) + רשימת env vars שצריך להגדיר ב-Render. **הקובץ הזה מיועד לאדיר** (המתאם), לא לקוד. |
+| `docs/phase-3-plan.md` | תכנון פאזה 3 (Gmail + AI). 4 חבילות עבודה, עלויות צפויות, שלבי מימוש 16-20, החלטות פתוחות. **לקרוא לפני התחלת פאזה 3.** |
+| `docs/phase-3-ai-token-management.md` | **חובה לפני כל קוד בפאזה 3 שמעביר תוכן ל-AI** — מפרט פונקציית `clean_email_body_for_ai` (תקרות תווים per-purpose, שלבי ניקוי HTML, retry, סינון לפני AI). לקח מ-EmailFlow: HTML גולמי → 10K טוקנים במקום 1.5K → 429 + לידים חסומים. |
 
 **עקרון:** אם הוספת בקוד דפוס שמופיע ב-references, ציין בקומנט קצר
 `# ראה: docs/references/<file>.md סעיף N` כדי שמי שיקרא ידע מנין המקור.

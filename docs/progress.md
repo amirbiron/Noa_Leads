@@ -35,12 +35,15 @@
 
 | מסמך | תפקיד |
 |---|---|
-| `CLAUDE.md` | כללי עבודה (7 כללים), הפניות לסקילים ול-references |
+| `CLAUDE.md` | כללי עבודה (11 כללים), הפניות לסקילים ול-references |
 | `docs/product-spec.md` | האפיון של נועה — מקור האמת לדרישות |
 | `docs/tech-spec.md` | החלטות ארכיטקטוניות + מבנה DB ראשוני |
 | `docs/skills-review-plan.md` | סטטוס: כל ה-6 פריטים שזוהו ✅ הושלמו |
 | `docs/google-calendar-setup.md` | מדריך לאדיר (המתאם) — GCP setup ל-פאזה 2 |
 | `docs/references/google-calendar-blueprint.md` | blueprint חיצוני שאצלנו רק נשאב ממנו |
+| `docs/phase-2.5-plan.md` | תכנון פאזה 2.5 — ✅ הושלמה |
+| `docs/phase-3-plan.md` | תכנון פאזה 3 — Gmail + AI |
+| `docs/phase-3-ai-token-management.md` | **חובה לפני פאזה 3** — מפרט `clean_email_body_for_ai`, retry, סינון לפני AI. לקח מ-EmailFlow |
 
 ---
 
