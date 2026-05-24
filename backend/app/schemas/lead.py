@@ -108,7 +108,6 @@ class LeadUpdate(BaseModel):
 
     @field_validator(
         "full_name",
-        "service_category",
         "waiting_on",
         "priority_level",
         "preferred_contact",
@@ -118,6 +117,7 @@ class LeadUpdate(BaseModel):
         # שדות NOT NULL ב-DB. ב-PATCH מותר להשמיט אותם (הם נשארים), אבל
         # אסור לשלוח null מפורש — זה היה גורם ל-IntegrityError ב-commit
         # במקום שגיאת ולידציה ברורה.
+        # service_category הוצא מהרשימה ב-F-04 — הוא NULLABLE עכשיו.
         if v is None:
             raise ValueError("שדה חובה — לא ניתן לאפס. אפשר להשמיט מה-payload.")
         return v

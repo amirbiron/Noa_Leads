@@ -617,8 +617,10 @@ async def create_booking_request(
     await db.commit()
 
     # לא שולחים Telegram על בקשת תור — לפי Spec §16.3:
-    # "הדבר היחיד שמקבל פוש מיידי הוא ליד חדש שנכנס". בקשת תור מליד
-    # קיים תופיע בדשבורד דרך next_action_due_at + מצב BOOKING_PENDING.
+    # "הדבר היחיד שמקבל פוש מיידי הוא ליד חדש שנכנס".
+    # ה-surfacing בדשבורד נעשה דרך get_pending: כל ליד ב-BOOKING_PENDING
+    # נכלל ברשימת "ממתין לטיפול" כדי שלא ייפול בין הכיסאות. בנוסף
+    # PendingBookingCard מציג את הבקשה בעמוד הליד עצמו.
     # (F-06 ב-docs/spec-deviations.md)
 
     return CreateBookingResponse(

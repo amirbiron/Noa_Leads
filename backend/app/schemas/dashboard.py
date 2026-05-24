@@ -52,7 +52,7 @@ class TodayActionItem(BaseModel):
     state_color: str
     priority_level: str
     preferred_contact: str
-    service_category: str
+    service_category: str | None  # אופציונלי לפי Spec §7.1 (F-04)
 
 
 # ===== הצעות פתוחות =====
@@ -72,7 +72,7 @@ class ProfitableServiceInsight(BaseModel):
     הגבוה ביותר השבוע (לפי עסקאות WON שנסגרו).
     """
 
-    service_category: str
+    service_category: str | None  # אופציונלי לפי Spec §7.1 (F-04)
     hourly_rate: Decimal
     total_revenue: Decimal
     total_hours: Decimal

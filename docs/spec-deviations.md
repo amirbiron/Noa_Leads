@@ -522,7 +522,7 @@
 
 ### איך נדע שהמסמך מוכן וטוב
 
-1. **כיסוי:** `grep -c "^### F-" docs/spec-deviations.md` מחזיר 20.
+1. **כיסוי:** `grep -c "^### F-" docs/spec-deviations.md` מחזיר 22.
 2. **Acceptance bullets:** לכל finding יש לפחות 2 acceptance bullets קונקרטיים.
 3. **Open decisions:** 9 שאלות פתוחות מצוטטות במפורש בסעיף 4.
 4. **Cross-link:** כל finding מצביע ל-Spec section ו-code path עם line numbers.

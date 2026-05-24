@@ -54,15 +54,20 @@ async def notify_new_lead(lead: Lead) -> None:
     משתמש ב-escape_telegram_html (כלל 6) על כל נתון מהמשתמש.
     """
     name = escape_telegram_html(lead.full_name)
-    category = SERVICE_CATEGORY_HE.get(
-        lead.service_category, lead.service_category
+    # F-04: service_category אופציונלי. ב-intake/email או manual ייתכן None —
+    # במקרה כזה מדלגים על שורת הקטגוריה במקום להעביר None ל-escape (TypeError).
+    category = (
+        SERVICE_CATEGORY_HE.get(lead.service_category, lead.service_category)
+        if lead.service_category
+        else None
     )
     source = SOURCE_CHANNEL_HE.get(lead.source_channel, lead.source_channel)
 
     lines = ["🔔 <b>ליד חדש</b>", f"<b>{name}</b>"]
     if lead.organization_name:
         lines[-1] += f" — {escape_telegram_html(lead.organization_name)}"
-    lines.append(f"📋 {escape_telegram_html(category)}")
+    if category:
+        lines.append(f"📋 {escape_telegram_html(category)}")
     if lead.phone:
         lines.append(f"📞 {escape_telegram_html(lead.phone)}")
     if lead.source_detail:

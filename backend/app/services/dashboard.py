@@ -279,7 +279,10 @@ async def get_pending(
     """
     לידים פתוחים שדורשים תשומת לב:
     - needs_attention=True (התראה שלא טופלה),
-    - או פולואפ שעבר מועדו ועוד לא נסגר.
+    - או פולואפ שעבר מועדו ועוד לא נסגר,
+    - או בקשת תור שמחכה לאישור (BOOKING_PENDING — F-06): אחרי שהסרנו את
+      ה-Telegram על בקשת תור (לפי Spec §16.3), הדשבורד הוא הערוץ היחיד
+      שבו נועה רואה את הבקשה. כל ליד ב-BOOKING_PENDING ממתין לפעולה שלה.
     """
     now_utc = datetime.now(timezone.utc)
     stmt = (
@@ -292,6 +295,7 @@ async def get_pending(
                     Lead.next_action_due_at.is_not(None),
                     Lead.next_action_due_at <= now_utc,
                 ),
+                Lead.status == LeadStatus.BOOKING_PENDING.value,
             ),
         )
         .order_by(*_dashboard_order(now_utc))
