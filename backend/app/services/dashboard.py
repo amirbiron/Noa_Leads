@@ -176,6 +176,17 @@ async def get_today_actions(db: AsyncSession) -> list[TodayActionItem]:
     end_today_exclusive = _start_of_tomorrow_israel(now_utc)
     closed = [s.value for s in CLOSED_LEAD_STATUSES]
 
+    # ביטוי is_overdue per-type — אותה לוגיקה כמו _calc_is_overdue ב-Python
+    # אבל ב-SQL כדי שגם המיון יכבד את ה-grace. אחרת FIRST_RESPONSE עם
+    # due_at=now היה קופץ לראש מיד, גם כשה-badge עוד לא דולק.
+    is_overdue_expr = case(
+        (
+            Task.type == TaskType.FIRST_RESPONSE.value,
+            Task.created_at + timedelta(hours=24) <= now_utc,
+        ),
+        else_=Task.due_at <= now_utc,
+    )
+
     stmt = (
         select(Task, Lead)
         .join(Lead, Task.lead_id == Lead.id)
@@ -192,9 +203,9 @@ async def get_today_actions(db: AsyncSession) -> list[TodayActionItem]:
             # tasks פתוחים שלהם, אבל אם משהו פספס (race / cron) זה תופס.
             Lead.status.notin_(closed),
         )
-        # מיון: overdue קודם, אדום קודם, ואז לפי due_at
+        # מיון: overdue קודם (לפי הביטוי per-type), אדום קודם, ואז לפי due_at
         .order_by(
-            (Task.due_at <= now_utc).desc(),
+            is_overdue_expr.desc(),
             Lead.needs_attention.desc(),
             case(
                 (Lead.priority_level.in_(["hot", "vip"]), 0),
@@ -235,7 +246,13 @@ _OVERDUE_GRACE: dict[str, timedelta] = {
 
 
 def _calc_is_overdue(task, now_utc: datetime) -> bool:
-    """is_overdue with per-type grace from task.created_at."""
+    """
+    מחשב is_overdue עם grace per-type. ל-FIRST_RESPONSE: 24h מ-task.created_at
+    (לפי האפיון). לשאר ה-types: due_at <= now כרגיל.
+
+    הלוגיקה הזו משוכפלת ב-SQL ב-get_today_actions (is_overdue_expr) כדי
+    שגם המיון יכבד את ה-grace — אחרת המשימה תקפוץ לראש לפני שה-badge דולק.
+    """
     grace = _OVERDUE_GRACE.get(task.type)
     if grace is not None:
         return task.created_at + grace <= now_utc

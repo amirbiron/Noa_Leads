@@ -112,14 +112,20 @@ async def create_first_response_task(
 
 def _due_at_for_first_response(now: datetime) -> datetime:
     """
-    due_at של FIRST_RESPONSE = now (מיידי).
+    due_at של FIRST_RESPONSE.
+    - בשעות עבודה: now → מופיע מיד ב-/today.
+    - מחוץ לשעות עבודה (לילה/שבת/חג): תחילת יום העבודה הבא → לא מופיע
+      ב-/today עד הבוקר. מתאים להתנהגות "מענה אחרי שעות" — נועה רואה
+      את המשימה כשהיא חוזרת לעבוד.
 
-    כדי שה-task יופיע ב-/today מיד (הdashboard מסנן due_at < סוף היום).
-    האפיון מבקש "מינימום 24 שעות לפני שמתריעים" — מימוש זה דרך
-    is_overdue per-type ב-dashboard, לא דרך due_at: ה-badge "באיחור"
-    מקבל true רק אחרי 24h מ-created_at של ה-task. ראה dashboard._is_overdue.
+    הbadge "באיחור" נשלט בנפרד ב-dashboard._calc_is_overdue עם grace
+    של 24h מ-created_at, כדי שתזכורת לא תקפוץ על ליד בן שעה.
     """
-    return now
+    from app.utils.work_hours import is_working_time  # avoid circular at import
+
+    if is_working_time(now):
+        return now
+    return next_working_day_start(now).astimezone(timezone.utc)
 
 
 # ===================== Snooze =====================
