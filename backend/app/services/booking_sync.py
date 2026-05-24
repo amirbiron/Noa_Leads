@@ -68,6 +68,13 @@ async def apply_calendar_changes(
                 change.booking_id,
                 change.event_id,
             )
+            # rollback קריטי — אחרת ה-session נשאר במצב transaction
+            # פתוח/שגוי, וה-change הבא בלולאה ייכשל גם הוא (או יקבל
+            # שגיאת PendingRollbackError). השגיאה הראשונית כבר מתועדת.
+            try:
+                await db.rollback()
+            except Exception:
+                logger.exception("rollback failed after apply error")
             stats["errors"] += 1
 
     return stats

@@ -188,6 +188,14 @@ async def exchange_code_and_save(
     # שליפת פרטי החשבון — primary calendar.id == האימייל של המשתמש
     email, calendar_tz = await asyncio.to_thread(_fetch_account_info, creds)
 
+    # אם יש שורת credentials ישנה עם watch פעיל — לעצור אותו אצל Google
+    # לפני המחיקה. אחרת ה-channel ישאר orphan ויתפוגג רק אחרי כשבוע.
+    # stop_watch כבר עמיד לכשלי auth (creds ישנים) — נספגים בשקט.
+    try:
+        await stop_watch(db)
+    except Exception:
+        logger.exception("Failed to stop watch during reconnect (continuing)")
+
     # שמירה ל-DB (upsert: delete + insert, פשוט יותר מ-ON CONFLICT עם CHECK)
     await db.execute(
         delete(GoogleCalendarCredentials).where(
@@ -720,16 +728,25 @@ class CalendarChange:
         self.end = end
 
 
-async def sync_changes(db: AsyncSession) -> list[CalendarChange]:
+async def sync_changes(
+    db: AsyncSession,
+) -> tuple[list[CalendarChange], str | None]:
     """
-    מביא deltas מ-events.list עם sync_token, מחזיר רשימת שינויים שנוגעים
-    ל-bookings שלנו (לפי extendedProperties.private.bookingId שאנחנו כותבים
-    ביצירת אירוע).
+    מביא deltas מ-events.list עם sync_token, ומחזיר (changes, next_token).
+    *אינו* persists את ה-token — האחריות על הקורא (webhook) לקרוא ל-
+    persist_sync_token רק *אחרי* ש-apply_calendar_changes הצליח.
+
+    אחרת: אם פירשנו events ועדכנו token, ואז apply נכשל — אותם events
+    לא יוחזרו שוב ע"י Google והמצב יישאר שגוי לתמיד.
 
     מבצע SELECT FOR UPDATE על שורת ה-credentials כדי לסדר ריצות מקבילות
-    (שני webhooks בו-זמנית יקבלו 410 אם משתמשים באותו syncToken).
+    (שני webhooks בו-זמנית יקבלו 410 אם משתמשים באותו syncToken). הנעילה
+    משוחררת ע"י rollback בסוף — לא commit, כדי לא לpersist את ה-token.
 
-    410 GONE → wipe sync_token, מבצע full re-sync.
+    יוצא מן הכלל: 410 GONE → ה-token הישן מת ואין דרך להחיותו, אז
+    persist מיידי של ה-token החדש (אחרת המצב הזה ייתקע לנצח). מחזיר
+    ([], new_token) כי בfull re-sync כל האירועים חוזרים והקורא לא אמור
+    להחיל אותם (idempotency כן עובדת, אבל זה רעש מיותר).
     """
     creds = await get_credentials_or_404(db)
 
@@ -751,14 +768,13 @@ async def sync_changes(db: AsyncSession) -> list[CalendarChange]:
         )
     except HttpError as e:
         if e.resp.status == 410:
-            # syncToken פג — full re-sync. מנקים ומחזירים רשימה ריקה
-            # (full sync מחזיר את כל האירועים — לא רוצים להחיל הכול בבת אחת).
             logger.warning("syncToken expired (410), resetting to full sync")
             locked.sync_token = None
             new_token = await asyncio.to_thread(_initial_sync_token_blocking, creds)
             locked.sync_token = new_token
-            await db.commit()
-            return []
+            await db.commit()  # safe: old token dead, חייב persist מיידי
+            return ([], new_token)
+        await db.rollback()
         raise
 
     changes: list[CalendarChange] = []
@@ -790,9 +806,25 @@ async def sync_changes(db: AsyncSession) -> list[CalendarChange]:
             )
         )
 
-    locked.sync_token = next_token
+    # rollback (לא commit) — משחרר FOR UPDATE lock בלי לpersist את ה-token.
+    # הקורא חייב לקרוא ל-persist_sync_token אחרי apply מוצלח.
+    await db.rollback()
+    return (changes, next_token)
+
+
+async def persist_sync_token(
+    db: AsyncSession, token: str | None
+) -> None:
+    """
+    persists את ה-sync_token החדש. נקרא ע"י webhook אחרי apply_calendar_changes
+    מוצלח (errors==0). מדלג בשקט אם השורה לא קיימת (מתנתק רץ במקביל).
+    """
+    await db.execute(
+        update(GoogleCalendarCredentials)
+        .where(GoogleCalendarCredentials.id == _SINGLETON_ID)
+        .values(sync_token=token)
+    )
     await db.commit()
-    return changes
 
 
 def _list_events_blocking(
