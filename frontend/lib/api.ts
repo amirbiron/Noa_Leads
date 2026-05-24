@@ -23,6 +23,7 @@ import type {
   ProgramUpdate,
   ProgramWithLead,
   ServiceRate,
+  StuckTaskItem,
   Template,
   TemplateCreate,
   TemplateRenderResponse,
@@ -212,6 +213,8 @@ export const api = {
 
   // ----- Tasks -----
   listOpenTasks: () => fetcher<Task[]>("/tasks/open"),
+
+  listStuckTasks: () => fetcher<StuckTaskItem[]>("/tasks/stuck"),
 
   snoozeTask: (taskId: string, preset: SnoozePreset, customUntil?: string) =>
     fetcher<Task>(`/tasks/${taskId}/snooze`, {

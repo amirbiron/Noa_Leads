@@ -333,3 +333,38 @@ async def _get_task_or_404(db: AsyncSession, task_id: UUID) -> Task:
     if task is None:
         raise NotFoundError("משימה לא נמצאה.")
     return task
+
+
+STUCK_THRESHOLD_DAYS = 7
+
+
+async def list_stuck_tasks(
+    db: AsyncSession, *, threshold_days: int = STUCK_THRESHOLD_DAYS
+) -> list[tuple[Task, Lead]]:
+    """
+    "ממתין לטיפול" — משימות פתוחות/דחויות שעבר זמן יעדן + threshold_days
+    ימים. לפי האפיון יב סעיף 477: "אם לא טופל אחרי כל ההתראות → עובר
+    לעמוד נפרד 'ממתין לטיפול'".
+
+    מסונן ללידים פתוחים (לא לכלול WON/LOST/ARCHIVED — close_lead כבר
+    מבטל את ה-tasks שלהם, אבל defense in depth).
+
+    מיון לפי due_at עולה (ישנים קודם) — לפי האפיון "מיון לפי וותק".
+    """
+    from app.constants import CLOSED_LEAD_STATUSES
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=threshold_days)
+    stmt = (
+        select(Task, Lead)
+        .join(Lead, Task.lead_id == Lead.id)
+        .where(
+            Task.status.in_(
+                [TaskStatus.OPEN.value, TaskStatus.SNOOZED.value]
+            ),
+            Task.due_at < cutoff,
+            Lead.status.notin_([s.value for s in CLOSED_LEAD_STATUSES]),
+        )
+        .order_by(Task.due_at.asc())
+    )
+    rows = (await db.execute(stmt)).all()
+    return [(task, lead) for task, lead in rows]

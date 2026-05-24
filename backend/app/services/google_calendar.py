@@ -457,6 +457,10 @@ def _create_event_blocking(
             "dateTime": end.isoformat(),
             "timeZone": "Asia/Jerusalem",
         },
+        # 🟣 צבע "לקוחות" לפי האפיון יב, סעיף 220. Google colorId="3"
+        # = Grape (סגול). שאר הקטגוריות (סדנאות/הכנה/ניהול/אישי/חסום)
+        # נועה מנהלת בעצמה ביומן — אנחנו יוצרים רק אירועי לקוחות.
+        "colorId": "3",
         "extendedProperties": {
             "private": {"bookingId": str(booking_id)},
         },

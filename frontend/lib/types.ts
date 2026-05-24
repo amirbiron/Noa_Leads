@@ -228,6 +228,18 @@ export interface ProposalCard extends LeadCard {
   days_since_proposal: number | null;
 }
 
+export interface StuckTaskItem {
+  task_id: string;
+  task_type: string;
+  due_at: string;
+  days_stuck: number;
+  lead_id: string;
+  lead_name: string;
+  lead_status: string;
+  service_category: string;
+  waiting_on: string;
+}
+
 export interface TodayActionItem {
   task_id: string;
   lead_id: string;

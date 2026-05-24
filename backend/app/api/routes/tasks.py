@@ -1,14 +1,14 @@
 """
-Tasks routes — רשימה, snooze, complete.
+Tasks routes — רשימה, snooze, complete, stuck.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Query
 
 from app.api.deps import CurrentUser, DbSession
-from app.schemas.task import SnoozeRequest, TaskRead
+from app.schemas.task import SnoozeRequest, StuckTaskItem, TaskRead
 from app.services import tasks as tasks_service
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -25,6 +25,29 @@ async def list_open_tasks(
         db, assigned_to=assigned_to, due_before=due_before
     )
     return [TaskRead.model_validate(t) for t in items]
+
+
+@router.get("/stuck", response_model=list[StuckTaskItem])
+async def list_stuck_tasks(
+    db: DbSession, _user: CurrentUser
+) -> list[StuckTaskItem]:
+    """משימות תקועות (לא טופלו 7+ ימים) — לעמוד 'ממתין לטיפול'."""
+    rows = await tasks_service.list_stuck_tasks(db)
+    now = datetime.now(timezone.utc)
+    return [
+        StuckTaskItem(
+            task_id=task.id,
+            task_type=task.type,
+            due_at=task.due_at,
+            days_stuck=(now - task.due_at).days,
+            lead_id=lead.id,
+            lead_name=lead.full_name,
+            lead_status=lead.status,
+            service_category=lead.service_category,
+            waiting_on=lead.waiting_on,
+        )
+        for task, lead in rows
+    ]
 
 
 @router.post("/{task_id}/snooze", response_model=TaskRead)
