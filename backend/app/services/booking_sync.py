@@ -186,11 +186,17 @@ async def _apply_reschedule(
         return "skipped"
 
     # שמירה של הזמן הישן ל-activity לוג לפני ה-UPDATE
-    old_start_iso = booking.requested_slot_start.isoformat()
-    old_end_iso = booking.requested_slot_end.isoformat()
+    old_start = booking.requested_slot_start
+    old_end = booking.requested_slot_end
+    old_start_iso = old_start.isoformat()
+    old_end_iso = old_end.isoformat()
     booking_lead_id = booking.lead_id  # cache למקרה של exception
 
-    # WHERE כולל סטטוסים פעילים בלבד — אם booking נסגר בinternal race, לא דורסים.
+    # WHERE כולל סטטוסים פעילים *וגם* הערכים הישנים של start/end —
+    # optimistic locking. אם webhook מקביל הקדים אותנו ושינה את ה-slot,
+    # ה-UPDATE שלנו לא ימצא שורה (rowcount=0) ונחזיר "skipped" בלי
+    # לרשום activity כפול. דפוס שמחליף "להחזיק FOR UPDATE על פני apply"
+    # בלי לדרוש single-transaction.
     try:
         update_result = await db.execute(
             update(Booking)
@@ -203,6 +209,8 @@ async def _apply_reschedule(
                         BookingStatus.APPROVED.value,
                     ]
                 ),
+                Booking.requested_slot_start == old_start,
+                Booking.requested_slot_end == old_end,
             )
             .values(requested_slot_start=new_start, requested_slot_end=new_end)
         )

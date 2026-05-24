@@ -97,7 +97,9 @@ async def _run_sync_in_new_session() -> None:
     """
     async with AsyncSessionLocal() as session:
         try:
-            changes, next_token = await gc_service.sync_changes(session)
+            changes, next_token, old_token = await gc_service.sync_changes(
+                session
+            )
 
             if changes:
                 stats = await booking_sync.apply_calendar_changes(
@@ -111,7 +113,17 @@ async def _run_sync_in_new_session() -> None:
                 error_count = 0
 
             if error_count == 0:
-                await gc_service.persist_sync_token(session, next_token)
+                # CAS: persists רק אם sync_token עוד == old_token. אם
+                # webhook מקביל הקדים — persisted=False, רושמים בלוג
+                # ולא דורסים cursor חדש יותר.
+                persisted = await gc_service.persist_sync_token(
+                    session, next_token, old_token
+                )
+                if not persisted:
+                    logger.info(
+                        "sync_token already advanced by parallel webhook — "
+                        "our apply was idempotent (no data lost)"
+                    )
             else:
                 # ה-token לא מתקדם — הwebhook הבא יקבל את אותם האירועים שוב.
                 # אם השגיאה קבועה (event פגום), זה ייתקע. אופרטור צריך

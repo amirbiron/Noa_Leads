@@ -730,56 +730,52 @@ class CalendarChange:
 
 async def sync_changes(
     db: AsyncSession,
-) -> tuple[list[CalendarChange], str | None]:
+) -> tuple[list[CalendarChange], str | None, str | None]:
     """
-    מביא deltas מ-events.list עם sync_token, ומחזיר (changes, next_token).
-    *אינו* persists את ה-token — האחריות על הקורא (webhook) לקרוא ל-
-    persist_sync_token רק *אחרי* ש-apply_calendar_changes הצליח.
+    מביא deltas מ-events.list עם sync_token, ומחזיר (changes, next_token, old_token).
+    *אינו* persists את ה-token, *אינו* תופס lock — race correctness מושג ע"י:
+    - CAS ב-persist_sync_token: WHERE על old_token, רק writer ראשון מקדם.
+    - optimistic locking ב-_apply_reschedule: WHERE על start/end הקיימים.
+    - _apply_cancellation אינדמפוטנטי דרך WHERE על status פעיל.
 
-    אחרת: אם פירשנו events ועדכנו token, ואז apply נכשל — אותם events
-    לא יוחזרו שוב ע"י Google והמצב יישאר שגוי לתמיד.
+    כלומר: שני webhooks מקבילים יכולים לעבד אותם deltas, אבל ה-second
+    תמיד יזהה שלא נשאר לו מה לעדכן (rowcount=0 בכל UPDATE) ולא ירשום
+    activities כפולים. ה-CAS על ה-token מבטיח שלא נדרוס cursor חדש
+    יותר בערך ישן.
 
-    מבצע SELECT FOR UPDATE על שורת ה-credentials כדי לסדר ריצות מקבילות
-    (שני webhooks בו-זמנית יקבלו 410 אם משתמשים באותו syncToken). הנעילה
-    משוחררת ע"י rollback בסוף — לא commit, כדי לא לpersist את ה-token.
+    הגישה הזו פשוטה יותר מ"הgולdtag lock על פני apply" (שדורש single-tx
+    apply + savepoints). ראה: docs/references/google-calendar-blueprint.md
+    סעיף 6 — אצלנו ה-bookingId ב-extendedProperties.private (לא בdesc).
 
-    יוצא מן הכלל: 410 GONE → ה-token הישן מת ואין דרך להחיותו, אז
-    persist מיידי של ה-token החדש (אחרת המצב הזה ייתקע לנצח). מחזיר
-    ([], new_token) כי בfull re-sync כל האירועים חוזרים והקורא לא אמור
-    להחיל אותם (idempotency כן עובדת, אבל זה רעש מיותר).
+    יוצא מן הכלל: 410 GONE → ה-token הישן מת. עושים full re-sync,
+    מחזירים ([], new_full_token, old_token). הקורא יעשה CAS אם DB עוד
+    מחזיק את old_token.
     """
     creds = await get_credentials_or_404(db)
-
-    # נעילה לפי שורת ה-credentials — מסדרת syncs מקבילים
-    locked = (
-        await db.execute(
-            select(GoogleCalendarCredentials)
-            .where(GoogleCalendarCredentials.id == _SINGLETON_ID)
-            .with_for_update()
-        )
-    ).scalar_one_or_none()
-    if locked is None:
+    row = await _load_row(db)
+    if row is None:
         raise GoogleNotConnectedError()
 
-    sync_token = locked.sync_token
+    old_token = row.sync_token
     try:
         events, next_token = await asyncio.to_thread(
-            _list_events_blocking, creds, sync_token
+            _list_events_blocking, creds, old_token
         )
     except HttpError as e:
         if e.resp.status == 410:
             logger.warning("syncToken expired (410), resetting to full sync")
-            locked.sync_token = None
-            new_token = await asyncio.to_thread(_initial_sync_token_blocking, creds)
-            locked.sync_token = new_token
-            await db.commit()  # safe: old token dead, חייב persist מיידי
-            return ([], new_token)
-        await db.rollback()
+            new_token = await asyncio.to_thread(
+                _initial_sync_token_blocking, creds
+            )
+            return ([], new_token, old_token)
         raise
 
     changes: list[CalendarChange] = []
     for ev in events:
-        # רק אירועים שלנו — מזוהים ע"י bookingId ב-extendedProperties.private
+        # רק אירועים שלנו — מזוהים ע"י bookingId ב-extendedProperties.private.
+        # ראה: docs/references/google-calendar-blueprint.md סעיף 6 (המקור
+        # מאחסן את העוגן ב-description; אצלנו ב-extendedProperties — יציב
+        # יותר ל-parsing, לא נשבר אם נועה תערוך description ידנית).
         booking_id_str = (
             ev.get("extendedProperties", {})
             .get("private", {})
@@ -806,25 +802,37 @@ async def sync_changes(
             )
         )
 
-    # rollback (לא commit) — משחרר FOR UPDATE lock בלי לpersist את ה-token.
-    # הקורא חייב לקרוא ל-persist_sync_token אחרי apply מוצלח.
-    await db.rollback()
-    return (changes, next_token)
+    return (changes, next_token, old_token)
 
 
 async def persist_sync_token(
-    db: AsyncSession, token: str | None
-) -> None:
+    db: AsyncSession,
+    new_token: str | None,
+    expected_old: str | None,
+) -> bool:
     """
-    persists את ה-sync_token החדש. נקרא ע"י webhook אחרי apply_calendar_changes
-    מוצלח (errors==0). מדלג בשקט אם השורה לא קיימת (מתנתק רץ במקביל).
+    Compare-and-swap על sync_token: persists רק אם הערך הנוכחי תואם
+    expected_old. מחזיר True אם הקדמנו, False אם webhook מקביל כבר
+    הקדים אותנו.
+
+    apply שלנו הוא idempotent (optimistic locking ב-_apply_reschedule
+    ו-WHERE על status פעיל ב-_apply_cancellation), אז False כאן פירושו
+    "עבדנו ללא הצורך" — לא איבוד נתונים.
     """
-    await db.execute(
-        update(GoogleCalendarCredentials)
-        .where(GoogleCalendarCredentials.id == _SINGLETON_ID)
-        .values(sync_token=token)
+    stmt = update(GoogleCalendarCredentials).where(
+        GoogleCalendarCredentials.id == _SINGLETON_ID
     )
+    if expected_old is None:
+        stmt = stmt.where(GoogleCalendarCredentials.sync_token.is_(None))
+    else:
+        stmt = stmt.where(
+            GoogleCalendarCredentials.sync_token == expected_old
+        )
+    stmt = stmt.values(sync_token=new_token)
+
+    result = await db.execute(stmt)
     await db.commit()
+    return result.rowcount == 1
 
 
 def _list_events_blocking(
