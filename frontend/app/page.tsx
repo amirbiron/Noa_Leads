@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { Sparkles, TrendingUp } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
 import { EmptyState } from "@/components/EmptyState";
@@ -118,8 +119,13 @@ export default function HomePage() {
               />
               <Stat
                 value={data.weekly_insights.stuck_count}
-                label="נתקעו ללא צעד הבא"
+                label="לא טופלו בזמן"
                 tone={data.weekly_insights.stuck_count > 0 ? "red" : "gray"}
+                href={
+                  data.weekly_insights.stuck_count > 0
+                    ? "/tasks/stuck"
+                    : undefined
+                }
               />
             </div>
           </div>
@@ -176,19 +182,29 @@ function Stat({
   value,
   label,
   tone = "gray",
+  href,
 }: {
   value: number;
   label: string;
   tone?: "gray" | "red";
+  href?: string;
 }) {
-  return (
-    <div>
+  const inner = (
+    <>
       <div
         className={`text-2xl font-semibold ${tone === "red" ? "text-state-red" : "text-gray-900"}`}
       >
         {value}
       </div>
       <div className="text-xs text-gray-500 mt-0.5">{label}</div>
-    </div>
+    </>
   );
+  if (href) {
+    return (
+      <Link href={href} className="block active:opacity-70">
+        {inner}
+      </Link>
+    );
+  }
+  return <div>{inner}</div>;
 }

@@ -107,25 +107,69 @@ async def create_first_response_task(
     )
     db.add(task)
     await db.flush()
+    await sync_lead_next_action_cache(db, lead.id)
     return task
+
+
+async def sync_lead_next_action_cache(
+    db: AsyncSession, lead_id: UUID
+) -> None:
+    """
+    מעדכן את שדות next_action_* בליד לפי ה-task הפעיל הקרוב ביותר.
+
+    הקונספט: tasks = source of truth, leads.next_action_* = cache.
+    ראה docs/phase-2.5-plan.md §7.3.
+
+    שמירה ישירה של task.due_at — אין יותר grace adjustment. ה-due_at
+    של כל task מייצג את ה-alert time (כשהוא נוצר, חשבו את ה-grace
+    לתוכו). שינוי מהמודל הקודם — ראה הערות ב-_due_at_for_first_response.
+    """
+    earliest = (
+        await db.execute(
+            select(Task.type, Task.due_at)
+            .where(
+                Task.lead_id == lead_id,
+                Task.status.in_(
+                    [TaskStatus.OPEN.value, TaskStatus.SNOOZED.value]
+                ),
+            )
+            .order_by(Task.due_at.asc())
+            .limit(1)
+        )
+    ).first()
+
+    next_type = earliest.type if earliest is not None else None
+    next_due = earliest.due_at if earliest is not None else None
+
+    await db.execute(
+        update(Lead)
+        .where(Lead.id == lead_id)
+        .values(
+            next_action_type=next_type,
+            next_action_due_at=next_due,
+        )
+    )
 
 
 def _due_at_for_first_response(now: datetime) -> datetime:
     """
-    due_at של FIRST_RESPONSE.
-    - בשעות עבודה: now → מופיע מיד ב-/today.
-    - מחוץ לשעות עבודה (לילה/שבת/חג): תחילת יום העבודה הבא → לא מופיע
-      ב-/today עד הבוקר. מתאים להתנהגות "מענה אחרי שעות" — נועה רואה
-      את המשימה כשהיא חוזרת לעבוד.
+    due_at של FIRST_RESPONSE = now + FOLLOWUP_GRACE_FIRST_RESPONSE,
+    מותאם לשעות עבודה.
 
-    הbadge "באיחור" נשלט בנפרד ב-dashboard._calc_is_overdue עם grace
-    של 24h מ-created_at, כדי שתזכורת לא תקפוץ על ליד בן שעה.
+    לפי האפיון יב סעיף 482: "ליד חדש שלא טופל: 24 שעות". ה-due_at
+    מייצג את הזמן שבו ה-task נחשב overdue. לפני הזמן הזה הליד מוצג
+    ב"פניות חדשות" של דף הבית, ומגיע push לטלגרם — לא נופל בין הכיסאות.
+
+    אם הזמן נופל מחוץ לשעות עבודה (לילה/שבת/חג) — נדחה לתחילת יום
+    העבודה הבא, כדי שה-alert יקרה בזמן שנועה עובדת.
     """
+    from app.constants import FOLLOWUP_GRACE_FIRST_RESPONSE
     from app.utils.work_hours import is_working_time  # avoid circular at import
 
-    if is_working_time(now):
-        return now
-    return next_working_day_start(now).astimezone(timezone.utc)
+    alert_time = now + FOLLOWUP_GRACE_FIRST_RESPONSE
+    if is_working_time(alert_time):
+        return alert_time
+    return next_working_day_start(alert_time).astimezone(timezone.utc)
 
 
 # ===================== Snooze =====================
@@ -149,10 +193,11 @@ async def snooze_task(
             snoozed_until=new_due_at,
             due_at=new_due_at,
         )
-        .returning(Task.id)
+        .returning(Task.id, Task.lead_id)
     )
     result = await db.execute(stmt)
-    if result.scalar_one_or_none() is None:
+    row = result.first()
+    if row is None:
         existing = await db.execute(select(Task.status).where(Task.id == task_id))
         status = existing.scalar_one_or_none()
         if status is None:
@@ -161,6 +206,8 @@ async def snooze_task(
             "ניתן לדחות רק משימות פתוחות או דחויות."
         )
 
+    # סנכרון cache — due_at השתנה, ה-task הקרוב ביותר עלול להשתנות.
+    await sync_lead_next_action_cache(db, row.lead_id)
     await db.commit()
     return await _get_task_or_404(db, task_id)
 
@@ -223,10 +270,11 @@ async def complete_task(db: AsyncSession, task_id: UUID) -> Task:
             Task.status.in_([TaskStatus.OPEN.value, TaskStatus.SNOOZED.value]),
         )
         .values(status=TaskStatus.DONE.value, completed_at=now)
-        .returning(Task.id)
+        .returning(Task.id, Task.lead_id)
     )
     result = await db.execute(stmt)
-    if result.scalar_one_or_none() is None:
+    row = result.first()
+    if row is None:
         existing = await db.execute(select(Task.status).where(Task.id == task_id))
         status = existing.scalar_one_or_none()
         if status is None:
@@ -235,6 +283,8 @@ async def complete_task(db: AsyncSession, task_id: UUID) -> Task:
             "ניתן לסיים רק משימות פתוחות או דחויות."
         )
 
+    # סנכרון cache בליד — אם זו הייתה המשימה הקרובה, מצא את הבאה.
+    await sync_lead_next_action_cache(db, row.lead_id)
     await db.commit()
     return await _get_task_or_404(db, task_id)
 
@@ -287,3 +337,49 @@ async def _get_task_or_404(db: AsyncSession, task_id: UUID) -> Task:
     if task is None:
         raise NotFoundError("משימה לא נמצאה.")
     return task
+
+
+async def list_stuck_tasks(db: AsyncSession) -> list[tuple[Task, Lead]]:
+    """
+    "ממתין לטיפול" — משימות פעילות שעבר ה-due_at שלהן (overdue).
+
+    הקריטריון זהה ל-stuck_count ב-dashboard (due_at <= now) — כך שהקליק
+    על "לא טופלו בזמן" בדף הבית מוביל לרשימה המכילה את אותן יחידות.
+
+    מודל פשוט (אחרי הסרת grace per-type): due_at = alert time תמיד.
+    snooze מעדכן due_at, FIRST_RESPONSE נוצר עם due_at=now+24h, וכו'.
+    אין צורך בלוגיקת CASE.
+
+    מסונן ללידים פתוחים (defense in depth — close_lead מבטל tasks).
+    מיון לפי due_at עולה (ישנים קודם).
+    """
+    from app.constants import CLOSED_LEAD_STATUSES
+
+    now_utc = datetime.now(timezone.utc)
+
+    stmt = (
+        select(Task, Lead)
+        .join(Lead, Task.lead_id == Lead.id)
+        .where(
+            Task.status.in_(
+                [TaskStatus.OPEN.value, TaskStatus.SNOOZED.value]
+            ),
+            Task.due_at <= now_utc,
+            Lead.status.notin_([s.value for s in CLOSED_LEAD_STATUSES]),
+        )
+        .order_by(Task.due_at.asc())
+    )
+    rows = (await db.execute(stmt)).all()
+
+    # dedup לפי lead_id — שורה אחת לכל ליד, ה-task הישן ביותר שלו (כי
+    # ה-order_by מציב ישנים קודם). מבטיח שספירת הרשימה = stuck_count
+    # ב-dashboard (שסופר לידים), אחרת ליד עם 2+ tasks overdue היה
+    # מנפח את העמוד.
+    seen_leads: set = set()
+    deduped: list[tuple[Task, Lead]] = []
+    for task, lead in rows:
+        if lead.id in seen_leads:
+            continue
+        seen_leads.add(lead.id)
+        deduped.append((task, lead))
+    return deduped

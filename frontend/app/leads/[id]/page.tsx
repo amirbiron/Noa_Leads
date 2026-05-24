@@ -129,7 +129,18 @@ export default function LeadDetailPage() {
           <div className="bg-white rounded-xl border border-gray-200 p-4">
             <div className="flex items-start justify-between gap-2">
               <div>
-                <div className="text-lg font-semibold">{lead.full_name}</div>
+                <div className="text-lg font-semibold flex items-center gap-2">
+                  <span>{lead.full_name}</span>
+                  {lead.waiting_on === "CLIENT" && (
+                    <span
+                      className="text-base"
+                      aria-label="מחכה ללקוח"
+                      title="מחכה ללקוח"
+                    >
+                      ⏳
+                    </span>
+                  )}
+                </div>
                 {lead.organization_name && (
                   <div className="text-sm text-gray-500">
                     {lead.organization_name}
@@ -141,7 +152,11 @@ export default function LeadDetailPage() {
                     ` · ${labelSubtype(lead.service_subtype)}`}
                 </div>
               </div>
-              <StateBadge color={inferStateColor(lead)} />
+              {/* תיוג "תקין" (ירוק) מיותר — מצב ירוק הוא ברירת המחדל ואין
+                  צורך לסמן. רק red/orange/gray (אדום/בקרוב/סגור) ראויים badge. */}
+              {inferStateColor(lead) !== "green" && (
+                <StateBadge color={inferStateColor(lead)} />
+              )}
             </div>
 
             <div className="grid grid-cols-2 gap-2 mt-3 text-xs">
@@ -272,7 +287,7 @@ export default function LeadDetailPage() {
           {/* צ'יפים לסיכום שיחה */}
           <div>
             <SectionHeader title="פעולות מהירות" />
-            <QuickActions leadId={lead.id} onActionDone={load} />
+            <QuickActions lead={lead} onActionDone={load} />
           </div>
 
           {/* סגירה / פתיחה מחדש */}

@@ -34,6 +34,25 @@ class TaskWithLeadRead(TaskRead):
     lead_priority_level: str
 
 
+class StuckTaskItem(BaseModel):
+    """
+    שורה בעמוד "ממתין לטיפול" — משימה שלא טופלה תקופה ארוכה + פרטי הליד
+    הנדרשים להצגה ולניווט.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    task_id: UUID
+    task_type: str
+    due_at: datetime
+    days_stuck: int  # מספר ימים שעברו מ-due_at
+    lead_id: UUID
+    lead_name: str
+    lead_status: str
+    service_category: str
+    waiting_on: str
+
+
 class TaskCreate(BaseModel):
     """יצירה ידנית של משימה (לרוב tasks נוצרות אוטומטית בעקבות פעולות)."""
 

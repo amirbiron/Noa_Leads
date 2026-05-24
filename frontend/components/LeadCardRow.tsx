@@ -4,11 +4,9 @@ import Link from "next/link";
 import { ChevronLeft } from "lucide-react";
 import { STATE_COLORS } from "@/lib/colors";
 import {
-  formatRelativeHebrew,
   labelCategory,
   labelStatus,
   labelSubtype,
-  labelWaiting,
 } from "@/lib/hebrew";
 import type { LeadCard } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -18,6 +16,9 @@ import { StateDot } from "./StateBadge";
 // פס צד שמאלי בצבע מצב (border-inline-start ל-RTL).
 export function LeadCardRow({ lead }: { lead: LeadCard }) {
   const cls = STATE_COLORS[lead.state_color];
+  // אייקון ⏳ ליד שם הליד כשהכדור אצל הלקוח (לפי האפיון יב). מחכה לי
+  // (ברירת מחדל) = אין סימון, כי רוב הלידים בכל מקרה אצל נועה.
+  const waitingOnClient = lead.waiting_on === "CLIENT";
   return (
     <Link
       href={`/leads/${lead.id}`}
@@ -32,6 +33,15 @@ export function LeadCardRow({ lead }: { lead: LeadCard }) {
           <div className="flex items-center gap-2">
             <StateDot color={lead.state_color} />
             <span className="font-medium truncate">{lead.full_name}</span>
+            {waitingOnClient && (
+              <span
+                className="text-sm"
+                aria-label="מחכה ללקוח"
+                title="מחכה ללקוח"
+              >
+                ⏳
+              </span>
+            )}
             {lead.has_recent_reply && (
               <span className="text-[10px] font-semibold text-state-orange bg-state-orange/15 px-1.5 py-0.5 rounded">
                 תגובה חדשה
@@ -42,16 +52,8 @@ export function LeadCardRow({ lead }: { lead: LeadCard }) {
             {labelCategory(lead.service_category)}
             {lead.service_subtype && ` · ${labelSubtype(lead.service_subtype)}`}
           </div>
-          <div className="mt-1.5 flex items-center gap-3 text-xs text-gray-500">
-            <span>{labelStatus(lead.status)}</span>
-            <span>•</span>
-            <span>ממתין: {labelWaiting(lead.waiting_on)}</span>
-            {lead.next_action_due_at && (
-              <>
-                <span>•</span>
-                <span>{formatRelativeHebrew(lead.next_action_due_at)}</span>
-              </>
-            )}
+          <div className="mt-1.5 text-xs text-gray-500">
+            {labelStatus(lead.status)}
           </div>
         </div>
         <ChevronLeft className="text-gray-300 shrink-0 mt-1" size={18} aria-hidden />

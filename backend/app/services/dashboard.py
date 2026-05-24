@@ -31,13 +31,17 @@ ORANGE_LOOKAHEAD = timedelta(hours=48)
 TODAY_ACTIONS_LIMIT = 20
 DEFAULT_DASHBOARD_LIMIT = 50
 
-# grace period per-type ל-is_overdue. FIRST_RESPONSE לפי האפיון (סעיף יב):
-# "מינימום 24 שעות לפני שמתריעים". ה-task מופיע ב-/today מיד (due_at=now)
-# אבל ה-badge "באיחור" מקבל true רק אחרי 24h.
-# מקור יחיד לטובת SQL CASE ול-Python helper גם יחד.
-_OVERDUE_GRACE: dict[str, timedelta] = {
-    TaskType.FIRST_RESPONSE.value: timedelta(hours=24),
-}
+# הערה על overdue: בעבר היה כאן _OVERDUE_GRACE dict שחישב alert מ-
+# created_at + grace per-type. זה יצר בעיות:
+# - PROPOSAL_FOLLOWUP שנוצר באיחור ע"י check_stuck_proposals קיבל
+#   clock-reset (4 ימים מ-task.created_at במקום מ-proposal_sent).
+# - snooze לא השפיע על הצביעה (created_at לא משתנה).
+# - דורש CASE מורכב ב-SQL.
+#
+# המודל החדש: כל task נוצר עם due_at = alert time. is_overdue פשוט
+# due_at <= now. ה-grace הספציפי per-type מקודד ב-due_at של ה-task
+# בעת יצירתו (FIRST_RESPONSE = now+24h, PROPOSAL_FOLLOWUP = next
+# workday כשcheck_stuck_proposals מאתר 3+ ימים מ-proposal_sent, וכו').
 
 
 # ===================== חישוב צבע מצב =====================
@@ -184,17 +188,10 @@ async def get_today_actions(db: AsyncSession) -> list[TodayActionItem]:
     end_today_exclusive = _start_of_tomorrow_israel(now_utc)
     closed = [s.value for s in CLOSED_LEAD_STATUSES]
 
-    # ביטוי is_overdue per-type — אותה לוגיקה כמו _calc_is_overdue ב-Python
-    # אבל ב-SQL כדי שגם המיון יכבד את ה-grace. אחרת FIRST_RESPONSE עם
-    # due_at=now היה קופץ לראש מיד, גם כשה-badge עוד לא דולק. ה-grace
-    # נשאב מ-_OVERDUE_GRACE — מקור יחיד שמשמש גם את _calc_is_overdue.
-    is_overdue_expr = case(
-        *[
-            (Task.type == task_type, Task.created_at + grace <= now_utc)
-            for task_type, grace in _OVERDUE_GRACE.items()
-        ],
-        else_=Task.due_at <= now_utc,
-    )
+    # is_overdue — פשוט: due_at <= now. snooze מעדכן due_at ישירות
+    # אז גם snoozed-expired נתפס. אין יותר grace per-type — המידע מקודד
+    # ב-due_at בעת יצירת ה-task.
+    is_overdue_expr = Task.due_at <= now_utc
 
     stmt = (
         select(Task, Lead)
@@ -247,16 +244,10 @@ async def get_today_actions(db: AsyncSession) -> list[TodayActionItem]:
 
 
 def _calc_is_overdue(task, now_utc: datetime) -> bool:
-    """
-    מחשב is_overdue עם grace per-type. ל-FIRST_RESPONSE: 24h מ-task.created_at
-    (לפי האפיון). לשאר ה-types: due_at <= now כרגיל.
-
-    הלוגיקה הזו משוכפלת ב-SQL ב-get_today_actions (is_overdue_expr) כדי
-    שגם המיון יכבד את ה-grace — אחרת המשימה תקפוץ לראש לפני שה-badge דולק.
-    """
-    grace = _OVERDUE_GRACE.get(task.type)
-    if grace is not None:
-        return task.created_at + grace <= now_utc
+    """is_overdue פשוט — due_at <= now. snooze מעדכן due_at אז גם snoozed-
+    expired נתפס נכון. ה-grace per-type מקודד ב-due_at של ה-task בעת
+    יצירתו (FIRST_RESPONSE = now+24h, PROPOSAL_FOLLOWUP = next workday
+    כשcheck_stuck_proposals זיהה stale הצעה, וכו')."""
     return task.due_at <= now_utc
 
 
@@ -396,7 +387,8 @@ async def get_weekly_insights(db: AsyncSession) -> WeeklyInsights:
     3 התובנות לפי האפיון:
     - new_leads_count: כמה לידים נכנסו השבוע
     - responded_in_time_count: כמה קיבלו מענה outbound באותו יום העבודה
-    - stuck_count: כמה לידים פתוחים בלי next_action_due_at מוגדר
+    - stuck_count: "לא טופלו בזמן" — לידים פתוחים שיש להם task פעיל
+      שעבר זמן הטיפול שלו (לפי per-type grace).
     - most_profitable_service: השעה הרווחית של השבוע (אם יש נתונים)
 
     בנוסף total_open לקונטקסט.
@@ -426,13 +418,31 @@ async def get_weekly_insights(db: AsyncSession) -> WeeklyInsights:
     )
     responded_in_time_count = (await db.execute(responded_stmt)).scalar_one()
 
-    # נתקעו: ליד פתוח בלי next_action_due_at (אין מה לעשות מוגדר)
+    # "לא טופלו בזמן": ליד פתוח עם task פעיל שעבר ה-due_at שלו.
+    # ה-grace per-type מקודד ב-due_at של ה-task בעת יצירתו, אז
+    # is_overdue פשוט = due_at <= now. ראה הערה למעלה (אחרי TODAY_ACTIONS_LIMIT).
+    #
+    # ליד חדש שזה עתה נוצר *לא* נספר כי FIRST_RESPONSE due_at=+24h.
+    # ליד פתוח בלי tasks פעילים *לא* נספר (לפי תכנון).
+    # snooze מעדכן due_at — מטופל אוטומטית.
+    overdue_task_exists = (
+        select(Task.id)
+        .where(
+            Task.lead_id == Lead.id,
+            Task.status.in_(
+                [TaskStatus.OPEN.value, TaskStatus.SNOOZED.value]
+            ),
+            Task.due_at <= now_utc,
+        )
+        .correlate(Lead)
+        .exists()
+    )
     stuck_stmt = (
         select(func.count())
         .select_from(Lead)
         .where(
             Lead.status.notin_([s.value for s in CLOSED_LEAD_STATUSES]),
-            Lead.next_action_due_at.is_(None),
+            overdue_task_exists,
         )
     )
     stuck_count = (await db.execute(stuck_stmt)).scalar_one()

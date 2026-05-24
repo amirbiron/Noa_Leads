@@ -95,6 +95,7 @@ export default function SettingsPage() {
       <SectionHeader title="ניהול" />
       <ul className="space-y-2">
         <NavRow href="/templates" icon={<FileText size={18} />} label="תבניות הודעה" />
+        <NavRow href="/settings/chips" icon={<Sparkles size={18} />} label="צ'יפים מהירים" />
         <NavRow href="/proposals" icon={<Send size={18} className="rtl:-scale-x-100" />} label="הצעות פתוחות" />
       </ul>
 

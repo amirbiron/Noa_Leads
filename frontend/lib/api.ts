@@ -10,6 +10,9 @@ import type {
   CreateBookingResponse,
   PendingBookingsResponse,
   HomeDashboard,
+  QuickActionChip,
+  QuickActionChipCreate,
+  QuickActionChipUpdate,
   Lead,
   LeadCard,
   LeadCreate,
@@ -23,6 +26,7 @@ import type {
   ProgramUpdate,
   ProgramWithLead,
   ServiceRate,
+  StuckTaskItem,
   Template,
   TemplateCreate,
   TemplateRenderResponse,
@@ -212,6 +216,24 @@ export const api = {
 
   // ----- Tasks -----
   listOpenTasks: () => fetcher<Task[]>("/tasks/open"),
+
+  listStuckTasks: () => fetcher<StuckTaskItem[]>("/tasks/stuck"),
+
+  // ----- Quick action chips (editable, מהגדרות) -----
+  listChips: (activeOnly = false) =>
+    fetcher<QuickActionChip[]>(`/chips?active_only=${activeOnly}`),
+
+  createChip: (payload: QuickActionChipCreate) =>
+    fetcher<QuickActionChip>("/chips", { method: "POST", body: payload }),
+
+  updateChip: (id: string, payload: QuickActionChipUpdate) =>
+    fetcher<QuickActionChip>(`/chips/${id}`, {
+      method: "PATCH",
+      body: payload,
+    }),
+
+  deleteChip: (id: string) =>
+    fetcher<void>(`/chips/${id}`, { method: "DELETE" }),
 
   snoozeTask: (taskId: string, preset: SnoozePreset, customUntil?: string) =>
     fetcher<Task>(`/tasks/${taskId}/snooze`, {

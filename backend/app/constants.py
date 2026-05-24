@@ -200,3 +200,18 @@ class ProgramType(StrEnum):
     STAGE_ARTS_4 = "stage_arts_4"              # אומניות הבמה - 3-4 מפגשים
     PRODUCTION_3MONTHS = "production_3months"  # ליווי הפקה - 3-4 חודשים
     DIGITAL_COURSE_12 = "digital_course_12"    # קורס דיגיטלי - 12 מפגשים
+
+
+# ===== כללי פולואפ =====
+# לפי האפיון יב סעיף 482, ה-spec מגדיר 5 סוגי פולואפ. כרגע 2 בשימוש
+# (FIRST_RESPONSE, PROPOSAL_ORG). ה-3 הנוספים (WARM, DORMANT,
+# LECTURE_INQUIRY) יוגדרו כשנשתמש בהם בפועל — כדי לא להחזיק קבועים
+# לא-בשימוש שמתבדרים מהspec.
+#
+# הקבועים האלה משמשים ביצירת tasks (ל-due_at), לא בdisplay layer.
+# ה-spec הספציפי שמור ב-docs/product-spec.md לחיפוש עתידי.
+
+from datetime import timedelta as _timedelta
+
+FOLLOWUP_GRACE_FIRST_RESPONSE = _timedelta(hours=24)
+FOLLOWUP_GRACE_PROPOSAL_ORG = _timedelta(days=4)  # 3-5 ימי עסקים

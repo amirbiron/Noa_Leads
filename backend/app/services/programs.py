@@ -223,6 +223,13 @@ async def _create_program_end_task_if_missing(
         origin_rule="program_near_end",
     )
     db.add(task)
+    await db.flush()
+
+    # סנכרון cache בליד — בלי זה derive_state_color ו-sort בדשבורד
+    # לא יראו את ה-task החדש עד שטעינה הבאה תרענן.
+    from app.services.tasks import sync_lead_next_action_cache
+
+    await sync_lead_next_action_cache(db, program.lead_id)
 
 
 # ===================== ביטול =====================
