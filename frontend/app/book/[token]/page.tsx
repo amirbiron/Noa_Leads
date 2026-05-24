@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import { AlertCircle, Calendar, CheckCircle2, Clock, Info } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
-import { labelCategory, labelSubtype } from "@/lib/hebrew";
+import { labelCategory, labelSubtype, pluralizeMinutes } from "@/lib/hebrew";
 import type {
   AvailabilityResponse,
   BookingPageInfo,
@@ -253,7 +253,7 @@ export default function BookingPage() {
             {info.service_subtype && ` · ${labelSubtype(info.service_subtype)}`}
             {" · "}
             <span className="text-gray-500">
-              {info.default_duration_minutes} דקות
+              {pluralizeMinutes(info.default_duration_minutes)}
             </span>
           </div>
         </div>

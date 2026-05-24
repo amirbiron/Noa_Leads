@@ -24,7 +24,7 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
 from jose import JWTError, jwt as jose_jwt
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
@@ -260,14 +260,14 @@ async def get_credentials_or_404(db: AsyncSession) -> Credentials:
         try:
             await asyncio.to_thread(creds.refresh, Request())
         except RefreshError:
-            await _mark_auth_invalid(db, row)
+            # מסמן ב-session נפרד — לא לסיים-commit את ה-transaction של הקורא
+            await _mark_auth_invalid(row.owner_alert_sent_at is None)
             raise GoogleAuthInvalidError() from None
-        # שומרים את ה-access_token החדש (לא מתעדכן refresh_token בדרך כלל)
-        row.access_token_encrypted = encrypt_secret(creds.token)
-        row.token_expiry = (
-            creds.expiry.replace(tzinfo=timezone.utc) if creds.expiry else None
-        )
-        await db.commit()
+        # שומרים את ה-access_token החדש ב-session נפרד. לפני התיקון: db.commit()
+        # על ה-session המשותף היה מסיים-commit את כל ה-pending changes של
+        # הקורא (למשל approve_booking שכבר עשתה UPDATE לbooking/lead), והופך
+        # את הfail-safe rollback למחיק עם רישומים שכבר persisted.
+        await _persist_refreshed_token(creds.token, creds.expiry)
 
     return creds
 
@@ -281,19 +281,50 @@ async def _load_row(db: AsyncSession) -> GoogleCalendarCredentials | None:
     return result.scalar_one_or_none()
 
 
-async def _mark_auth_invalid(
-    db: AsyncSession, row: GoogleCalendarCredentials
+async def _persist_refreshed_token(
+    new_access_token: str, new_expiry: datetime | None
 ) -> None:
+    """שומר access_token שעודכן ב-session נפרד — כדי לא לגרור commit
+    של ה-transaction של הקורא. ראה comment ב-get_credentials_or_404."""
+    from app.db.session import AsyncSessionLocal
+
+    expiry_utc = (
+        new_expiry.replace(tzinfo=timezone.utc) if new_expiry else None
+    )
+    async with AsyncSessionLocal() as fresh:
+        await fresh.execute(
+            update(GoogleCalendarCredentials)
+            .where(GoogleCalendarCredentials.id == _SINGLETON_ID)
+            .values(
+                access_token_encrypted=encrypt_secret(new_access_token),
+                token_expiry=expiry_utc,
+            )
+        )
+        await fresh.commit()
+
+
+async def _mark_auth_invalid(should_alert: bool) -> None:
     """
     מסמן את ה-credentials כשגויים ושולח התראה חד-פעמית לטלגרם.
     owner_alert_sent_at מונע ספאם בכל ניסיון refresh עוקב.
+
+    עובד ב-session נפרד מהקורא — לפני התיקון, הcommit היה מסיים-commit
+    transactions של callers (כמו approve_booking) ושובר את הfail-safe.
     """
+    from app.db.session import AsyncSessionLocal
+
     now = datetime.now(timezone.utc)
-    row.auth_invalid_at = now
-    should_alert = row.owner_alert_sent_at is None
+    values: dict[str, datetime] = {"auth_invalid_at": now}
     if should_alert:
-        row.owner_alert_sent_at = now
-    await db.commit()
+        values["owner_alert_sent_at"] = now
+
+    async with AsyncSessionLocal() as fresh:
+        await fresh.execute(
+            update(GoogleCalendarCredentials)
+            .where(GoogleCalendarCredentials.id == _SINGLETON_ID)
+            .values(**values)
+        )
+        await fresh.commit()
 
     if should_alert:
         # local import — telegram עשוי לא להיות מוגדר ב-dev

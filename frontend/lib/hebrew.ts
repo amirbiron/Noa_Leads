@@ -161,6 +161,12 @@ function pluralizeTimeUnit(
   return `${n} ${other}`;
 }
 
+// משך זמן בדקות — "דקה" / "שתי דקות" / "N דקות". משמש למשל בדף הbooking
+// להצגת default_duration_minutes.
+export function pluralizeMinutes(n: number): string {
+  return pluralizeTimeUnit(n, "דקה", "שתי דקות", "דקות");
+}
+
 export function formatRelativeHebrew(iso: string | null): string {
   if (!iso) return "";
   const date = new Date(iso);

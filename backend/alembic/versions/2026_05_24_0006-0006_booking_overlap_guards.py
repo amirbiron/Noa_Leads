@@ -70,19 +70,52 @@ def upgrade() -> None:
 
     # 3) overlapping active בין לידים שונים — אחרי שלב 2 כל ליד מחזיק
     # רק active אחד, אז הoverlap היחיד שיכול להישאר הוא cross-lead.
-    # שומר את הישן יותר (lex order של (created_at, id)); החדש מבוטל.
+    # שומר את הישן יותר.
+    #
+    # נדרש recursive CTE: NAIVE join (b1>b2 + overlap) מבטל גם רשומות
+    # שלא היו מתנגשות אחרי שלב הביטול. דוגמה: A(10-11), B(10:30-11:30),
+    # C(11:30-12:30). A<B<C. A∩B, B∩C, A∩!C. NAIVE: B מבוטל (>A∩A), C
+    # מבוטל (>B∩B) — אבל C היה צריך להישאר כי אחרי ביטול B אין התנגשות.
+    # הCTE מדמה את התהליך: סורק לפי (created_at, id) ובכל שלב בודק רק
+    # מול ה-kept_ids שכבר נשמרו, לא מול כל ה-active.
     op.execute(
         """
-        UPDATE bookings SET status = 'canceled' WHERE id IN (
-            SELECT b1.id
-            FROM bookings b1
-            JOIN bookings b2 ON b1.id != b2.id
-              AND b1.status IN ('pending_approval', 'approved')
-              AND b2.status IN ('pending_approval', 'approved')
-              AND tstzrange(b1.requested_slot_start, b1.requested_slot_end, '[)') &&
-                  tstzrange(b2.requested_slot_start, b2.requested_slot_end, '[)')
-              AND (b1.created_at, b1.id) > (b2.created_at, b2.id)
-        )
+        WITH RECURSIVE
+          ordered AS (
+            SELECT id, requested_slot_start, requested_slot_end,
+                   ROW_NUMBER() OVER (ORDER BY created_at, id) AS rn
+            FROM bookings
+            WHERE status IN ('pending_approval', 'approved')
+          ),
+          walk AS (
+            -- base: הראשון תמיד נשמר
+            SELECT id, requested_slot_start AS s, requested_slot_end AS e, rn,
+                   TRUE AS keep,
+                   ARRAY[id] AS kept_ids
+            FROM ordered
+            WHERE rn = 1
+
+            UNION ALL
+
+            -- recursive: כל שורה נבדקת מול kept_ids בלבד
+            SELECT o.id, o.requested_slot_start, o.requested_slot_end, o.rn,
+                   NOT EXISTS (
+                     SELECT 1 FROM ordered p
+                     WHERE p.id = ANY(w.kept_ids)
+                       AND tstzrange(p.requested_slot_start, p.requested_slot_end, '[)') &&
+                           tstzrange(o.requested_slot_start, o.requested_slot_end, '[)')
+                   ) AS keep,
+                   CASE WHEN NOT EXISTS (
+                     SELECT 1 FROM ordered p
+                     WHERE p.id = ANY(w.kept_ids)
+                       AND tstzrange(p.requested_slot_start, p.requested_slot_end, '[)') &&
+                           tstzrange(o.requested_slot_start, o.requested_slot_end, '[)')
+                   ) THEN w.kept_ids || o.id ELSE w.kept_ids END
+            FROM ordered o
+            JOIN walk w ON o.rn = w.rn + 1
+          )
+        UPDATE bookings SET status = 'canceled'
+        WHERE id IN (SELECT id FROM walk WHERE NOT keep)
         """
     )
 
