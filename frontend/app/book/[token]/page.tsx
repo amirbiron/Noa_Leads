@@ -19,12 +19,17 @@ const ISRAEL_TZ = "Asia/Jerusalem";
 const DAYS_TO_SHOW = 14;
 
 function formatDate(d: Date): string {
-  // YYYY-MM-DD ב-TZ ישראל (כדי שלא יזוז יום ב-UTC conversion)
-  const il = new Date(d.toLocaleString("en-US", { timeZone: ISRAEL_TZ }));
-  const y = il.getFullYear();
-  const m = String(il.getMonth() + 1).padStart(2, "0");
-  const day = String(il.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
+  // YYYY-MM-DD בTZ ישראל. en-CA מפיק נטיב YYYY-MM-DD ועם timeZone
+  // ה-Intl מטפל בהמרה בלי round-trip של string דרך new Date — שזה היה
+  // שביר (toLocaleString("en-US") מחזיר פורמט implementation-defined,
+  // ובדפדפנים מסוימים `new Date("12/25/2026, 15:00:00")` נכשל → NaN,
+  // והמפתחות בlookup נשברו ולא תאמו את ה-days[].date מהAPI).
+  return d.toLocaleDateString("en-CA", {
+    timeZone: ISRAEL_TZ,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
 }
 
 function shortDayName(d: Date): string {
