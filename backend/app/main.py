@@ -60,8 +60,10 @@ _FIELD_FRIENDLY_MESSAGES: dict[str, str] = {
 def _humanize_validation_error(exc: RequestValidationError) -> str:
     """
     מתרגם את ה-error הראשון של Pydantic להודעה ידידותית בעברית.
-    מבוסס על השדה האחרון ב-loc (לרוב שם המאפיין ב-body). אם השדה לא
-    ממופה — fallback גנרי "השדה <שם> לא תקין".
+
+    אם השדה מוכר ב-_FIELD_FRIENDLY_MESSAGES — מחזיר את ההודעה הספציפית.
+    אחרת — הודעה גנרית בלבד. שם השדה הפנימי נשמר ב-log (כלל 3 ב-CLAUDE.md:
+    אל תחשוף מידע פנימי ב-API responses).
     """
     errors = exc.errors()
     if not errors:
@@ -76,8 +78,12 @@ def _humanize_validation_error(exc: RequestValidationError) -> str:
     if field in _FIELD_FRIENDLY_MESSAGES:
         return _FIELD_FRIENDLY_MESSAGES[field]
     if field:
-        return f"השדה '{field}' לא תקין."
-    return "נתונים לא תקינים."
+        logger.warning(
+            "Validation error on unmapped field %r: %s",
+            field,
+            first.get("msg", ""),
+        )
+    return "נתונים לא תקינים. בדקי שכל השדות מולאו נכון."
 
 
 def _register_exception_handlers(app: FastAPI) -> None:

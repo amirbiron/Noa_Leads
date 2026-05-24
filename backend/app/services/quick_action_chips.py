@@ -2,6 +2,7 @@
 שירות צ'יפים מהירים — CRUD עם validation של action_type מול state_machine.
 """
 
+import logging
 from uuid import UUID
 
 from sqlalchemy import delete, select, update
@@ -15,14 +16,24 @@ from app.schemas.quick_action_chip import (
     QuickActionChipUpdate,
 )
 
+logger = logging.getLogger(__name__)
+
 
 def _validate_action_type(action_type: str) -> None:
-    """ה-action_type חייב להתאים למפתח ב-state_machine.ACTIONS."""
+    """
+    ה-action_type חייב להתאים למפתח ב-state_machine.ACTIONS.
+
+    שגיאה ידידותית בעברית למשתמש — בלי לחשוף את רשימת ה-action_types
+    הפנימיים (כלל 3 ב-CLAUDE.md: אל תחשוף מידע פנימי ב-API responses).
+    הפרטים נכנסים ל-log לדיבוג.
+    """
     if action_type not in ACTIONS:
-        valid = ", ".join(sorted(ACTIONS.keys()))
-        raise ValidationError(
-            f"action_type '{action_type}' לא מוכר. ערכים תקפים: {valid}"
+        logger.warning(
+            "Rejected unknown action_type for chip: %r (valid: %s)",
+            action_type,
+            sorted(ACTIONS.keys()),
         )
+        raise ValidationError("סוג פעולה לא תקף.")
 
 
 async def list_chips(

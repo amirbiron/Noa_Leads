@@ -287,7 +287,7 @@ export default function LeadDetailPage() {
           {/* צ'יפים לסיכום שיחה */}
           <div>
             <SectionHeader title="פעולות מהירות" />
-            <QuickActions leadId={lead.id} onActionDone={load} />
+            <QuickActions lead={lead} onActionDone={load} />
           </div>
 
           {/* סגירה / פתיחה מחדש */}

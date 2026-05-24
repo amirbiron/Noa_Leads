@@ -2,16 +2,21 @@
 
 import { useEffect, useState } from "react";
 import { api, ApiError } from "@/lib/api";
-import type { QuickActionChip } from "@/lib/types";
+import type { Lead, QuickActionChip } from "@/lib/types";
+import { ProposalSentConfirmModal } from "./ProposalSentConfirmModal";
 
 // צ'יפים לסיכום שיחה — נטענים מ-API (editable מ-/settings).
 // chip.requires_content=true → פתיחת textarea לטקסט חופשי לפני שליחה
 // (כמו "הוסיפי הערה"). אחרת — קליק ישיר מפעיל action.
+//
+// יוצא מן הכלל: mark_proposal_sent — פותח את ProposalSentConfirmModal
+// במקום לקרוא ל-API ישירות. עקבי עם DynamicActionButton ועם §7.2 ב-
+// phase-2.5-plan.md (sigge ההצעה לא משתנה בלי אישור).
 export function QuickActions({
-  leadId,
+  lead,
   onActionDone,
 }: {
-  leadId: string;
+  lead: Lead;
   onActionDone: () => void;
 }) {
   const [chips, setChips] = useState<QuickActionChip[]>([]);
@@ -19,6 +24,7 @@ export function QuickActions({
   const [error, setError] = useState<string | null>(null);
   const [contentText, setContentText] = useState("");
   const [contentChip, setContentChip] = useState<QuickActionChip | null>(null);
+  const [proposalOpen, setProposalOpen] = useState(false);
 
   useEffect(() => {
     api
@@ -36,7 +42,7 @@ export function QuickActions({
     setBusy(action);
     setError(null);
     try {
-      await api.performAction(leadId, action, payload);
+      await api.performAction(lead.id, action, payload);
       onActionDone();
       setContentChip(null);
       setContentText("");
@@ -48,7 +54,7 @@ export function QuickActions({
   }
 
   if (chips.length === 0 && !error) {
-    return null;  // אין צ'יפים פעילים — לא להציג כלל
+    return null;
   }
 
   return (
@@ -59,7 +65,11 @@ export function QuickActions({
             key={chip.id}
             disabled={busy !== null}
             onClick={() => {
-              if (chip.requires_content) {
+              // mark_proposal_sent דורש אישור (פתיחת WhatsApp + מודאל) —
+              // עקבי עם DynamicActionButton, מונע שינוי סטטוס בקליק אחד.
+              if (chip.action_type === "mark_proposal_sent") {
+                setProposalOpen(true);
+              } else if (chip.requires_content) {
                 setContentChip(chip);
               } else {
                 void run(chip.action_type);
@@ -111,6 +121,13 @@ export function QuickActions({
           {error}
         </div>
       )}
+
+      <ProposalSentConfirmModal
+        lead={lead}
+        open={proposalOpen}
+        onClose={() => setProposalOpen(false)}
+        onConfirmed={onActionDone}
+      />
     </div>
   );
 }
