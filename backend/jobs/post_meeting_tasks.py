@@ -26,7 +26,8 @@ dedup: dedup לפי lead_id לאחר השאילתה. ליד עם מספר bookin
 import logging
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import String, and_, cast, exists, not_, or_, select
+from sqlalchemy import String, and_, cast, exists, func, not_, or_, select
+from sqlalchemy.dialects import postgresql
 
 from app.constants import (
     ActivityType,
@@ -55,10 +56,21 @@ async def create_post_meeting_tasks() -> None:
 
     async with AsyncSessionLocal() as db:
         # ביטול מ-Google = הפגישה לא קרתה — אבל *רק* אם הביטול קרה לפני
-        # מועד הפגישה. אם נועה מוחקת אירוע ב-Google אחרי שהפגישה כבר
-        # התקיימה (כניקיון יומן), לא רוצים לדכא את ה-post_meeting task.
-        # ה-created_at של ה-activity הוא הזמן שהsync תפס את הביטול,
-        # שמייצג בקירוב טוב את זמן הביטול ב-Google.
+        # מועד הפגישה. אם נועה מוחקת אירוע אחרי שהפגישה התקיימה (ניקיון
+        # יומן), לא רוצים לדכא את ה-post_meeting task.
+        #
+        # זמן הביטול: עדיפות ל-event_updated_at ממטא-דאטה (זמן אמיתי
+        # ב-Google), עם fallback ל-Activity.created_at למשימות ישנות
+        # שנשמרו לפני שהשדה נוסף. coalesce חייב cast מפורש ל-timestamptz
+        # כי astext מחזיר טקסט. ה-fallback פחות מדויק (סופג webhook delay)
+        # אבל זה רק עד שכל ה-activities הישנות יוצאות מהחלון 48h.
+        cancel_time = func.coalesce(
+            cast(
+                Activity.activity_metadata["event_updated_at"].astext,
+                postgresql.TIMESTAMP(timezone=True),
+            ),
+            Activity.created_at,
+        )
         google_canceled_subq = (
             select(Activity.id)
             .where(
@@ -68,8 +80,29 @@ async def create_post_meeting_tasks() -> None:
                 == "google_calendar_sync",
                 Activity.activity_metadata["booking_id"].astext
                 == cast(Booking.id, String),
-                # רק ביטולים שקרו לפני מועד הסיום של הפגישה.
-                Activity.created_at < Booking.requested_slot_end,
+                cancel_time < Booking.requested_slot_end,
+            )
+            .correlate(Booking)
+        )
+
+        # reschedule לעתיד = הפגישה עוד לא התקיימה. ה-booking בשורה
+        # עשוי להחזיק עדיין slot_end ישן (sync לא רץ עוד / webhook delay),
+        # אבל ה-activity מ-MEETING_RESCHEDULED האחרון כן יחזיק את הזמן
+        # החדש ב-metadata.new_end.
+        future_reschedule_subq = (
+            select(Activity.id)
+            .where(
+                Activity.lead_id == Booking.lead_id,
+                Activity.type == ActivityType.MEETING_RESCHEDULED.value,
+                Activity.activity_metadata["source"].astext
+                == "google_calendar_sync",
+                Activity.activity_metadata["booking_id"].astext
+                == cast(Booking.id, String),
+                cast(
+                    Activity.activity_metadata["new_end"].astext,
+                    postgresql.TIMESTAMP(timezone=True),
+                )
+                > now_utc,
             )
             .correlate(Booking)
         )
@@ -127,6 +160,7 @@ async def create_post_meeting_tasks() -> None:
                     ]
                 ),
                 not_(exists(google_canceled_subq)),
+                not_(exists(future_reschedule_subq)),
                 not_(exists(existing_for_this_booking_subq)),
             )
         )

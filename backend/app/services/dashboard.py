@@ -31,6 +31,14 @@ ORANGE_LOOKAHEAD = timedelta(hours=48)
 TODAY_ACTIONS_LIMIT = 20
 DEFAULT_DASHBOARD_LIMIT = 50
 
+# grace period per-type ל-is_overdue. FIRST_RESPONSE לפי האפיון (סעיף יב):
+# "מינימום 24 שעות לפני שמתריעים". ה-task מופיע ב-/today מיד (due_at=now)
+# אבל ה-badge "באיחור" מקבל true רק אחרי 24h.
+# מקור יחיד לטובת SQL CASE ול-Python helper גם יחד.
+_OVERDUE_GRACE: dict[str, timedelta] = {
+    TaskType.FIRST_RESPONSE.value: timedelta(hours=24),
+}
+
 
 # ===================== חישוב צבע מצב =====================
 
@@ -178,12 +186,13 @@ async def get_today_actions(db: AsyncSession) -> list[TodayActionItem]:
 
     # ביטוי is_overdue per-type — אותה לוגיקה כמו _calc_is_overdue ב-Python
     # אבל ב-SQL כדי שגם המיון יכבד את ה-grace. אחרת FIRST_RESPONSE עם
-    # due_at=now היה קופץ לראש מיד, גם כשה-badge עוד לא דולק.
+    # due_at=now היה קופץ לראש מיד, גם כשה-badge עוד לא דולק. ה-grace
+    # נשאב מ-_OVERDUE_GRACE — מקור יחיד שמשמש גם את _calc_is_overdue.
     is_overdue_expr = case(
-        (
-            Task.type == TaskType.FIRST_RESPONSE.value,
-            Task.created_at + timedelta(hours=24) <= now_utc,
-        ),
+        *[
+            (Task.type == task_type, Task.created_at + grace <= now_utc)
+            for task_type, grace in _OVERDUE_GRACE.items()
+        ],
         else_=Task.due_at <= now_utc,
     )
 
@@ -235,14 +244,6 @@ async def get_today_actions(db: AsyncSession) -> list[TodayActionItem]:
             )
         )
     return items
-
-
-# grace period per-type ל-is_overdue. FIRST_RESPONSE לפי האפיון (סעיף יב):
-# "מינימום 24 שעות לפני שמתריעים". ה-task מופיע ב-/today מיד (due_at=now)
-# אבל ה-badge "באיחור" מקבל true רק אחרי 24h.
-_OVERDUE_GRACE: dict[str, timedelta] = {
-    TaskType.FIRST_RESPONSE.value: timedelta(hours=24),
-}
 
 
 def _calc_is_overdue(task, now_utc: datetime) -> bool:

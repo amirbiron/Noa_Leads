@@ -711,7 +711,7 @@ async def renew_watch_if_needed(db: AsyncSession) -> bool:
 class CalendarChange:
     """שינוי בודד שזוהה ב-sync. struct פשוט, אין צורך ב-dataclass."""
 
-    __slots__ = ("booking_id", "event_id", "status", "start", "end")
+    __slots__ = ("booking_id", "event_id", "status", "start", "end", "updated_at")
 
     def __init__(
         self,
@@ -720,12 +720,17 @@ class CalendarChange:
         status: str,
         start: datetime | None,
         end: datetime | None,
+        updated_at: datetime | None = None,
     ) -> None:
         self.booking_id = booking_id
         self.event_id = event_id
         self.status = status  # "cancelled" או "confirmed"/"tentative"
         self.start = start
         self.end = end
+        # זמן השינוי האמיתי ב-Google (לא זמן עיבוד webhook). חשוב לסינון
+        # post_meeting: ביטול שקרה לפני slot_end = הפגישה לא קרתה, גם אם
+        # ה-webhook התעכב והגיע אחרי slot_end.
+        self.updated_at = updated_at
 
 
 async def sync_changes(
@@ -792,6 +797,15 @@ async def sync_changes(
         start_dt = _parse_event_dt(ev.get("start"))
         end_dt = _parse_event_dt(ev.get("end"))
 
+        # `updated` הוא ISO 8601 string ב-RFC 3339; ב-Google זה תמיד aware UTC.
+        updated_at: datetime | None = None
+        updated_str = ev.get("updated")
+        if updated_str:
+            try:
+                updated_at = datetime.fromisoformat(updated_str.replace("Z", "+00:00"))
+            except ValueError:
+                pass
+
         changes.append(
             CalendarChange(
                 booking_id=booking_uuid,
@@ -799,6 +813,7 @@ async def sync_changes(
                 status=status,
                 start=start_dt,
                 end=end_dt,
+                updated_at=updated_at,
             )
         )
 
