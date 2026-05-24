@@ -27,11 +27,16 @@ def _get_fernet() -> Fernet | None:
     lazy-init של Fernet. מחזיר None אם המפתח לא מוגדר *ב-dev*.
     בפרודקשן — fail-closed: זריקת RuntimeError כדי שה-app לא יתחיל לאחסן
     secrets ב-plaintext בלי שמישהו ישים לב.
+
+    חשוב: _FERNET_CHECKED מסומן True רק במסלולי החזרת ערך, לא במסלולי
+    raise. אחרת באג שקט: קריאה ראשונה בפרוד בלי מפתח זורקת RuntimeError
+    (500), השנייה (למשל retry של OAuth) רואה _FERNET_CHECKED=True
+    ומחזירה _FERNET=None — encrypt_secret נופל ל-"plain:" prefix
+    ושומר refresh_token של Google כplaintext ב-DB.
     """
     global _FERNET, _FERNET_CHECKED
     if _FERNET_CHECKED:
         return _FERNET
-    _FERNET_CHECKED = True
 
     settings = get_settings()
     is_production = settings.app_env == "production"
@@ -44,8 +49,10 @@ def _get_fernet() -> Fernet | None:
             "print(Fernet.generate_key().decode())\""
         )
         if is_production:
+            # raise לפני סימון checked — קריאות הבאות יזרקו שוב, לא יחזירו None.
             raise RuntimeError(msg + " — required in production.")
         logger.warning(msg + " Falling back to plaintext (dev only).")
+        _FERNET_CHECKED = True
         return None
 
     try:
@@ -58,9 +65,12 @@ def _get_fernet() -> Fernet | None:
             "print(Fernet.generate_key().decode())\""
         )
         if is_production:
+            # אותו עיקרון — raise בלי לסמן checked.
             raise RuntimeError(msg) from e
         logger.error(msg + " Falling back to plaintext (dev only).")
         _FERNET = None
+
+    _FERNET_CHECKED = True
     return _FERNET
 
 
