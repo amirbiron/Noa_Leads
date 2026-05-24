@@ -28,15 +28,16 @@ import type {
 
 // אופציות לעריכה: לפי enums ב-Spec v2.1 §5.11.
 // IN_PROGRESS הוא ה-typical לפי §16.4 אבל נועה יכולה לבחור אחר.
+// BOOKING_PENDING + BOOKED *לא* מאופשרים — מנוהלים ע"י booking flow
+// (יצירת/אישור Booking row). chip שמציב אותם ישירות יוצר ליד "תקוע"
+// בלי שורה בbookings. ה-backend גם דוחה אותם ב-schema validator.
+// סגורים (WON / LOST / ARCHIVED) לא רלוונטיים — chip לא יוצרים על
+// ליד סגור (F-23), ויש להם flow ייעודי close_lead.
 const STATUS_OPTIONS: LeadStatus[] = [
   "NEW",
   "IN_PROGRESS",
   "PROPOSAL_SENT",
-  "BOOKING_PENDING",
-  "BOOKED",
 ];
-// סגורים (WON / LOST / ARCHIVED) לא רלוונטיים — chip לא יוצרים על
-// ליד סגור (F-23).
 
 // SYSTEM ו-NONE לא רלוונטיים לchip — נועה לא בוחרת אותם ידנית.
 const WAITING_ON_OPTIONS: WaitingOn[] = [

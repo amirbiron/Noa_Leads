@@ -185,6 +185,22 @@ async def apply_chip(
             "הצ'יפ לא הוגדר במלואו. ערכי את אותו בהגדרות לפני שימוש."
         )
 
+    # Defense in depth: chips שנוצרו לפני הוספת ה-validator ב-schema
+    # (או דרך כתיבה ישירה ל-DB) לא יעקפו את ה-flows הייעודיים. השמירה
+    # נעשית גם בschema של Create/Update + גם כאן בזמן apply.
+    forbidden_targets = {
+        LeadStatus.BOOKING_PENDING.value,
+        LeadStatus.BOOKED.value,
+        LeadStatus.WON.value,
+        LeadStatus.LOST.value,
+        LeadStatus.ARCHIVED.value,
+    }
+    if chip.target_status in forbidden_targets:
+        raise ValidationError(
+            "הצ'יפ מוגדר עם סטטוס שלא ניתן להציב דרך chip "
+            "(תור / סגירה). השתמשי ב-flow הייעודי."
+        )
+
     # Lead — חייב להיות פתוח. שליפה לבדיקה + הודעה ידידותית; ה-UPDATE
     # למטה מותנה שוב ב-status (defense-in-depth כנגד race עם close_lead).
     lead = (
@@ -308,10 +324,13 @@ async def apply_chip(
             )
         )
 
-    # 2c. INSERT Task חדש
+    # 2c. INSERT Task חדש. assigned_to=lead.owner_id עקבי עם
+    # create_first_response_task / check_warm_followups / check_stuck_proposals
+    # — כל ה-auto-created tasks מוקצים ל-owner של הליד.
     task = Task(
         lead_id=lead_id,
         type=chip.followup_task_type,
+        assigned_to=lead.owner_id,
         status=TaskStatus.OPEN.value,
         due_at=due_at,
         origin_rule=f"chip:{chip.label}",
