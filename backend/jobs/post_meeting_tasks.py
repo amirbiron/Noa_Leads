@@ -89,8 +89,17 @@ async def create_post_meeting_tasks() -> None:
         # עשוי להחזיק עדיין slot_end ישן (sync לא רץ עוד / webhook delay),
         # אבל ה-activity מ-MEETING_RESCHEDULED האחרון כן יחזיק את הזמן
         # החדש ב-metadata.new_end.
-        future_reschedule_subq = (
-            select(Activity.id)
+        #
+        # חשוב: בודקים רק את ה-activity *האחרון* (ORDER BY created_at DESC
+        # LIMIT 1). EXISTS על כל reschedule היה גורם לדיכוי שגוי כש-
+        # reschedule מאוחר יותר החזיר את הslot לעבר (הפגישה כן קרתה).
+        latest_reschedule_new_end = (
+            select(
+                cast(
+                    Activity.activity_metadata["new_end"].astext,
+                    postgresql.TIMESTAMP(timezone=True),
+                )
+            )
             .where(
                 Activity.lead_id == Booking.lead_id,
                 Activity.type == ActivityType.MEETING_RESCHEDULED.value,
@@ -98,13 +107,11 @@ async def create_post_meeting_tasks() -> None:
                 == "google_calendar_sync",
                 Activity.activity_metadata["booking_id"].astext
                 == cast(Booking.id, String),
-                cast(
-                    Activity.activity_metadata["new_end"].astext,
-                    postgresql.TIMESTAMP(timezone=True),
-                )
-                > now_utc,
             )
+            .order_by(Activity.created_at.desc())
+            .limit(1)
             .correlate(Booking)
+            .scalar_subquery()
         )
 
         # זיהוי שbooking היה approved בעבר — דרך activity log. נדרש כדי
@@ -160,7 +167,12 @@ async def create_post_meeting_tasks() -> None:
                     ]
                 ),
                 not_(exists(google_canceled_subq)),
-                not_(exists(future_reschedule_subq)),
+                # latest reschedule (אם קיים) חייב להיות בעבר — אחרת
+                # הפגישה עוד לא קרתה. None = אין reschedule כלל = ok.
+                or_(
+                    latest_reschedule_new_end.is_(None),
+                    latest_reschedule_new_end <= now_utc,
+                ),
                 not_(exists(existing_for_this_booking_subq)),
             )
         )
