@@ -129,22 +129,52 @@ async def _get_active_booking(db: AsyncSession, lead_id: UUID) -> Booking | None
     return result.scalar_one_or_none()
 
 
-async def _expire_stale_bookings(db: AsyncSession, lead_id: UUID) -> None:
+async def _expire_stale_bookings(
+    db: AsyncSession, lead_id: UUID | None = None
+) -> int:
     """
     מסמן bookings שהסלוט שלהם עבר אבל הסטטוס נשאר pending_approval/approved
-    כ-CANCELED. הצורך: ה-partial unique index idx_bookings_active_lead חוסם
-    כל active חדש לליד שיש לו active קיים — אם תור ישן לא הועבר לסטטוס סופי,
-    הליד חסום מ-rebook גם זמן רב אחרי שהמועד עבר. כשsteps 14-15 (Google
-    sync + post-meeting update) ייבנו, התרחיש יהפוך נדיר; כרגע cleanup
-    בנקודות הכניסה ל-write מספיק. אינדמפוטנטי.
+    כ-CANCELED, *וגם* מאפס את סטטוס הליד אם הוא היה תקוע ב-BOOKING_PENDING
+    או BOOKED בלי תור פעיל.
+
+    הצורך הראשון: ה-partial unique index idx_bookings_active_lead חוסם כל
+    active חדש לליד שיש לו active קיים — אם תור ישן לא הועבר לסטטוס סופי,
+    הליד חסום מ-rebook גם זמן רב אחרי שהמועד עבר.
+
+    הצורך השני (תיקון Cursor): סטטוס הליד נשאר תקוע — דשבורד מציג
+    "ממתין לאישור" / "פגישה קבועה" בלי שיש תור פעיל מאחורי זה.
+
+    lead_id=None → cleanup גלובלי (נקרא מ-cron). אחרת מסונן ללid יחיד
+    (נקרא מ-create_booking_request לפני הוספת תור חדש).
+
+    מחזיר מספר ה-bookings שבוטלו. אינדמפוטנטי.
     """
-    from sqlalchemy import update
+    from sqlalchemy import func, update
 
     now_utc = datetime.now(timezone.utc)
-    await db.execute(
+
+    # 1. מאתרים אילו leads מושפעים (לפני ה-UPDATE — אחרת לא נדע אילו)
+    affected_stmt = select(Booking.lead_id, Booking.id).where(
+        Booking.status.in_(
+            [
+                BookingStatus.PENDING_APPROVAL.value,
+                BookingStatus.APPROVED.value,
+            ]
+        ),
+        Booking.requested_slot_end < now_utc,
+    )
+    if lead_id is not None:
+        affected_stmt = affected_stmt.where(Booking.lead_id == lead_id)
+    affected_rows = (await db.execute(affected_stmt)).all()
+    if not affected_rows:
+        return 0
+
+    affected_lead_ids = list({row.lead_id for row in affected_rows})
+
+    # 2. מבטלים את ה-bookings הפגים
+    cancel_stmt = (
         update(Booking)
         .where(
-            Booking.lead_id == lead_id,
             Booking.status.in_(
                 [
                     BookingStatus.PENDING_APPROVAL.value,
@@ -155,6 +185,61 @@ async def _expire_stale_bookings(db: AsyncSession, lead_id: UUID) -> None:
         )
         .values(status=BookingStatus.CANCELED.value)
     )
+    if lead_id is not None:
+        cancel_stmt = cancel_stmt.where(Booking.lead_id == lead_id)
+    await db.execute(cancel_stmt)
+
+    # 3. מאפסים סטטוס leads שהיו תקועים. הpartial unique index מבטיח שאחרי
+    # שלב 2 אין תור פעיל ל-leads האלה. WHERE על BOOKING_PENDING/BOOKED בלבד
+    # — לא דורסים WON/LOST/ARCHIVED או IN_PROGRESS שמשתמש כבר עבר אליו ידנית.
+    await db.execute(
+        update(Lead)
+        .where(
+            Lead.id.in_(affected_lead_ids),
+            Lead.status.in_(
+                [
+                    LeadStatus.BOOKING_PENDING.value,
+                    LeadStatus.BOOKED.value,
+                ]
+            ),
+        )
+        .values(
+            status=LeadStatus.IN_PROGRESS.value,
+            waiting_on=WaitingOn.NOAH.value,
+            last_activity_type=ActivityType.MEETING_CANCELED.value,
+            updated_at=func.now(),
+        )
+    )
+
+    # 4. activity לכל booking שבוטל — לתיעוד בtimeline. נעשה רק במצב הגלובלי
+    # (lead_id=None) כדי לא להציף את ה-timeline ב-cleanup pre-insert של
+    # create_booking_request (שם הוא חלק מ-flow רגיל ולא מעניין למשתמש).
+    if lead_id is None:
+        for row in affected_rows:
+            await log_activity(
+                db,
+                lead_id=row.lead_id,
+                activity_type=ActivityType.MEETING_CANCELED,
+                performed_by=None,  # מערכת
+                content="תור עבר זמנו ובוטל אוטומטית ע\"י המערכת",
+                metadata={
+                    "booking_id": str(row.id),
+                    "source": "expire_stale_cron",
+                },
+            )
+
+    return len(affected_rows)
+
+
+async def expire_all_stale_bookings(db: AsyncSession) -> int:
+    """
+    cleanup גלובלי של bookings פגים — נקרא מcron יומי. מחזיר ספירה.
+    public wrapper סביב _expire_stale_bookings בלי lead_id.
+    """
+    count = await _expire_stale_bookings(db, lead_id=None)
+    if count:
+        await db.commit()
+    return count
 
 
 # ===== Public page info =====
