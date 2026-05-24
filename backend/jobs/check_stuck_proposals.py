@@ -66,6 +66,8 @@ async def check_stuck_proposals() -> None:
     )
 
     async with AsyncSessionLocal() as db:
+        from app.services.tasks import sync_lead_next_action_cache
+
         leads = await _stuck_proposal_leads(db)
         for lead in leads:
             task = Task(
@@ -77,6 +79,13 @@ async def check_stuck_proposals() -> None:
                 origin_rule="check_stuck_proposals",
             )
             db.add(task)
+        await db.flush()  # נדרש כדי שה-sync יראה את ה-tasks החדשים
+
+        # סנכרון cache בליד: בלי זה lead.next_action_* נשאר NULL/ישן,
+        # ו-derive_state_color/sorting בדשבורד לא יראו את ה-task החדש.
+        for lead in leads:
+            await sync_lead_next_action_cache(db, lead.id)
+
         await db.commit()
 
     logger.info("Created %d proposal followup tasks", len(leads))
