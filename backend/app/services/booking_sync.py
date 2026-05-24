@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from sqlalchemy import func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.constants import (
@@ -187,44 +188,84 @@ async def _apply_reschedule(
     # שמירה של הזמן הישן ל-activity לוג לפני ה-UPDATE
     old_start_iso = booking.requested_slot_start.isoformat()
     old_end_iso = booking.requested_slot_end.isoformat()
+    booking_lead_id = booking.lead_id  # cache למקרה של exception
 
     # WHERE כולל סטטוסים פעילים בלבד — אם booking נסגר בinternal race, לא דורסים.
-    update_result = await db.execute(
-        update(Booking)
-        .where(
-            Booking.id == change.booking_id,
-            Booking.google_calendar_event_id == change.event_id,
-            Booking.status.in_(
-                [
-                    BookingStatus.PENDING_APPROVAL.value,
-                    BookingStatus.APPROVED.value,
-                ]
-            ),
+    try:
+        update_result = await db.execute(
+            update(Booking)
+            .where(
+                Booking.id == change.booking_id,
+                Booking.google_calendar_event_id == change.event_id,
+                Booking.status.in_(
+                    [
+                        BookingStatus.PENDING_APPROVAL.value,
+                        BookingStatus.APPROVED.value,
+                    ]
+                ),
+            )
+            .values(requested_slot_start=new_start, requested_slot_end=new_end)
         )
-        .values(requested_slot_start=new_start, requested_slot_end=new_end)
-    )
-    if update_result.rowcount != 1:
+        if update_result.rowcount != 1:
+            await db.commit()
+            return "skipped"
+
+        await log_activity(
+            db,
+            lead_id=booking_lead_id,
+            activity_type=ActivityType.MEETING_RESCHEDULED,
+            performed_by=None,
+            content="מועד הפגישה עודכן ביומן Google",
+            metadata={
+                "booking_id": str(change.booking_id),
+                "event_id": change.event_id,
+                "old_start": old_start_iso,
+                "old_end": old_end_iso,
+                "new_start": new_start.isoformat(),
+                "new_end": new_end.isoformat(),
+                "source": "google_calendar_sync",
+            },
+        )
+
         await db.commit()
+    except IntegrityError:
+        # EXCLUDE constraint דחה — המועד החדש חופף ל-booking פעיל אחר. אי
+        # אפשר לייצג זאת ב-DB (overlap = double booking). מחזירים "skipped"
+        # *לא* errors — אחרת sync_token לא יתקדם ונתקעים על אותו change
+        # לנצח (השגיאה קבועה, לא transient). נועה תקבל activity להתערבות.
+        await db.rollback()
+        logger.warning(
+            "Reschedule for booking %s blocked by overlap constraint "
+            "(conflicts with another active booking) — manual intervention needed",
+            change.booking_id,
+        )
+        try:
+            await log_activity(
+                db,
+                lead_id=booking_lead_id,
+                activity_type=ActivityType.MEETING_RESCHEDULED,
+                performed_by=None,
+                content=(
+                    "מועד הפגישה ביומן Google שונה אבל מתנגש עם תור פעיל "
+                    "אחר במערכת — לא ניתן לסנכרן אוטומטית. בדקי ידנית."
+                ),
+                metadata={
+                    "booking_id": str(change.booking_id),
+                    "event_id": change.event_id,
+                    "old_start": old_start_iso,
+                    "old_end": old_end_iso,
+                    "attempted_new_start": new_start.isoformat(),
+                    "attempted_new_end": new_end.isoformat(),
+                    "source": "google_calendar_sync",
+                    "conflict": True,
+                },
+            )
+            await db.commit()
+        except Exception:
+            logger.exception("Failed to log reschedule conflict activity")
+            await db.rollback()
         return "skipped"
 
-    await log_activity(
-        db,
-        lead_id=booking.lead_id,
-        activity_type=ActivityType.MEETING_RESCHEDULED,
-        performed_by=None,
-        content="מועד הפגישה עודכן ביומן Google",
-        metadata={
-            "booking_id": str(change.booking_id),
-            "event_id": change.event_id,
-            "old_start": old_start_iso,
-            "old_end": old_end_iso,
-            "new_start": new_start.isoformat(),
-            "new_end": new_end.isoformat(),
-            "source": "google_calendar_sync",
-        },
-    )
-
-    await db.commit()
     logger.info(
         "Booking %s rescheduled via Google Calendar sync: %s → %s",
         change.booking_id,
