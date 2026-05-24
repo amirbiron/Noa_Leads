@@ -52,7 +52,9 @@ class LeadCreate(BaseModel):
     email: EmailStr | None = None
     organization_name: str | None = Field(default=None, max_length=200)
 
-    service_category: ServiceCategory
+    # אופציונלי לפי Spec §7.1 — שם/טלפון/מקור בלבד חובה. service_category
+    # יסווג אחר כך מהכרטיס (ידנית או AI בפאזה 3). ראה F-04 ב-spec-deviations.
+    service_category: ServiceCategory | None = None
     service_subtype: str | None = Field(default=None, max_length=100)
 
     source_channel: SourceChannel
@@ -161,7 +163,7 @@ class LeadRead(BaseModel):
     email: str | None
     organization_name: str | None
 
-    service_category: str
+    service_category: str | None  # אופציונלי לפי Spec §7.1 (F-04)
     service_subtype: str | None
 
     status: str
@@ -210,7 +212,7 @@ class LeadListItem(BaseModel):
     id: UUID
     full_name: str
     organization_name: str | None
-    service_category: str
+    service_category: str | None  # אופציונלי לפי Spec §7.1 (F-04)
     service_subtype: str | None
     status: str
     waiting_on: str

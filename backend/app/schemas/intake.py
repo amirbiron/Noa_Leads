@@ -16,7 +16,8 @@ class IntakeFormRequest(BaseModel):
     phone: str | None = Field(default=None, max_length=20)
     email: EmailStr | None = None
     organization_name: str | None = Field(default=None, max_length=200)
-    service_category: ServiceCategory
+    # אופציונלי לפי Spec §7.1 (F-04). יסווג אחר כך מהכרטיס / AI בפאזה 3.
+    service_category: ServiceCategory | None = None
     service_subtype: str | None = Field(default=None, max_length=100)
     message: str | None = Field(default=None, max_length=5000)
 

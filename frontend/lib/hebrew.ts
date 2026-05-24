@@ -118,7 +118,8 @@ export function labelStatus(s: string): string {
   return STATUS_LABELS[s] ?? s;
 }
 
-export function labelCategory(s: string): string {
+export function labelCategory(s: string | null): string {
+  if (!s) return "ללא קטגוריה";  // F-04: service_category אופציונלי
   return SERVICE_CATEGORY_LABELS[s] ?? s;
 }
 

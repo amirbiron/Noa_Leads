@@ -49,7 +49,7 @@ class StuckTaskItem(BaseModel):
     lead_id: UUID
     lead_name: str
     lead_status: str
-    service_category: str
+    service_category: str | None  # אופציונלי (F-04)
     waiting_on: str
 
 

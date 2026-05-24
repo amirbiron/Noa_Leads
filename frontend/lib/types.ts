@@ -55,7 +55,7 @@ export interface LeadListItem {
   id: string;
   full_name: string;
   organization_name: string | null;
-  service_category: string;
+  service_category: string | null;  // F-04: אופציונלי
   service_subtype: string | null;
   status: string;
   waiting_on: string;
@@ -73,7 +73,7 @@ export interface Lead {
   phone: string | null;
   email: string | null;
   organization_name: string | null;
-  service_category: string;
+  service_category: string | null;  // F-04: אופציונלי
   service_subtype: string | null;
   status: string;
   waiting_on: string;
@@ -110,7 +110,7 @@ export interface Lead {
 
 export interface BookingPageInfo {
   lead_name: string;
-  service_category: string;
+  service_category: string | null;  // F-04: אופציונלי
   service_subtype: string | null;
   default_duration_minutes: number;
   timezone: string;
@@ -167,7 +167,7 @@ export interface PendingBookingItem {
   lead_id: string;
   lead_name: string;
   lead_phone: string | null;
-  service_category: string;
+  service_category: string | null;  // F-04: אופציונלי
   service_subtype: string | null;
   requested_slot_start: string;
   requested_slot_end: string;
@@ -183,7 +183,7 @@ export interface LeadCreate {
   phone?: string | null;
   email?: string | null;
   organization_name?: string | null;
-  service_category: ServiceCategory;
+  service_category?: ServiceCategory | null;  // אופציונלי לפי Spec §7.1 (F-04)
   service_subtype?: string | null;
   source_channel: SourceChannel;
   source_detail?: string | null;
@@ -209,7 +209,7 @@ export interface LeadCard {
   id: string;
   full_name: string;
   organization_name: string | null;
-  service_category: string;
+  service_category: string | null;  // F-04: אופציונלי
   service_subtype: string | null;
   status: string;
   waiting_on: string;
@@ -261,7 +261,7 @@ export interface StuckTaskItem {
   lead_id: string;
   lead_name: string;
   lead_status: string;
-  service_category: string;
+  service_category: string | null;  // F-04: אופציונלי
   waiting_on: string;
 }
 
@@ -276,11 +276,11 @@ export interface TodayActionItem {
   state_color: StateColor;
   priority_level: string;
   preferred_contact: string;
-  service_category: string;
+  service_category: string | null;  // F-04: אופציונלי
 }
 
 export interface ProfitableServiceInsight {
-  service_category: string;
+  service_category: string | null;  // F-04: אופציונלי
   hourly_rate: string; // Decimal as string
   total_revenue: string;
   total_hours: string;

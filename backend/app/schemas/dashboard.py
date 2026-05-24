@@ -19,7 +19,7 @@ class LeadCard(BaseModel):
     id: UUID
     full_name: str
     organization_name: str | None
-    service_category: str
+    service_category: str | None  # אופציונלי (F-04)
     service_subtype: str | None
     status: str
     waiting_on: str

@@ -98,11 +98,13 @@
 **Severity:** קריטי — סותר את האפיון. ליד שמגיע מטופס בלי קטגוריה ייכשל בvalidation.
 
 **Acceptance:**
-- [ ] `LeadCreate.service_category: ServiceCategory | None = None` ב-`backend/app/schemas/lead.py`.
-- [ ] `create_lead` ב-service מטפל ב-None (לא קורס; שומר NULL בעמודה).
-- [ ] Migration: אם `leads.service_category` הוא NOT NULL ב-DB — להפוך ל-nullable.
-- [ ] Frontend `NewLeadModal` לא דורש קטגוריה (חזרה ל-§7.1 — רק שם/טלפון/מקור חובה).
-- [ ] `grep "service_category: ServiceCategory$" backend/app/schemas/lead.py` לא מחזיר תוצאות.
+- [x] `LeadCreate.service_category: ServiceCategory | None = None` ב-`backend/app/schemas/lead.py`.
+- [x] `create_lead` ב-service מטפל ב-None (שומר NULL).
+- [x] Migration 0011: `ALTER COLUMN service_category DROP NOT NULL`.
+- [x] Frontend `NewLeadModal` עם אופציה "— לבחור מאוחר יותר —" כברירת מחדל.
+- [x] Read schemas (LeadRead, LeadListItem, DashboardCard, StuckTaskItem, PendingBookingItem, BookingPageInfo) מקבלים `str | None`.
+- [x] `labelCategory(null) → "ללא קטגוריה"` ב-frontend.
+- [x] `IntakeFormRequest.service_category` גם אופציונלי.
 
 **Fix sketch:** הופך את השדה ל-optional בכל מקום (schema, model, frontend). אם קטגוריה לא ידועה ביצירה — נועה תוכל לסווג אחר כך מהכרטיס.
 
