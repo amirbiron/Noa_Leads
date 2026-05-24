@@ -57,6 +57,18 @@ from app.utils.work_hours import (
 logger = logging.getLogger(__name__)
 
 
+class CalendarTemporarilyUnavailable(AppException):
+    """Google מחובר אבל FreeBusy נכשל — לא לתת לבני אדם לבחור סלוטים שעלולים
+    להתנגש עם אירועים אמיתיים ביומן.
+    """
+
+    status_code = 503
+    code = "calendar_unavailable"
+    user_message = (
+        "סנכרון היומן כשל זמנית. אנא נסי שוב בעוד דקה."
+    )
+
+
 # ===== ברירות מחדל למשך תור לפי קטגוריה =====
 _DEFAULT_BOOKING_DURATION_MIN: dict[str, int] = {
     "clinic": 60,
@@ -238,8 +250,16 @@ async def _fetch_google_busy(
     db: AsyncSession, start_utc: datetime, end_utc: datetime
 ) -> tuple[list[tuple[datetime, datetime]], bool]:
     """
-    קורא ל-FreeBusy API של Google. אם Google לא מחובר → מחזיר ([], False).
-    אם מחובר אבל שגיאת API → log + מחזיר ([], True) (אופטימי, ה-DB busy יתפוס מקרים פעילים).
+    קורא ל-FreeBusy API של Google.
+
+    שלוש דרכים לחזרה:
+    - Google לא מחובר/לא מוגדר → ([], False): המשתמש בחר לא להשתמש בGoogle.
+      DB-only הוא בסדר; ה-UI יציג "סנכרון יומן זמני לא פעיל".
+    - מחובר + API הצליח → (busy, True).
+    - מחובר + API נכשל → raise CalendarTemporarilyUnavailable.
+      אסור לתת למשתמש לראות "slots פנויים" שעלולים להיות תפוסים
+      ביומן האמיתי. הUI יציג הודעת retry. ההבחנה חשובה: לא-מחובר
+      זו בחירה מודעת; failure זה incident שדורש fail-safe.
     """
     from app.services import google_calendar as gc_service
 
@@ -257,13 +277,9 @@ async def _fetch_google_busy(
             _freebusy_query, creds, start_utc, end_utc
         )
         return busy, True
-    except Exception:
-        logger.exception("FreeBusy query failed; falling back to DB-busy only")
-        # מחזירים False כדי שה-UI יציג את אותה הודעה כמו ב-not_connected:
-        # "סנכרון יומן זמני לא פעיל". המשתמש יבין שייתכן שיש אירוע ביומן
-        # שלא נספר. כיוון שהאמת היא שהקריאה נכשלה — זה דיוק יותר טוב
-        # מאשר להגיד שהסנכרון פעיל.
-        return [], False
+    except Exception as e:
+        logger.exception("FreeBusy query failed for connected calendar")
+        raise CalendarTemporarilyUnavailable() from e
 
 
 def _freebusy_query(
@@ -398,16 +414,32 @@ async def create_booking_request(
             "הסלוט כבר תפוס או שיש לך כבר תור פעיל. בחרי מועד אחר."
         ) from e
 
-    # סטטוס הליד → BOOKING_PENDING (atomic, רק אם פתוח)
+    # סטטוס הליד → BOOKING_PENDING + עדכון CRM fields. mirror של request_meeting
+    # ב-state_machine: last_inbound_at, reply_boost_until (קופץ לראש בדשבורד),
+    # last_activity_type. אטומי דרך WHERE status IN (open) — אם הליד נסגר בינתיים
+    # ה-UPDATE לא יבוצע ושום שדה לא ידרס.
     from sqlalchemy import func, update
 
-    open_statuses = [s.value for s in (LeadStatus.NEW, LeadStatus.IN_PROGRESS, LeadStatus.PROPOSAL_SENT, LeadStatus.BOOKED)]
+    from app.services.lead_actions import REPLY_BOOST_HOURS
+
+    open_statuses = [
+        s.value
+        for s in (
+            LeadStatus.NEW,
+            LeadStatus.IN_PROGRESS,
+            LeadStatus.PROPOSAL_SENT,
+            LeadStatus.BOOKED,
+        )
+    ]
     await db.execute(
         update(Lead)
         .where(Lead.id == lead.id, Lead.status.in_(open_statuses))
         .values(
             status=LeadStatus.BOOKING_PENDING.value,
             waiting_on="NOAH",
+            last_inbound_at=now_utc,
+            reply_boost_until=now_utc + timedelta(hours=REPLY_BOOST_HOURS),
+            last_activity_type="meeting_requested",
             updated_at=func.now(),
         )
     )
@@ -425,23 +457,31 @@ async def create_booking_request(
         },
     )
 
+    # extract primitives לפני commit — אחרי commit ה-ORM attributes עלולים
+    # להיות expired/lazy ולגרור MissingGreenlet ב-async session (כלל 5 ב-CLAUDE.md).
+    lead_name_for_telegram = lead.full_name
+    slot_start_iso_for_telegram = slot_start.isoformat()
+    booking_id = booking.id
+    booking_status = booking.status
+    booking_start = booking.requested_slot_start
+    booking_end = booking.requested_slot_end
+
     await db.commit()
-    await db.refresh(booking)
 
     # התראה לנועה — אחרי commit, ושגיאה לא הופלת את ה-flow
     try:
         from app.services import telegram as telegram_service
 
         await telegram_service.notify_booking_requested(
-            lead_name=lead.full_name,
-            slot_start_iso=slot_start.isoformat(),
+            lead_name=lead_name_for_telegram,
+            slot_start_iso=slot_start_iso_for_telegram,
         )
     except Exception:
         logger.exception("Telegram notify_booking_requested failed")
 
     return CreateBookingResponse(
-        booking_id=booking.id,
-        status=booking.status,
-        slot_start=booking.requested_slot_start,
-        slot_end=booking.requested_slot_end,
+        booking_id=booking_id,
+        status=booking_status,
+        slot_start=booking_start,
+        slot_end=booking_end,
     )

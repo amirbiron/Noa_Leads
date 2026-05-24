@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
-import { Calendar, CheckCircle2, Clock, Info } from "lucide-react";
+import { AlertCircle, Calendar, CheckCircle2, Clock, Info } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import { labelCategory, labelSubtype } from "@/lib/hebrew";
 import type {
@@ -74,6 +74,10 @@ export default function BookingPage() {
   const [loading, setLoading] = useState(true);
   const [loadingSlots, setLoadingSlots] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // מצב שגיאה נפרד לטעינת זמינות. חיוני להבחין בין "אין סלוטים פנויים"
+  // (יום עמוס לגיטימי) לבין "ה-fetch נכשל" (רשת/שרת/גוגל). אחרת הליד
+  // רואה "אין סלוטים" ומניח שאין מועדים כלל ב-14 הימים.
+  const [availabilityError, setAvailabilityError] = useState<string | null>(null);
 
   // טווח ימים זמין לבחירה — מהיום ועד DAYS_TO_SHOW
   const allDates = useMemo(() => {
@@ -108,19 +112,35 @@ export default function BookingPage() {
       .finally(() => setLoading(false));
   }, [token]);
 
+  const fetchAvailability = useMemo(
+    () => async () => {
+      if (!token || !info || info.has_active_booking) return;
+      setLoadingSlots(true);
+      setAvailabilityError(null);
+      const first = allDates[0];
+      const last = allDates[allDates.length - 1];
+      try {
+        const result = await api.getBookingAvailability(
+          token,
+          formatDate(first),
+          formatDate(last),
+        );
+        setAvailability(result);
+      } catch (err) {
+        setAvailability(null);
+        setAvailabilityError(
+          err instanceof ApiError ? err.message : "שגיאה בטעינת זמינות",
+        );
+      } finally {
+        setLoadingSlots(false);
+      }
+    },
+    [token, info, allDates],
+  );
+
   useEffect(() => {
-    if (!token || !info || info.has_active_booking) return;
-    setLoadingSlots(true);
-    const first = allDates[0];
-    const last = allDates[allDates.length - 1];
-    api
-      .getBookingAvailability(token, formatDate(first), formatDate(last))
-      .then(setAvailability)
-      .catch((err) =>
-        setError(err instanceof ApiError ? err.message : "שגיאה בטעינת זמינות"),
-      )
-      .finally(() => setLoadingSlots(false));
-  }, [token, info, allDates]);
+    void fetchAvailability();
+  }, [fetchAvailability]);
 
   const slotsForSelectedDate = useMemo(() => {
     if (!availability) return [];
@@ -261,12 +281,16 @@ export default function BookingPage() {
                     setSelectedDate(key);
                     setSelectedSlot(null);
                   }}
-                  disabled={!hasSlots && !loadingSlots}
+                  // כשיש שגיאת fetch — לא מכבים את הכפתורים, אחרת כל
+                  // השבועיים נראים אפורים כאילו אין זמינות אמיתית.
+                  disabled={
+                    !hasSlots && !loadingSlots && !availabilityError
+                  }
                   className={cn(
                     "flex flex-col items-center py-2 rounded-lg text-xs border",
                     isSelected
                       ? "bg-gray-900 text-white border-gray-900"
-                      : hasSlots
+                      : hasSlots || availabilityError
                       ? "bg-white border-gray-200 text-gray-700"
                       : "bg-gray-50 border-gray-100 text-gray-300",
                   )}
@@ -286,6 +310,21 @@ export default function BookingPage() {
           </div>
           {loadingSlots ? (
             <div className="text-center text-gray-400 text-sm py-6">טוען…</div>
+          ) : availabilityError ? (
+            // שגיאה אמיתית — לא מציגים "אין סלוטים", כי זה מטעה: אולי
+            // היומן עמוס באמת ואולי הקריאה נכשלה. מבדילים ונותנים retry.
+            <div className="bg-white rounded-xl border border-state-red/30 px-4 py-5 flex flex-col items-center gap-3">
+              <div className="flex items-start gap-2 text-state-red text-sm">
+                <AlertCircle size={16} className="mt-0.5 shrink-0" aria-hidden />
+                <span>{availabilityError}</span>
+              </div>
+              <button
+                onClick={() => void fetchAvailability()}
+                className="text-sm rounded-lg border border-gray-200 px-4 py-2 hover:bg-gray-50"
+              >
+                נסי שוב
+              </button>
+            </div>
           ) : slotsForSelectedDate.length === 0 ? (
             <div className="bg-white rounded-xl border border-dashed border-gray-200 px-4 py-6 text-center text-sm text-gray-400">
               אין סלוטים פנויים ביום זה.
