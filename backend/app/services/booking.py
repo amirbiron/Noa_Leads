@@ -609,8 +609,6 @@ async def create_booking_request(
 
     # extract primitives לפני commit — אחרי commit ה-ORM attributes עלולים
     # להיות expired/lazy ולגרור MissingGreenlet ב-async session (כלל 5 ב-CLAUDE.md).
-    lead_name_for_telegram = lead.full_name
-    slot_start_iso_for_telegram = slot_start.isoformat()
     booking_id = booking.id
     booking_status = booking.status
     booking_start = booking.requested_slot_start
@@ -618,16 +616,10 @@ async def create_booking_request(
 
     await db.commit()
 
-    # התראה לנועה — אחרי commit, ושגיאה לא הופלת את ה-flow
-    try:
-        from app.services import telegram as telegram_service
-
-        await telegram_service.notify_booking_requested(
-            lead_name=lead_name_for_telegram,
-            slot_start_iso=slot_start_iso_for_telegram,
-        )
-    except Exception:
-        logger.exception("Telegram notify_booking_requested failed")
+    # לא שולחים Telegram על בקשת תור — לפי Spec §16.3:
+    # "הדבר היחיד שמקבל פוש מיידי הוא ליד חדש שנכנס". בקשת תור מליד
+    # קיים תופיע בדשבורד דרך next_action_due_at + מצב BOOKING_PENDING.
+    # (F-06 ב-docs/spec-deviations.md)
 
     return CreateBookingResponse(
         booking_id=booking_id,

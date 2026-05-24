@@ -171,3 +171,56 @@ services:
           property: connectionString
       - fromGroup: noa-leads-shared
       - fromGroup: noa-leads-python
+
+  # post-meeting check — כל 30 דק' (Spec §11.4 + §23, F-15)
+  # יוצר משימת post_meeting_update לפגישות שהסתיימו לפני 30+ דק'.
+  # אינדמפוטנטי דרך NOT EXISTS לפי booking_id.
+  - type: cron
+    name: noa-post-meeting-tasks
+    runtime: python
+    plan: starter
+    rootDir: backend
+    schedule: "*/30 * * * *"
+    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
+    startCommand: python -m jobs.post_meeting_tasks
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: noa-leads-db
+          property: connectionString
+      - fromGroup: noa-leads-shared
+      - fromGroup: noa-leads-python
+
+  # ניקוי bookings תקועים + reset של ליד תקוע ב-BOOKING_PENDING/BOOKED — יומי 03:30 ישראל (00:30 UTC, F-13)
+  - type: cron
+    name: noa-expire-stale-bookings
+    runtime: python
+    plan: starter
+    rootDir: backend
+    schedule: "30 0 * * *"
+    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
+    startCommand: python -m jobs.expire_stale_bookings
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: noa-leads-db
+          property: connectionString
+      - fromGroup: noa-leads-shared
+      - fromGroup: noa-leads-python
+
+  # חידוש watch channel של Google Calendar (תוקף ~שבוע) — יומי 04:00 ישראל (01:00 UTC, F-13)
+  - type: cron
+    name: noa-renew-calendar-watch
+    runtime: python
+    plan: starter
+    rootDir: backend
+    schedule: "0 1 * * *"
+    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
+    startCommand: python -m jobs.renew_calendar_watch
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: noa-leads-db
+          property: connectionString
+      - fromGroup: noa-leads-shared
+      - fromGroup: noa-leads-python

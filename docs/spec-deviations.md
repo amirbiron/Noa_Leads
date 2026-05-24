@@ -138,10 +138,10 @@
 **Severity:** קריטי — נועה תקבל ספאם בטלגרם על כל בקשת תור, מערער את ה-"ערוץ ייחודי לליד חדש".
 
 **Acceptance:**
-- [ ] `notify_booking_requested` הוסר מ-`telegram.py` (או נשמר אבל לא נקרא).
-- [ ] `booking.py:625` (השורה שקוראת ל-notify) הוסרה.
-- [ ] במקום — נוצרת בועת התראה בדשבורד / task פתוח שיופיע ב-/pending ו-/today.
-- [ ] `grep -rn "notify_booking_requested" backend/app/` מחזיר 0 שורות פונקציונליות (רק definition אם הושאר).
+- [x] `notify_booking_requested` הוסר מ-`telegram.py` (גם הפונקציה עצמה — נשמרה הערה בלבד).
+- [x] `booking.py:625` (השורה שקוראת ל-notify) הוסרה.
+- [x] במקום — הליד עובר ל-BOOKING_PENDING + next_action מתעדכן, יופיע ב-/today/`/pending` כשנועה נכנסת.
+- [x] `grep -rn "notify_booking_requested" backend/app/` מחזיר 0 שורות פונקציונליות.
 
 **Fix sketch:** הסר את הקריאה ב-booking.py. הוסף activity log + עדכון `next_action_due_at` כך שהליד יקפוץ ב-/today של נועה בכניסה הבאה. אין צורך ב-push.
 
@@ -277,12 +277,12 @@
 **Severity:** קריטי — אחרי deploy, jobs אלה לא ירוצו. נועה תקבל "תקועים" שלעולם לא ייסגרו, watch ביומן יפוג ולא יתחדש, post-meeting tasks לא ייווצרו.
 
 **Acceptance:**
-- [ ] `render.yaml` מכיל 3 services נוספים — `noa-post-meeting-tasks`, `noa-expire-stale-bookings`, `noa-renew-calendar-watch`.
-- [ ] לפי `docs/google-calendar-setup.md`:
-  - `post_meeting_tasks` יומי 02:00 (Israel = 23:00 UTC, או 24:00 = "0 0 * * *")
-  - `expire_stale_bookings` יומי 03:30 (Israel)
-  - `renew_calendar_watch` יומי 04:00 (Israel)
-- [ ] `grep -c "startCommand: python -m jobs" render.yaml` מחזיר 8 (לא 5).
+- [x] `render.yaml` מכיל 3 services נוספים — `noa-post-meeting-tasks`, `noa-expire-stale-bookings`, `noa-renew-calendar-watch`.
+- [x] schedules:
+  - `post_meeting_tasks`: `*/30 * * * *` (כל 30 דק', לפי F-15 + §11.4)
+  - `expire_stale_bookings`: `30 0 * * *` (00:30 UTC = 03:30 Israel)
+  - `renew_calendar_watch`: `0 1 * * *` (01:00 UTC = 04:00 Israel)
+- [x] `grep -c "startCommand: python -m jobs" render.yaml` מחזיר 8 (לא 5).
 
 **Fix sketch:** הוסף 3 services ל-render.yaml בעקבות הדוגמא של noa-detect-dormant.
 

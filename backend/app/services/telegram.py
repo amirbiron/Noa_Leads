@@ -74,28 +74,7 @@ async def notify_new_lead(lead: Lead) -> None:
     await send_message("\n".join(lines))
 
 
-async def notify_booking_requested(
-    lead_name: str, slot_start_iso: str
-) -> None:
-    """
-    התראה לנועה על בקשת תור חדשה מהדף הציבורי. ה-slot מועבר כ-ISO
-    כדי לא לכפות import של datetime פה ולא להפיל אם הtz משונה.
-    """
-    from datetime import datetime
-    from zoneinfo import ZoneInfo
-
-    name = escape_telegram_html(lead_name)
-    try:
-        dt = datetime.fromisoformat(slot_start_iso).astimezone(
-            ZoneInfo("Asia/Jerusalem")
-        )
-        when = dt.strftime("%d/%m %H:%M")
-    except (ValueError, TypeError):
-        when = escape_telegram_html(slot_start_iso)
-
-    await send_message(
-        f"📅 <b>בקשת תור חדשה</b>\n"
-        f"<b>{name}</b>\n"
-        f"מועד מבוקש: <b>{when}</b>\n\n"
-        f"לאישור או דחייה — היכנסי לאפליקציה."
-    )
+# notify_booking_requested הוסרה — לפי Spec §16.3, טלגרם הוא ערוץ ייחודי
+# לליד חדש בלבד ("הדבר היחיד שמקבל פוש מיידי"). בקשת תור מליד קיים מופיעה
+# בדשבורד דרך next_action_due_at + מצב BOOKING_PENDING. ראה F-06 ב-
+# docs/spec-deviations.md.
