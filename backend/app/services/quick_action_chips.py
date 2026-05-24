@@ -221,12 +221,18 @@ async def apply_chip(
     # אטומי בטרנזקציה אחת (אין commit לפני הסוף).
     # 1. UPDATE Lead — מותנה ב-status פתוח. אם race עם close_lead → rowcount=0
     #    ואנחנו עוצרים בלי לבצע את שאר הצעדים.
+    #    last_outbound_at + last_activity_type נכתבים כי לחיצה על chip היא
+    #    touchpoint לכל דבר (נועה דיברה עם הליד וסיכמה) — אחרת weekly
+    #    "responded in time" + מיון הדשבורד לא יראו את הפעולה. לא נוגעים
+    #    ב-last_inbound_at / reply_boost_until — אלה לאינטראקציה מהלקוח.
     update_result = await db.execute(
         update(Lead)
         .where(Lead.id == lead_id, Lead.status.notin_(closed_values))
         .values(
             status=chip.target_status,
             waiting_on=chip.waiting_on,
+            last_outbound_at=now_utc,
+            last_activity_type=ActivityType.CHIP_APPLIED.value,
             updated_at=func.now(),
         )
     )

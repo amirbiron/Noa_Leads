@@ -185,12 +185,19 @@ export default function HomePage() {
 }
 
 function DailySummaryBubble({ summary }: { summary: DailySummary }) {
-  // תאריך הסיכום בפורמט עברי קצר: "ב׳ בכסלו" וכו'. מספיק לקריאה מהירה.
-  const dateLabel = new Date(summary.summary_date).toLocaleDateString("he-IL", {
-    weekday: "long",
-    day: "numeric",
-    month: "long",
-  });
+  // summary_date מגיע כ-"YYYY-MM-DD" (date-only). Date(string) מפרסר אותו
+  // כ-UTC midnight, מה שגורם להזזת יום כשמשתמש נמצא ב-TZ שלילי. נוסיף
+  // T00:00 ונציין timeZone="Asia/Jerusalem" כדי שהיום/חודש/שם-יום יהיו
+  // יציבים בכל סביבה.
+  const dateLabel = new Date(`${summary.summary_date}T00:00:00`).toLocaleDateString(
+    "he-IL",
+    {
+      weekday: "long",
+      day: "numeric",
+      month: "long",
+      timeZone: "Asia/Jerusalem",
+    },
+  );
   return (
     <div className="bg-gradient-to-bl from-indigo-500/10 to-indigo-500/5 border border-indigo-300/40 rounded-xl p-4">
       <div className="flex items-start gap-3">

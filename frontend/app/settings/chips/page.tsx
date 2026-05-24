@@ -22,6 +22,7 @@ import {
 import type {
   LeadStatus,
   QuickActionChip,
+  TaskType,
   WaitingOn,
 } from "@/lib/types";
 
@@ -45,8 +46,11 @@ const WAITING_ON_OPTIONS: WaitingOn[] = [
   "ASSISTANT_PENDING_NOAH",
 ];
 
-// TaskType — לפי Spec §17.1 + §16.4. הצ'יפים השכיחים יוצרים את 4 האלה.
-const TASK_TYPE_OPTIONS = [
+// TaskType — לפי Spec §17.1 + §16.4. הצ'יפים השכיחים יוצרים את 6 האלה.
+// אלה ה-task types שמתאימים לchip; שאר הערכים ב-TaskType (first_response,
+// post_meeting_update, program_end, after_hours_reply, proposal_followup)
+// נוצרים אוטומטית ע"י המערכת, לא ע"י סיכום שיחה.
+const TASK_TYPE_OPTIONS: TaskType[] = [
   "retry_call",
   "followup",
   "send_proposal",
@@ -64,7 +68,9 @@ function chipSummary(c: QuickActionChip): string {
   ) {
     return "לא מאוכלס — לחצי 'ערוך' כדי להשלים";
   }
-  return `→ ${labelStatus(c.target_status)} · ${labelWaiting(c.waiting_on)} · ${labelTaskType(c.followup_task_type)} בעוד ${c.auto_followup_days} ימים`;
+  const days = c.auto_followup_days;
+  const unit = days === 1 ? "יום" : "ימים";
+  return `→ ${labelStatus(c.target_status)} · ${labelWaiting(c.waiting_on)} · ${labelTaskType(c.followup_task_type)} בעוד ${days} ${unit}`;
 }
 
 export default function ChipsSettingsPage() {
@@ -256,7 +262,7 @@ function ChipEditor({
     label: string;
     target_status: LeadStatus;
     waiting_on: WaitingOn;
-    followup_task_type: string;
+    followup_task_type: TaskType;
     auto_followup_days: number;
     sort_order?: number;
     is_active?: boolean;
@@ -269,7 +275,7 @@ function ChipEditor({
   const [waitingOn, setWaitingOn] = useState<WaitingOn>(
     (initial?.waiting_on as WaitingOn | null) ?? "NOAH",
   );
-  const [taskType, setTaskType] = useState<string>(
+  const [taskType, setTaskType] = useState<TaskType>(
     initial?.followup_task_type ?? "followup",
   );
   const [days, setDays] = useState<number>(initial?.auto_followup_days ?? 1);
@@ -281,8 +287,8 @@ function ChipEditor({
       setErr("חובה להזין שם");
       return;
     }
-    if (!Number.isFinite(days) || days < 1 || days > 365) {
-      setErr("מספר ימים חייב להיות בין 1 ל-365");
+    if (!Number.isInteger(days) || days < 1 || days > 365) {
+      setErr("מספר ימים חייב להיות מספר שלם בין 1 ל-365");
       return;
     }
     setBusy(true);
@@ -353,7 +359,7 @@ function ChipEditor({
         <label className="text-xs text-gray-600 block mb-1">סוג פולואפ</label>
         <select
           value={taskType}
-          onChange={(e) => setTaskType(e.target.value)}
+          onChange={(e) => setTaskType(e.target.value as TaskType)}
           className="w-full text-sm border border-gray-300 rounded-md px-2 py-1.5 focus:outline-none focus:border-gray-900 bg-white"
         >
           {TASK_TYPE_OPTIONS.map((t) => (
@@ -372,8 +378,9 @@ function ChipEditor({
           type="number"
           min={1}
           max={365}
+          step={1}
           value={days}
-          onChange={(e) => setDays(Number(e.target.value))}
+          onChange={(e) => setDays(parseInt(e.target.value, 10))}
           className="w-full text-sm border border-gray-300 rounded-md px-2 py-1.5 focus:outline-none focus:border-gray-900"
         />
       </div>

@@ -91,6 +91,7 @@ export const ACTIVITY_TYPE_LABELS: Record<string, string> = {
   lead_reopened: "ליד נפתח מחדש",
   inbound_message_logged: "הודעה נכנסת",
   outbound_message_logged: "הודעה יוצאת",
+  chip_applied: "סיכום מהיר",
   program_created: "תוכנית חדשה",
   program_session_done: "מפגש בוצע",
   program_completed: "תוכנית הסתיימה",

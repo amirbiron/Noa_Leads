@@ -27,6 +27,21 @@ export type PreferredContact = "phone" | "whatsapp" | "email";
 
 export type StateColor = "red" | "orange" | "green" | "gray";
 
+// משקף את TaskType ב-backend/app/constants.py — Spec v2.1 §17.1 + §16.4.
+// בהוספת ערך חדש לbackend, יש לעדכן גם כאן וגם ב-TASK_TYPE_LABELS.
+export type TaskType =
+  | "first_response"
+  | "warm_followup"
+  | "proposal_followup"
+  | "dormant_check"
+  | "lecture_inquiry"
+  | "followup"
+  | "retry_call"
+  | "send_proposal"
+  | "post_meeting_update"
+  | "program_end"
+  | "after_hours_reply";
+
 export type SourceChannel =
   | "form"
   | "email"
@@ -242,7 +257,7 @@ export interface QuickActionChip {
   label: string;
   target_status: LeadStatus | null;
   waiting_on: WaitingOn | null;
-  followup_task_type: string | null;  // TaskType-string (אין צורך ב-enum כי שמות חדשים יכולים להופיע)
+  followup_task_type: TaskType | null;
   auto_followup_days: number | null;
   sort_order: number;
   is_active: boolean;
@@ -252,7 +267,7 @@ export interface QuickActionChipCreate {
   label: string;
   target_status?: LeadStatus | null;
   waiting_on?: WaitingOn | null;
-  followup_task_type?: string | null;
+  followup_task_type?: TaskType | null;
   auto_followup_days?: number | null;
   sort_order?: number;
   is_active?: boolean;
@@ -262,7 +277,7 @@ export interface QuickActionChipUpdate {
   label?: string;
   target_status?: LeadStatus | null;
   waiting_on?: WaitingOn | null;
-  followup_task_type?: string | null;
+  followup_task_type?: TaskType | null;
   auto_followup_days?: number | null;
   sort_order?: number;
   is_active?: boolean;
