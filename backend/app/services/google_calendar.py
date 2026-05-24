@@ -211,6 +211,19 @@ async def exchange_code_and_save(
     await db.commit()
     await db.refresh(row)
     logger.info("Google Calendar connected as %s", email)
+
+    # יצירת watch channel אוטומטית — אם backend_url מוגדר. כשלון כאן לא
+    # מבטל את החיבור (הסנכרון ההפוך אופציונלי; DB→Google עובד גם בלעדיו).
+    # ב-dev בלי URL ציבורי, פשוט יידלג עם warning.
+    try:
+        await create_watch(db)
+    except WatchNotConfiguredError:
+        logger.info(
+            "Skipping watch creation: BACKEND_URL not configured (dev mode)"
+        )
+    except Exception:
+        logger.exception("Failed to create watch channel after OAuth")
+
     return row
 
 
@@ -353,11 +366,21 @@ async def get_status(db: AsyncSession) -> dict[str, Any]:
         "timezone": row.timezone,
         "connected_at": row.created_at,
         "auth_invalid": row.auth_invalid_at is not None,
+        # שדות סנכרון הפוך (שלב 14)
+        "watch_active": row.watch_channel_id is not None,
+        "watch_expiration": row.watch_expiration,
     }
 
 
 async def disconnect(db: AsyncSession) -> None:
-    """מנתק לחלוטין — מוחק את שורת ה-credentials."""
+    """מנתק לחלוטין — עוצר watch ומוחק את שורת ה-credentials."""
+    # stop_watch קודם — אחרת ייוותר channel פעיל אצל Google שישלח push
+    # ל-webhook שלנו, שיכשל באימות (אין credentials → 401) ויבוזבזו ניסיונות.
+    try:
+        await stop_watch(db)
+    except Exception:
+        logger.exception("Failed to stop watch during disconnect")
+
     await db.execute(
         delete(GoogleCalendarCredentials).where(
             GoogleCalendarCredentials.id == _SINGLETON_ID
@@ -461,3 +484,368 @@ def _delete_event_blocking(creds: Credentials, event_id: str) -> None:
         if e.resp.status in (404, 410):
             return
         raise
+
+
+# ===================== Watch channels + reverse sync =====================
+#
+# Google Calendar שולח push notifications ל-webhook שלנו בכל שינוי ביומן.
+# ראה: docs/references/google-calendar-blueprint.md סעיף 6.
+#
+# זרימה:
+# 1. create_watch — נרשם ל-events, מקבל channel_id + resource_id + expiration.
+# 2. Google שולח POST ל-/webhooks/google-calendar בכל שינוי (headers בלבד,
+#    אין payload משמעותי).
+# 3. webhook קורא ל-sync_changes(db) שמשתמש ב-syncToken להבאת deltas בלבד.
+# 4. ה-deltas מוחזרים — והקורא (booking_sync) מטמיע ב-DB.
+
+
+# תוקף watch מקסימלי (Google clamps לעיתים לשעות). שבוע = הערך הגבוה.
+_WATCH_TTL_SECONDS = 7 * 24 * 3600
+# מתי לחדש מוקדם — אם פג תוך 24 שעות, ה-cron יחדש מבעוד מועד
+_WATCH_RENEW_WITHIN = timedelta(hours=24)
+
+
+class WatchNotConfiguredError(AppException):
+    """backend_url לא מוגדר — לא ניתן ליצור watch channel."""
+
+    status_code = 503
+    code = "backend_url_not_configured"
+    user_message = (
+        "סנכרון יומן הפוך לא מוגדר (חסר BACKEND_URL). צרי קשר עם המתאם."
+    )
+
+
+async def create_watch(db: AsyncSession) -> dict[str, Any]:
+    """
+    יוצר watch channel ביומן primary + מאתחל syncToken דרך events.list.
+
+    אם כבר קיים watch פעיל — עוצר אותו קודם (idempotent — לא נוצרים כפילויות).
+    מחזיר dict עם פרטי ה-channel לתצוגה ב-UI/לוג.
+    """
+    s = get_settings()
+    if not s.backend_url:
+        raise WatchNotConfiguredError()
+
+    creds = await get_credentials_or_404(db)
+    row = await _load_row(db)
+    if row is None:
+        raise GoogleNotConnectedError()
+
+    # עצירת watch קודם אם קיים — מונע orphan channels אצל Google
+    if row.watch_channel_id and row.watch_resource_id:
+        try:
+            await asyncio.to_thread(
+                _stop_channel_blocking,
+                creds,
+                row.watch_channel_id,
+                row.watch_resource_id,
+            )
+        except Exception:
+            # שגיאת stop לא חוסמת — אולי כבר פג מעצמו
+            logger.warning(
+                "Failed to stop existing watch channel %s", row.watch_channel_id
+            )
+
+    channel_id = f"noa-cal-{secrets.token_urlsafe(16)}"
+    watch_token = secrets.token_urlsafe(32)
+    address = s.backend_url.rstrip("/") + "/webhooks/google-calendar"
+
+    result = await asyncio.to_thread(
+        _watch_blocking, creds, channel_id, address, watch_token
+    )
+
+    # קבלת syncToken התחלתי — events.list ראשון מחזיר nextSyncToken
+    # (לפעמים דרך paging — הפעם הזו אנחנו רק רוצים את ה-token, לא את האירועים).
+    sync_token = await asyncio.to_thread(_initial_sync_token_blocking, creds)
+
+    # שמירה ל-DB
+    expiration_ms = int(result.get("expiration", 0))
+    expiration_dt = datetime.fromtimestamp(
+        expiration_ms / 1000, tz=timezone.utc
+    ) if expiration_ms else None
+
+    await db.execute(
+        update(GoogleCalendarCredentials)
+        .where(GoogleCalendarCredentials.id == _SINGLETON_ID)
+        .values(
+            watch_channel_id=channel_id,
+            watch_resource_id=result["resourceId"],
+            watch_expiration=expiration_dt,
+            watch_token_encrypted=encrypt_secret(watch_token),
+            sync_token=sync_token,
+        )
+    )
+    await db.commit()
+
+    logger.info(
+        "Created Google Calendar watch channel %s (expires %s)",
+        channel_id,
+        expiration_dt,
+    )
+    return {
+        "channel_id": channel_id,
+        "resource_id": result["resourceId"],
+        "expiration": expiration_dt,
+    }
+
+
+def _watch_blocking(
+    creds: Credentials, channel_id: str, address: str, token: str
+) -> dict[str, Any]:
+    """blocking — נקרא רק מתוך asyncio.to_thread."""
+    service = build("calendar", "v3", credentials=creds, cache_discovery=False)
+    expiration_ms = int(
+        (datetime.now(timezone.utc) + timedelta(seconds=_WATCH_TTL_SECONDS)).timestamp() * 1000
+    )
+    body = {
+        "id": channel_id,
+        "type": "web_hook",
+        "address": address,
+        "token": token,
+        "expiration": expiration_ms,
+    }
+    return service.events().watch(calendarId="primary", body=body).execute()
+
+
+def _initial_sync_token_blocking(creds: Credentials) -> str | None:
+    """events.list ראשון לקבלת nextSyncToken. עוקבים אחר pageToken עד הסוף."""
+    service = build("calendar", "v3", credentials=creds, cache_discovery=False)
+    page_token: str | None = None
+    while True:
+        params: dict[str, Any] = {
+            "calendarId": "primary",
+            "showDeleted": True,
+            "singleEvents": True,
+            "maxResults": 2500,
+        }
+        if page_token:
+            params["pageToken"] = page_token
+        result = service.events().list(**params).execute()
+        next_token = result.get("nextSyncToken")
+        if next_token:
+            return next_token
+        page_token = result.get("nextPageToken")
+        if not page_token:
+            return None
+
+
+def _stop_channel_blocking(
+    creds: Credentials, channel_id: str, resource_id: str
+) -> None:
+    service = build("calendar", "v3", credentials=creds, cache_discovery=False)
+    try:
+        service.channels().stop(
+            body={"id": channel_id, "resourceId": resource_id}
+        ).execute()
+    except HttpError as e:
+        if e.resp.status in (404, 410):
+            return
+        raise
+
+
+async def stop_watch(db: AsyncSession) -> None:
+    """עוצר את ה-watch הנוכחי (אם קיים) ומנקה את שדות ה-watch ב-DB."""
+    row = await _load_row(db)
+    if row is None or not (row.watch_channel_id and row.watch_resource_id):
+        return
+    try:
+        creds = await get_credentials_or_404(db)
+        await asyncio.to_thread(
+            _stop_channel_blocking,
+            creds,
+            row.watch_channel_id,
+            row.watch_resource_id,
+        )
+    except (GoogleNotConnectedError, GoogleAuthInvalidError):
+        # לא מחובר/auth שבור — מנקים בכל מקרה את ה-DB
+        pass
+    await db.execute(
+        update(GoogleCalendarCredentials)
+        .where(GoogleCalendarCredentials.id == _SINGLETON_ID)
+        .values(
+            watch_channel_id=None,
+            watch_resource_id=None,
+            watch_expiration=None,
+            watch_token_encrypted=None,
+        )
+    )
+    await db.commit()
+
+
+async def renew_watch_if_needed(db: AsyncSession) -> bool:
+    """
+    מחדש את ה-watch אם הוא פג תוך _WATCH_RENEW_WITHIN או כבר פג.
+    מחזיר True אם חודש, False אם לא היה צורך.
+    משמש מ-cron יומי (jobs/renew_calendar_watch.py).
+    """
+    row = await _load_row(db)
+    if row is None:
+        return False
+    if not row.watch_expiration:
+        # אין watch בכלל — יוצרים חדש אם backend_url מוגדר ויש credentials
+        try:
+            await create_watch(db)
+            return True
+        except (GoogleNotConnectedError, GoogleAuthInvalidError, WatchNotConfiguredError):
+            return False
+
+    now = datetime.now(timezone.utc)
+    if row.watch_expiration - now > _WATCH_RENEW_WITHIN:
+        return False  # עוד יש זמן
+
+    await create_watch(db)  # create_watch מטפל ב-stop של הישן
+    return True
+
+
+# ===================== Reverse sync (events.list with syncToken) =====================
+
+
+class CalendarChange:
+    """שינוי בודד שזוהה ב-sync. struct פשוט, אין צורך ב-dataclass."""
+
+    __slots__ = ("booking_id", "event_id", "status", "start", "end")
+
+    def __init__(
+        self,
+        booking_id: UUID,
+        event_id: str,
+        status: str,
+        start: datetime | None,
+        end: datetime | None,
+    ) -> None:
+        self.booking_id = booking_id
+        self.event_id = event_id
+        self.status = status  # "cancelled" או "confirmed"/"tentative"
+        self.start = start
+        self.end = end
+
+
+async def sync_changes(db: AsyncSession) -> list[CalendarChange]:
+    """
+    מביא deltas מ-events.list עם sync_token, מחזיר רשימת שינויים שנוגעים
+    ל-bookings שלנו (לפי extendedProperties.private.bookingId שאנחנו כותבים
+    ביצירת אירוע).
+
+    מבצע SELECT FOR UPDATE על שורת ה-credentials כדי לסדר ריצות מקבילות
+    (שני webhooks בו-זמנית יקבלו 410 אם משתמשים באותו syncToken).
+
+    410 GONE → wipe sync_token, מבצע full re-sync.
+    """
+    creds = await get_credentials_or_404(db)
+
+    # נעילה לפי שורת ה-credentials — מסדרת syncs מקבילים
+    locked = (
+        await db.execute(
+            select(GoogleCalendarCredentials)
+            .where(GoogleCalendarCredentials.id == _SINGLETON_ID)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if locked is None:
+        raise GoogleNotConnectedError()
+
+    sync_token = locked.sync_token
+    try:
+        events, next_token = await asyncio.to_thread(
+            _list_events_blocking, creds, sync_token
+        )
+    except HttpError as e:
+        if e.resp.status == 410:
+            # syncToken פג — full re-sync. מנקים ומחזירים רשימה ריקה
+            # (full sync מחזיר את כל האירועים — לא רוצים להחיל הכול בבת אחת).
+            logger.warning("syncToken expired (410), resetting to full sync")
+            locked.sync_token = None
+            new_token = await asyncio.to_thread(_initial_sync_token_blocking, creds)
+            locked.sync_token = new_token
+            await db.commit()
+            return []
+        raise
+
+    changes: list[CalendarChange] = []
+    for ev in events:
+        # רק אירועים שלנו — מזוהים ע"י bookingId ב-extendedProperties.private
+        booking_id_str = (
+            ev.get("extendedProperties", {})
+            .get("private", {})
+            .get("bookingId")
+        )
+        if not booking_id_str:
+            continue
+        try:
+            booking_uuid = UUID(booking_id_str)
+        except ValueError:
+            continue
+
+        status = ev.get("status", "confirmed")
+        start_dt = _parse_event_dt(ev.get("start"))
+        end_dt = _parse_event_dt(ev.get("end"))
+
+        changes.append(
+            CalendarChange(
+                booking_id=booking_uuid,
+                event_id=ev["id"],
+                status=status,
+                start=start_dt,
+                end=end_dt,
+            )
+        )
+
+    locked.sync_token = next_token
+    await db.commit()
+    return changes
+
+
+def _list_events_blocking(
+    creds: Credentials, sync_token: str | None
+) -> tuple[list[dict[str, Any]], str | None]:
+    """blocking — נקרא רק מתוך asyncio.to_thread.
+    מחזיר (events, nextSyncToken)."""
+    service = build("calendar", "v3", credentials=creds, cache_discovery=False)
+    all_events: list[dict[str, Any]] = []
+    page_token: str | None = None
+    next_sync_token: str | None = None
+    while True:
+        params: dict[str, Any] = {
+            "calendarId": "primary",
+            "showDeleted": True,
+            "singleEvents": True,
+            "maxResults": 2500,
+        }
+        if sync_token:
+            params["syncToken"] = sync_token
+        if page_token:
+            params["pageToken"] = page_token
+        result = service.events().list(**params).execute()
+        all_events.extend(result.get("items", []))
+        next_sync_token = result.get("nextSyncToken")
+        page_token = result.get("nextPageToken")
+        if not page_token:
+            break
+    return all_events, next_sync_token
+
+
+def _parse_event_dt(field: dict[str, Any] | None) -> datetime | None:
+    """parsing של start/end של אירוע ביומן (dateTime ISO או date ל-all-day)."""
+    if not field:
+        return None
+    if "dateTime" in field:
+        return datetime.fromisoformat(field["dateTime"])
+    # all-day events — לא רלוונטיים לפגישות שלנו, נדלג
+    return None
+
+
+async def verify_watch_token(db: AsyncSession, received_token: str | None) -> bool:
+    """
+    מאמת ש-X-Goog-Channel-Token התקבל מ-Google תואם למה שיצרנו ב-create_watch.
+    מגן מפני webhook spoofing.
+    """
+    if not received_token:
+        return False
+    row = await _load_row(db)
+    if row is None or not row.watch_token_encrypted:
+        return False
+    try:
+        expected = decrypt_secret(row.watch_token_encrypted)
+    except Exception:
+        return False
+    return secrets.compare_digest(expected, received_token)

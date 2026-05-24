@@ -71,6 +71,8 @@ export const ACTIVITY_TYPE_LABELS: Record<string, string> = {
   meeting_requested: "נתבקש תור",
   meeting_approved: "פגישה אושרה",
   meeting_rejected: "פגישה נדחתה",
+  meeting_rescheduled: "מועד הפגישה עודכן",
+  meeting_canceled: "פגישה בוטלה",
   proposal_sent: "נשלחה הצעה",
   followup_scheduled: "תוזמן פולואפ",
   owner_changed: "הוחלפה בעלות",

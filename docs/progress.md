@@ -1,7 +1,7 @@
 # מצב הפרויקט
 
 מסמך חי שמסכם מה נבנה, מה פתוח, ואיך להמשיך.
-**עדכון אחרון:** סוף שלב 13 (פאזה 2 — אישור/דחייה ע"י נועה + יצירת אירוע ביומן).
+**עדכון אחרון:** סוף שלב 14 (פאזה 2 — סנכרון הפוך Google→DB עם watch channels).
 
 ---
 
@@ -16,7 +16,7 @@
 | פאזה | סטטוס | מה נכלל |
 |---|---|---|
 | **1 — ליבה (MVP)** | ✅ הושלמה | Auth, Leads CRUD + state machine, Intake, Templates, Tasks, Dashboard, Cron jobs, Telegram, Programs, Profitability, Frontend מלא |
-| **2 — Google Calendar** | 🟡 בעבודה | שלבים 11-13 הושלמו (OAuth + booking page + approve/reject + יצירת אירוע). חסר 14-15. |
+| **2 — Google Calendar** | 🟡 בעבודה | שלבים 11-14 הושלמו (OAuth + booking page + approve/reject + סנכרון הפוך). חסר 15. |
 | **3 — AI** | ⬜ עתיד | סיכומים, סינון מיילים, ניסוח הצעות |
 
 ### פאזה 2 — שלבים פנימיים
@@ -26,8 +26,8 @@
 | **11 — OAuth + credentials** | ✅ | cookieless flow (JWT state), Fernet encryption, owner-only |
 | **12 — דף קביעת תור ציבורי** | ✅ | `/book/{token}`, FreeBusy + DB busy, EXCLUDE constraint למניעת overlap |
 | **13 — אישור/דחייה ע"י נועה** | ✅ | `PendingBookingCard` בדף הליד, `/bookings/{id}/approve\|reject`, אירוע נוצר ביומן עם `extendedProperties.private.bookingId` כעוגן לשלב 14. fail-safe ל-rollback אם Google נכשל. |
-| **14 — סנכרון הפוך** | ⬜ הבא | Watch channels + webhook (Google→DB) |
-| **15 — Post-meeting update** | ⬜ אחר 14 | התראה אחרי פגישה |
+| **14 — סנכרון הפוך** | ✅ | Watch channels (auto על OAuth), `/webhooks/google-calendar`, syncToken + 410 resync, BackgroundTasks ל-ack מהיר, FOR UPDATE lock לסידור webhook מקבילים. ביטול ב-Google → ליד `IN_PROGRESS`+NOAH. שינוי זמן → עדכון שקט + activity log. cron `renew_calendar_watch` יומי. דורש `BACKEND_URL`. |
+| **15 — Post-meeting update** | ⬜ הבא | התראה אחרי פגישה |
 
 ---
 

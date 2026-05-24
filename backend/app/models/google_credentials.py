@@ -41,6 +41,24 @@ class GoogleCalendarCredentials(Base):
         DateTime(timezone=True), nullable=True
     )
 
+    # סנכרון הפוך (Google → DB) — שלב 14
+    # ה-nextSyncToken האחרון של events.list. None = full re-sync נדרש.
+    sync_token: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # watch channel — Google שולח push notification כשמשהו משתנה ביומן
+    watch_channel_id: Mapped[str | None] = mapped_column(
+        String(100), nullable=True
+    )
+    watch_resource_id: Mapped[str | None] = mapped_column(
+        String(200), nullable=True
+    )
+    watch_expiration: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # shared secret שmוטמע ב-channel ומוחזר ב-X-Goog-Channel-Token (מוצפן Fernet)
+    watch_token_encrypted: Mapped[str | None] = mapped_column(
+        Text, nullable=True
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

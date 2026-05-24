@@ -54,6 +54,12 @@ class Settings(BaseSettings):
     # ולקישורים בהתראות. דוגמה: https://noa-leads-frontend.onrender.com
     frontend_url: str = "http://localhost:3000"
 
+    # כתובת ציבורית של ה-backend — נדרשת ל-Google Calendar webhooks.
+    # Google דורש HTTPS וURL ציבורי לpush notifications. דוגמה:
+    # https://noa-leads-backend.onrender.com. ב-dev: ngrok או דומה.
+    # אם None — watch channel לא ייווצר (סנכרון הפוך כבוי).
+    backend_url: str | None = None
+
     # ===== שעות עבודה =====
     work_day_start_hour: int = Field(default=9, ge=0, le=23)
     work_day_end_hour: int = Field(default=18, ge=0, le=23)
