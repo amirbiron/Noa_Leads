@@ -85,15 +85,20 @@ async def create_post_meeting_tasks() -> None:
             .correlate(Booking)
         )
 
-        # task פתוח כבר קיים = דילוג (אינדמפוטנטיות בין riliki).
-        existing_task_subq = (
+        # task עבור הליד נוצר ע"י cron זה לאחרונה = דילוג.
+        # אינדמפוטנטיות בין riliki: כולל גם DONE/CANCELED, אחרת אחרי
+        # שנועה מסמנת done — הריצה הבאה בחלון 48h יוצרת משימה כפולה
+        # על אותה פגישה. מספיק origin_rule='post_meeting_cron' כדי
+        # למקד רק במשימות שאנחנו יצרנו (לא tasks ידניים אחרים).
+        recent_post_meeting_subq = (
             select(Task.id)
             .where(
                 Task.lead_id == Booking.lead_id,
                 Task.type == TaskType.POST_MEETING_UPDATE.value,
-                Task.status.in_(
-                    [TaskStatus.OPEN.value, TaskStatus.SNOOZED.value]
-                ),
+                Task.origin_rule == "post_meeting_cron",
+                # buffer של 2x החלון — בטוח שגם אחרי שהבooking יצא מהחלון
+                # נזכור שכבר התרענו עליו לפני זמן קצר.
+                Task.created_at > lookback - timedelta(hours=_LOOKBACK_HOURS),
             )
             .correlate(Booking)
         )
@@ -123,7 +128,7 @@ async def create_post_meeting_tasks() -> None:
                     ]
                 ),
                 not_(exists(google_canceled_subq)),
-                not_(exists(existing_task_subq)),
+                not_(exists(recent_post_meeting_subq)),
             )
         )
         rows = (await db.execute(stmt)).all()

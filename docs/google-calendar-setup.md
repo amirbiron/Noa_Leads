@@ -115,12 +115,12 @@ booking page, אישור, יצירת אירוע) ימשיך לעבוד — רק 
 
 יש 4 cron jobs שצריך להגדיר ב-Render:
 
-| Job | Schedule | Command | מתי לגדרי |
+| Job | Schedule | Command | מתי להגדיר |
 |---|---|---|---|
-| `detect_dormant_leads` | יומי 03:00 | `python -m jobs.detect_dormant` | פאזה 1 |
-| `post_meeting_tasks` | יומי **02:00** | `python -m jobs.post_meeting_tasks` | שלב 15 |
-| `expire_stale_bookings` | יומי **03:30** | `python -m jobs.expire_stale_bookings` | שלב 13 |
-| `renew_calendar_watch` | יומי 04:00 | `python -m jobs.renew_calendar_watch` | שלב 14 |
+| `detect_dormant_leads` | יומי 03:00 | `cd backend && python -m jobs.detect_dormant` | פאזה 1 |
+| `post_meeting_tasks` | יומי **02:00** | `cd backend && python -m jobs.post_meeting_tasks` | שלב 15 |
+| `expire_stale_bookings` | יומי **03:30** | `cd backend && python -m jobs.expire_stale_bookings` | שלב 13 |
+| `renew_calendar_watch` | יומי 04:00 | `cd backend && python -m jobs.renew_calendar_watch` | שלב 14 |
 
 **חשוב**: סדר הריצה של 02:00 → 03:30 חיוני. אם post_meeting ירוץ
 *אחרי* expire_stale, ה-bookings כבר יבוטלו ולא תיווצרנה משימות. סדר
