@@ -37,6 +37,18 @@
 ### כלל 7: SSRF — URL מ-user → allowlist origin, לא רק https
 > כל endpoint שה-backend עושה אליו fetch/POST עם URL שמשתמש סיפק (webhooks, redirect URIs, image-proxy, file-download) חייב לאמת origin מול allowlist קבוע. הגבלת `https://` בלבד לא מספיקה — `https://169.254.169.254/` היא URL חוקי שמצביע ל-AWS metadata service. לדוגמה: Slack webhook → `https://hooks.slack.com/services/` בלבד.
 
+### כלל 8: לפני קוד של feature עם concurrency/sync — תרחישי race קודם
+> כל פיצ'ר שמערב webhooks, cron, multi-instance, או UPDATE/SELECT על אותם משאבים — לכתוב 5-10 תרחישי race לפני המימוש. שאלות חובה: (1) מה קורה אם שני webhooks ירוצו במקביל? (2) מה אם UPDATE מקבל rowcount=0? (3) מה אם sync מתעכב/נפסק באמצע? (4) מה אם פעולה X רצה לפני שפעולה Y הסתיימה? כל תרחיש צריך תשובה ברורה בקוד (אטומיות / optimistic locking / CAS / idempotency). באג שקט בwebhook גרוע מבאג קולני — קשה לזהות, קשה לשחזר.
+
+### כלל 9: Activity log = source of truth, גם כש-UPDATE נכשל
+> ב-handlers של webhook/sync, רשום activity *לפני* או *בלי תלות* בהצלחת ה-UPDATE על השורה הראשית. ה-activity מתעד את ה-*intent* (מה ש-Google אמר / מה שהמשתמש ביקש), לא רק את ה-*outcome* בDB. תהליכים downstream (cron, סינון, סטטיסטיקה) צריכים גם signal של "ניסינו" ולא רק "הצלחנו". סמן ב-metadata: `"applied": true/false` כדי להבחין.
+
+### כלל 10: אחרי תיקון באג — בדוק regression בתיקון עצמו
+> כל תיקון עלול ליצור באג חדש. אחרי שגרסה X פותר בעיה, חזור על השאלה: "אילו תרחישים *חדשים* התיקון הזה פותח?". במיוחד: תיקון של dedup (פתאום over-dedup), תיקון של filter (פתאום משאיר עוד מקרים), תיקון של race (פתאום lock נשבר). bugbot יתפוס את הרגרסיות, אבל עדיף ש-3 סבבי תיקון יהפכו ל-1.
+
+### כלל 11: שמות מ-enum, לא מהאינטואיציה
+> כשמציבים ערך לעמודה ש-string שמוגדרת על-ידי enum (status, type, waiting_on וכו'), קח את הערך *מ-`Enum.MEMBER.value`*, לא ממחרוזת hardcoded. דוגמה: `waiting_on=WaitingOn.CLIENT.value` ולא `waiting_on="CLIENT"` (ובוודאי לא `"THEM"`). זה מונע: typos שעוברים בלי שגיאה, drift בין enum ל-DB, ומקל על rename בעתיד.
+
 ---
 
 ## מסמכי ייחוס חיצוניים
