@@ -1,7 +1,7 @@
 # מצב הפרויקט
 
 מסמך חי שמסכם מה נבנה, מה פתוח, ואיך להמשיך.
-**עדכון אחרון:** סוף שלב 14 (פאזה 2 — סנכרון הפוך Google→DB עם watch channels).
+**עדכון אחרון:** סוף שלב 15 (פאזה 2 הושלמה — Post-meeting update).
 
 ---
 
@@ -16,7 +16,7 @@
 | פאזה | סטטוס | מה נכלל |
 |---|---|---|
 | **1 — ליבה (MVP)** | ✅ הושלמה | Auth, Leads CRUD + state machine, Intake, Templates, Tasks, Dashboard, Cron jobs, Telegram, Programs, Profitability, Frontend מלא |
-| **2 — Google Calendar** | 🟡 בעבודה | שלבים 11-14 הושלמו (OAuth + booking page + approve/reject + סנכרון הפוך). חסר 15. |
+| **2 — Google Calendar** | ✅ הושלמה | שלבים 11-15: OAuth, booking page, approve/reject, סנכרון הפוך, post-meeting update. |
 | **3 — AI** | ⬜ עתיד | סיכומים, סינון מיילים, ניסוח הצעות |
 
 ### פאזה 2 — שלבים פנימיים
@@ -27,7 +27,7 @@
 | **12 — דף קביעת תור ציבורי** | ✅ | `/book/{token}`, FreeBusy + DB busy, EXCLUDE constraint למניעת overlap |
 | **13 — אישור/דחייה ע"י נועה** | ✅ | `PendingBookingCard` בדף הליד, `/bookings/{id}/approve\|reject`, אירוע נוצר ביומן עם `extendedProperties.private.bookingId` כעוגן לשלב 14. fail-safe ל-rollback אם Google נכשל. |
 | **14 — סנכרון הפוך** | ✅ | Watch channels (auto על OAuth), `/webhooks/google-calendar`, syncToken + 410 resync, BackgroundTasks ל-ack מהיר, FOR UPDATE lock לסידור webhook מקבילים. ביטול ב-Google → ליד `IN_PROGRESS`+NOAH. שינוי זמן → עדכון שקט + activity log. cron `renew_calendar_watch` יומי. דורש `BACKEND_URL`. |
-| **15 — Post-meeting update** | ⬜ הבא | התראה אחרי פגישה |
+| **15 — Post-meeting update** | ✅ | `jobs/post_meeting_tasks.py` יומי ב-02:00 (לפני expire_stale ב-03:30). יוצר Task `POST_MEETING_UPDATE` לכל ליד שהפגישה שלו עברה ב-48h האחרונות, status approved/canceled, ועדיין לא נסגר. מסנן ביטולים מ-Google sync (הפגישה לא קרתה). אינדמפוטנטי דרך NOT EXISTS. UI: בלי שינוי, ה-/today מציג כל ה-tasks. סגירת ליד מבטלת את ה-task אוטומטית דרך `close_lead`. |
 
 ---
 

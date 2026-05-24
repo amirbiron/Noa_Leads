@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
@@ -131,17 +131,24 @@ async def _apply_cancellation(
         )
     )
 
+    # event_updated_at = הזמן ב-Google שבו האירוע שונה (לא זמן עיבוד
+    # webhook). חשוב ל-post_meeting_cron: ביטול שקרה לפני slot_end אומר
+    # שהפגישה לא התקיימה, גם אם ה-webhook התעכב.
+    cancel_metadata: dict[str, Any] = {
+        "booking_id": str(change.booking_id),
+        "event_id": change.event_id,
+        "source": "google_calendar_sync",
+    }
+    if change.updated_at is not None:
+        cancel_metadata["event_updated_at"] = change.updated_at.isoformat()
+
     await log_activity(
         db,
         lead_id=booking.lead_id,
         activity_type=ActivityType.MEETING_CANCELED,
         performed_by=None,  # שינוי שמקורו ב-Google, לא משתמש מחובר
         content="הפגישה בוטלה מיומן Google",
-        metadata={
-            "booking_id": str(change.booking_id),
-            "event_id": change.event_id,
-            "source": "google_calendar_sync",
-        },
+        metadata=cancel_metadata,
     )
 
     await db.commit()
@@ -194,9 +201,8 @@ async def _apply_reschedule(
 
     # WHERE כולל סטטוסים פעילים *וגם* הערכים הישנים של start/end —
     # optimistic locking. אם webhook מקביל הקדים אותנו ושינה את ה-slot,
-    # ה-UPDATE שלנו לא ימצא שורה (rowcount=0) ונחזיר "skipped" בלי
-    # לרשום activity כפול. דפוס שמחליף "להחזיק FOR UPDATE על פני apply"
-    # בלי לדרוש single-transaction.
+    # ה-UPDATE שלנו לא ימצא שורה (rowcount=0). דפוס שמחליף "להחזיק FOR
+    # UPDATE על פני apply" בלי לדרוש single-transaction.
     try:
         update_result = await db.execute(
             update(Booking)
@@ -214,28 +220,42 @@ async def _apply_reschedule(
             )
             .values(requested_slot_start=new_start, requested_slot_end=new_end)
         )
-        if update_result.rowcount != 1:
-            await db.commit()
-            return "skipped"
+        applied = update_result.rowcount == 1
+
+        # רושמים activity גם ב-rowcount=0 (race) — ה-activity משקף את
+        # *Google's view* של הפגישה, לא את מה ש-DB הצליח לכתוב. post_meeting
+        # cron מסתמך על metadata.new_end כסיגנל המוקדם ביותר על reschedule
+        # לעתיד. בלי הרישום, race יכול להשאיר booking.requested_slot_end
+        # ישן בעבר וה-cron יוצר task מוקדם מדי.
+        log_metadata = {
+            "booking_id": str(change.booking_id),
+            "event_id": change.event_id,
+            "old_start": old_start_iso,
+            "old_end": old_end_iso,
+            "new_start": new_start.isoformat(),
+            "new_end": new_end.isoformat(),
+            "source": "google_calendar_sync",
+            "applied": applied,
+        }
+        if change.updated_at is not None:
+            log_metadata["event_updated_at"] = change.updated_at.isoformat()
 
         await log_activity(
             db,
             lead_id=booking_lead_id,
             activity_type=ActivityType.MEETING_RESCHEDULED,
             performed_by=None,
-            content="מועד הפגישה עודכן ביומן Google",
-            metadata={
-                "booking_id": str(change.booking_id),
-                "event_id": change.event_id,
-                "old_start": old_start_iso,
-                "old_end": old_end_iso,
-                "new_start": new_start.isoformat(),
-                "new_end": new_end.isoformat(),
-                "source": "google_calendar_sync",
-            },
+            content=(
+                "מועד הפגישה עודכן ביומן Google"
+                if applied
+                else "עדכון מועד מ-Google דולג (race) — booking עודכן ע\"י סנכרון מקביל"
+            ),
+            metadata=log_metadata,
         )
 
         await db.commit()
+        if not applied:
+            return "skipped"
     except IntegrityError:
         # EXCLUDE constraint דחה — המועד החדש חופף ל-booking פעיל אחר. אי
         # אפשר לייצג זאת ב-DB (overlap = double booking). מחזירים "skipped"

@@ -12,7 +12,7 @@ from uuid import UUID
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.constants import OPEN_LEAD_STATUSES, LeadStatus
+from app.constants import OPEN_LEAD_STATUSES, LeadStatus, TaskStatus, TaskType
 from app.core.exceptions import (
     InvalidStateTransitionError,
     NotFoundError,
@@ -143,6 +143,8 @@ async def perform_action(
         metadata=metadata,
     )
 
+    await _close_addressed_tasks(db, lead_id=lead_id, action=action, now=now)
+
     await db.commit()
     return await _get_lead(db, lead_id)
 
@@ -200,6 +202,7 @@ async def _perform_with_optional_progress(
             performed_by=current_user_id,
             metadata={"from": "NEW", "to": "IN_PROGRESS", "trigger": "auto_progress"},
         )
+        await _close_addressed_tasks(db, lead_id=lead_id, action=action, now=now)
         await db.commit()
         return await _get_lead(db, lead_id)
 
@@ -246,8 +249,66 @@ async def _perform_with_optional_progress(
         content=content,
         metadata=metadata,
     )
+    await _close_addressed_tasks(db, lead_id=lead_id, action=action, now=now)
     await db.commit()
     return await _get_lead(db, lead_id)
+
+
+# סוגי tasks שפעולת outbound/inbound מטפלת בהם — לסגירה אוטומטית.
+# הרציונל: ברגע שנועה ביצעה touchpoint (שליחת תבנית/שיחה/הודעה נכנסת/
+# שליחת הצעה), היא כבר התייחסה לליד — לא רוצים תזכורת תקועה ב-/today.
+#
+# *לא* כולל:
+# - PROPOSAL_FOLLOWUP — תזכורת *אחרי* שההצעה נשלחה. mark_proposal_sent
+#   יוצרת את הצורך, לא סוגרת תזכורת כזו.
+# - POST_MEETING_UPDATE — קשור לפגישה ספציפית, מסולק רק ע"י close_lead
+#   או ידנית.
+# - PROGRAM_END — תזכורת לסיום תוכנית מתמשכת, ענין נפרד.
+_AUTO_CLOSE_TASK_TYPES = (
+    TaskType.FIRST_RESPONSE.value,
+    TaskType.FOLLOWUP.value,
+    TaskType.AFTER_HOURS_REPLY.value,
+    TaskType.DORMANT_REACHOUT.value,
+)
+
+
+async def _close_addressed_tasks(
+    db: AsyncSession,
+    *,
+    lead_id: UUID,
+    action: ActionDefinition,
+    now: datetime,
+) -> None:
+    """
+    סוגר אוטומטית פעולות פתוחות כשנועה ביצעה touchpoint על ליד.
+
+    Trigger: action שמסומן set_last_outbound (נועה שלחה משהו) או
+    set_last_inbound (תיעוד תגובה מהלקוח). שני המקרים מסיימים את
+    הצורך ב-FIRST_RESPONSE / FOLLOWUP — הליד לא "תקוע".
+
+    לפני התיקון: סימון "שלחתי הצעה" עדכן status ל-PROPOSAL_SENT אבל
+    השאיר את FIRST_RESPONSE פתוח, ונועה ראתה תזכורת תקועה לטיפול
+    בליד שכבר טיפלה בו.
+    """
+    if not (action.set_last_outbound or action.set_last_inbound):
+        return
+
+    from app.models.task import Task  # local import — מונע circular
+
+    await db.execute(
+        update(Task)
+        .where(
+            Task.lead_id == lead_id,
+            Task.type.in_(_AUTO_CLOSE_TASK_TYPES),
+            Task.status.in_(
+                [TaskStatus.OPEN.value, TaskStatus.SNOOZED.value]
+            ),
+        )
+        .values(
+            status=TaskStatus.DONE.value,
+            completed_at=now,
+        )
+    )
 
 
 async def _atomic_update_with_status_guard(

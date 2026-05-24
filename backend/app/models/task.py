@@ -25,6 +25,14 @@ class Task(UUIDPrimaryKeyMixin, Base):
         ForeignKey("leads.id", ondelete="CASCADE"),
         nullable=False,
     )
+    # קישור אופציונלי ל-booking ספציפי — משמש את post_meeting_cron
+    # ל-dedup per-booking (ליד עם 2 פגישות בחלון מקבל 2 משימות נפרדות).
+    # SET NULL אם הbooking נמחק — ה-task עצמו עדיין עומד.
+    booking_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("bookings.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     # סוג המשימה — מתוך TaskType בקבועים
     type: Mapped[str] = mapped_column(String(50), nullable=False)
     assigned_to: Mapped[UUID | None] = mapped_column(

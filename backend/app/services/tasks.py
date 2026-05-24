@@ -112,9 +112,14 @@ async def create_first_response_task(
 
 def _due_at_for_first_response(now: datetime) -> datetime:
     """
-    מחזיר datetime ב-UTC עבור due_at:
-    - בתוך שעות עבודה: now (מיידי)
-    - מחוץ: תחילת יום העבודה הבא ב-Asia/Jerusalem
+    due_at של FIRST_RESPONSE.
+    - בשעות עבודה: now → מופיע מיד ב-/today.
+    - מחוץ לשעות עבודה (לילה/שבת/חג): תחילת יום העבודה הבא → לא מופיע
+      ב-/today עד הבוקר. מתאים להתנהגות "מענה אחרי שעות" — נועה רואה
+      את המשימה כשהיא חוזרת לעבוד.
+
+    הbadge "באיחור" נשלט בנפרד ב-dashboard._calc_is_overdue עם grace
+    של 24h מ-created_at, כדי שתזכורת לא תקפוץ על ליד בן שעה.
     """
     from app.utils.work_hours import is_working_time  # avoid circular at import
 

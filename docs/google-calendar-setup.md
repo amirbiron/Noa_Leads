@@ -84,11 +84,67 @@ python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().d
 | `GOOGLE_CLIENT_SECRET` | מ-Google Cloud (שלב 4) |
 | `GOOGLE_REDIRECT_URI` | `https://noa-leads-backend.onrender.com/google/auth/callback` |
 | `FRONTEND_URL` | `https://noa-leads-frontend.onrender.com` |
-| `SECRETS_ENCRYPTION_KEY` | מ-שלב 5 (כבר ייווצר אוטומטית עם `generateValue: true`, אבל אם רוצים לקבוע ערך ספציפי — שלב 5) |
+| `BACKEND_URL` | `https://noa-leads-backend.onrender.com` (לסנכרון הפוך — שלב 14) |
+| `SECRETS_ENCRYPTION_KEY` | ראה הסבר מתחת לטבלה |
+
+**ל-`SECRETS_ENCRYPTION_KEY` יש שתי אפשרויות** (לבחור אחת):
+
+- **א. Render auto-generate** — ב-render.yaml או ב-Environment UI לסמן
+  `generateValue: true`. Render ייצור ערך אקראי בטוח פעם אחת. **מומלץ
+  לפרודקשן** — מפתח לא עובר בכלל דרכך.
+- **ב. ידני משלב 5** — מריצים את פקודת ה-Python בשלב 5 ומדביקים את
+  הערך כ-value. שימושי אם רוצים לסנכרן את אותו מפתח בין dev/prod (לא
+  מומלץ לפרודקשן — אז כל מי שיש לו גישה ל-env vars רואה אותו).
+
+> **אזהרה**: אסור להחליף מפתח אחרי שsecrets נשמרו (refresh_tokens של
+> Google). החלפה תכשיל פענוח, ונועה תצטרך להתחבר מחדש דרך /settings.
 
 Save Changes — Render יבצע redeploy אוטומטי.
 
-## 7. החיבור הראשון מצד נועה
+## 7. אימות domain ב-Search Console (לסנכרון הפוך — שלב 14)
+
+ל-Google Calendar watch channels (push notifications שמודיעים לנו על
+שינויים שנועה עושה ביומן) — Google דורש שה-domain של ה-webhook יהיה
+**מאומת**.
+
+1. כניסה ל-https://search.google.com/search-console
+2. **Add property** → **URL prefix** → `https://noa-leads-backend.onrender.com`
+3. **שיטת אימות**: HTML tag (הכי פשוט אם יש שליטה ב-HTML) או DNS
+   (אם יש שליטה ב-DNS של onrender.com — אין, אז תבחרי HTML tag).
+   - HTML tag: יקבלי `<meta name="google-site-verification" content="...">`.
+     הוסיפי אותו כ-endpoint סטטי ב-backend — דרושה תוספת קוד קטנה.
+   - **חלופה נוחה יותר**: אם תקנה domain קצר (כמו `noa.co.il`) ותכווני
+     אותו ל-Render דרך CNAME — אז יש שליטה DNS ואפשר לאמת דרך TXT record.
+4. אחרי אימות: ב-**APIs & Services** → **Domain verification** → ה-domain
+   צריך להופיע. אם לא — לחיצה על **Add domain** והקלדת אותו URL.
+
+**חשוב**: בלי אימות הזה, יצירת watch channel תיכשל עם:
+`"Unauthorized WebHook callback channel"` בלוגים. כל שאר ה-flow (OAuth,
+booking page, אישור, יצירת אירוע) ימשיך לעבוד — רק הסנכרון הפוך
+(שינוי/ביטול מהיומן → CRM) יהיה כבוי.
+
+## 8. הגדרת Render Cron Jobs (לתחזוקה אוטומטית)
+
+יש 4 cron jobs שצריך להגדיר ב-Render:
+
+| Job | Schedule | Command | מתי להגדיר |
+|---|---|---|---|
+| `detect_dormant_leads` | יומי 03:00 | `cd backend && python -m jobs.detect_dormant` | פאזה 1 |
+| `post_meeting_tasks` | יומי **02:00** | `cd backend && python -m jobs.post_meeting_tasks` | שלב 15 |
+| `expire_stale_bookings` | יומי **03:30** | `cd backend && python -m jobs.expire_stale_bookings` | שלב 13 |
+| `renew_calendar_watch` | יומי 04:00 | `cd backend && python -m jobs.renew_calendar_watch` | שלב 14 |
+
+**חשוב**: סדר הריצה של 02:00 → 03:30 חיוני. אם post_meeting ירוץ
+*אחרי* expire_stale, ה-bookings כבר יבוטלו ולא תיווצרנה משימות. סדר
+ה-cron נשמר ע"י השעות.
+
+ב-Render → **New +** → **Cron Job**:
+- **Build Command**: `pip install -r backend/requirements.txt`
+- **Schedule**: לפי הטבלה לעיל (cron syntax: `0 2 * * *` = 02:00 יומי)
+- **Command**: לפי הטבלה (`cd backend && python -m jobs.<name>`)
+- **Environment**: לקשר לאותם env vars של ה-backend service.
+
+## 9. החיבור הראשון מצד נועה
 
 1. נועה נכנסת ל-https://noa-leads-frontend.onrender.com
 2. login רגיל

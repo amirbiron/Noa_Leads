@@ -12,7 +12,7 @@ from uuid import UUID
 from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.constants import CLOSED_LEAD_STATUSES, LeadStatus, TaskStatus
+from app.constants import CLOSED_LEAD_STATUSES, LeadStatus, TaskStatus, TaskType
 from app.models.lead import Lead
 from app.models.task import Task
 from app.schemas.dashboard import (
@@ -30,6 +30,14 @@ ORANGE_LOOKAHEAD = timedelta(hours=48)
 # 5-7 פעולות היום לפי האפיון. נשמור up to 20 כדי לא לחתוך אם יש עומס
 TODAY_ACTIONS_LIMIT = 20
 DEFAULT_DASHBOARD_LIMIT = 50
+
+# grace period per-type ל-is_overdue. FIRST_RESPONSE לפי האפיון (סעיף יב):
+# "מינימום 24 שעות לפני שמתריעים". ה-task מופיע ב-/today מיד (due_at=now)
+# אבל ה-badge "באיחור" מקבל true רק אחרי 24h.
+# מקור יחיד לטובת SQL CASE ול-Python helper גם יחד.
+_OVERDUE_GRACE: dict[str, timedelta] = {
+    TaskType.FIRST_RESPONSE.value: timedelta(hours=24),
+}
 
 
 # ===================== חישוב צבע מצב =====================
@@ -176,6 +184,18 @@ async def get_today_actions(db: AsyncSession) -> list[TodayActionItem]:
     end_today_exclusive = _start_of_tomorrow_israel(now_utc)
     closed = [s.value for s in CLOSED_LEAD_STATUSES]
 
+    # ביטוי is_overdue per-type — אותה לוגיקה כמו _calc_is_overdue ב-Python
+    # אבל ב-SQL כדי שגם המיון יכבד את ה-grace. אחרת FIRST_RESPONSE עם
+    # due_at=now היה קופץ לראש מיד, גם כשה-badge עוד לא דולק. ה-grace
+    # נשאב מ-_OVERDUE_GRACE — מקור יחיד שמשמש גם את _calc_is_overdue.
+    is_overdue_expr = case(
+        *[
+            (Task.type == task_type, Task.created_at + grace <= now_utc)
+            for task_type, grace in _OVERDUE_GRACE.items()
+        ],
+        else_=Task.due_at <= now_utc,
+    )
+
     stmt = (
         select(Task, Lead)
         .join(Lead, Task.lead_id == Lead.id)
@@ -192,9 +212,9 @@ async def get_today_actions(db: AsyncSession) -> list[TodayActionItem]:
             # tasks פתוחים שלהם, אבל אם משהו פספס (race / cron) זה תופס.
             Lead.status.notin_(closed),
         )
-        # מיון: overdue קודם, אדום קודם, ואז לפי due_at
+        # מיון: overdue קודם (לפי הביטוי per-type), אדום קודם, ואז לפי due_at
         .order_by(
-            (Task.due_at <= now_utc).desc(),
+            is_overdue_expr.desc(),
             Lead.needs_attention.desc(),
             case(
                 (Lead.priority_level.in_(["hot", "vip"]), 0),
@@ -216,7 +236,7 @@ async def get_today_actions(db: AsyncSession) -> list[TodayActionItem]:
                 lead_organization=lead.organization_name,
                 task_type=task.type,
                 due_at=task.due_at,
-                is_overdue=task.due_at <= now_utc,
+                is_overdue=_calc_is_overdue(task, now_utc),
                 state_color=derive_state_color(lead, now_utc),
                 priority_level=lead.priority_level,
                 preferred_contact=lead.preferred_contact,
@@ -224,6 +244,20 @@ async def get_today_actions(db: AsyncSession) -> list[TodayActionItem]:
             )
         )
     return items
+
+
+def _calc_is_overdue(task, now_utc: datetime) -> bool:
+    """
+    מחשב is_overdue עם grace per-type. ל-FIRST_RESPONSE: 24h מ-task.created_at
+    (לפי האפיון). לשאר ה-types: due_at <= now כרגיל.
+
+    הלוגיקה הזו משוכפלת ב-SQL ב-get_today_actions (is_overdue_expr) כדי
+    שגם המיון יכבד את ה-grace — אחרת המשימה תקפוץ לראש לפני שה-badge דולק.
+    """
+    grace = _OVERDUE_GRACE.get(task.type)
+    if grace is not None:
+        return task.created_at + grace <= now_utc
+    return task.due_at <= now_utc
 
 
 # ===================== פניות חדשות =====================
