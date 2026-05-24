@@ -327,13 +327,28 @@ export interface WeeklyInsights {
   most_profitable_service: ProfitableServiceInsight | null;
 }
 
+// תעריף שירות לפי Spec v2.1 §5.10. נטען מ-DB דרך GET /settings/service-rates.
+// total_hours ו-hourly_rate מחושבים בbackend לפי duration*sessions/60.
 export interface ServiceRate {
-  subtype: string;
+  id: string;
+  service_category: string;
+  service_subtype: string;
   label: string;
-  category: string;
   default_price: string | null;
-  default_hours: string | null;
+  default_duration_minutes: number | null;
+  default_sessions_count: number | null;
+  total_hours: string | null;
   hourly_rate: string | null;
+  notes: string | null;
+  is_active: boolean;
+}
+
+export interface ServiceRateUpdate {
+  default_price?: number | null;
+  default_duration_minutes?: number | null;
+  default_sessions_count?: number | null;
+  notes?: string | null;
+  is_active?: boolean;
 }
 
 // F-07: ה-row האחרון מ-daily_summaries — מוצג כbubble בדשבורד.

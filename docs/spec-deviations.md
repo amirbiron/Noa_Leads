@@ -68,20 +68,26 @@
 
 ---
 
-### F-03: טבלת `service_rates` חסרה — 🟠
+### F-03: טבלת `service_rates` — 🟡 חלקי (backend הושלם)
 
-**Spec §5 (לא מפורט במפורש) + §22.9:** API endpoints `GET/PATCH /settings/service-rates` קיימים בקטלוג. §15.2 מציג טבלת תעריפי ברירת מחדל.
+**Spec v2.1 §5.10:** טבלת `service_rates` עם service_category/subtype/default_price/default_duration_minutes/default_sessions_count/notes/is_active. נטענת אוטומטית מ-§15.2.
 
-**Code:** `backend/app/services/service_rates.py` מחזיר תעריפים hardcoded. אין טבלת DB editable.
+**Code:** הושלם backend (commit הזה):
+- migration 0015 — טבלת service_rates + seed 10 ערכי ברירת מחדל מ-§15.2.
+- model app/models/service_rate.py + schema service_rate.py.
+- service app/services/service_rates.py — list + update_by_subtype.
+- routes/settings.py: GET קורא מ-DB; PATCH /settings/service-rates/{subtype} חדש (owner-only).
+- utils/service_rates.py נמחק (הוחלף ע"י DB).
 
-**Severity:** בינוני — Spec מציין API לעריכת תעריפים, אבל אין DB editable.
+**עדיין לא נעשה:** frontend UI לעריכה ב-/settings (יבוצע בcommit נפרד).
 
-**Open decision:** האם תעריפים editable דרך UI (טבלת DB + endpoints), או hardcoded ב-`constants.py` עם override דרך config? Spec §15.1 אומר "ברירת מחדל אוטומטית לפי הקטגוריה - **ניתן לשינוי**" — מצביע על editable per-deal, אבל לא בהכרח per-rate-default.
+**Severity:** בינוני — backend מוכן, UI חסר.
 
-**Acceptance (אם הוחלט DB editable):**
-- [ ] Migration `service_rates` עם seeds מטבלת §15.2.
-- [ ] GET/PATCH endpoints + frontend UI ב-/settings.
-- [ ] `service_rates.py` קורא מ-DB עם fallback ל-defaults.
+**Acceptance:**
+- [x] Migration `service_rates` עם seeds מטבלת §15.2.
+- [x] GET endpoint קורא מ-DB.
+- [x] PATCH endpoint owner-only.
+- [ ] frontend UI ב-/settings (next commit).
 
 **Acceptance (אם הוחלט hardcoded):**
 - [ ] תעריפים ב-`constants.py` כ-`DEFAULT_TARIFFS: dict[str, Decimal]`.
@@ -244,19 +250,17 @@
 
 ---
 
-### F-12: `DEFAULT_TARIFFS` לא ב-`constants.py` — 🟠
+### F-12: `DEFAULT_TARIFFS` ב-DB — 🟡 חלקי (F-03 partial)
 
 **Spec §15.2:** טבלת תעריפי ברירת מחדל — קליניקה, סדנה, אומניות, ליווי הפקה וכו'.
 
-**Code:** Service rates נמצא ב-`backend/app/services/service_rates.py` (לא ב-constants). אין pre-populate ביצירת Program — נועה ממלאת ידנית.
+**Code:** התעריפים זמינים מ-DB דרך `app/services/service_rates.py` + GET endpoint (commit הזה). pre-populate ביצירת Program עוד לא מומש.
 
-**Severity:** בינוני — תלוי ב-F-03 (DB editable או hardcoded).
-
-**Open decision:** **F-03 קודם** — אז זה ייפתר ביחד.
+**Severity:** בינוני — נפתר חלקית עם F-03.
 
 **Acceptance:**
-- [ ] תעריפים נגישים מ-`constants.py` או DB (לפי F-03).
-- [ ] יצירת Program מקבלת `total_price` אוטומטית כברירת מחדל (ניתן לעקוף).
+- [x] תעריפים נגישים מ-DB (טבלת service_rates).
+- [ ] יצירת Program מקבלת `total_price` אוטומטית כברירת מחדל מהתעריף (ניתן לעקוף).
 
 ---
 
