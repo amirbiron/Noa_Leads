@@ -278,6 +278,7 @@ async def _perform_with_optional_progress(
 # יוכל להשתמש באותה רשימה ב-apply_chip — הצ'יפ הוא touchpoint לכל דבר.
 AUTO_CLOSE_TASK_TYPES = (
     TaskType.FIRST_RESPONSE.value,
+    TaskType.LECTURE_INQUIRY.value,  # מקבילה ל-FIRST_RESPONSE לארגונים — נסגרת על touchpoint
     TaskType.FOLLOWUP.value,
     TaskType.AFTER_HOURS_REPLY.value,
     TaskType.DORMANT_CHECK.value,    # היה DORMANT_REACHOUT — שונה לפי Spec §17.1
@@ -285,7 +286,6 @@ AUTO_CLOSE_TASK_TYPES = (
     TaskType.RETRY_CALL.value,       # אחרי שיחה מוצלחת — אין יותר צורך לנסות שוב
     # SEND_PROPOSAL לא בכאן: הוא נסגר רק על mark_proposal_sent הספציפי
     # (touchpoint כללי לא מבטל את הצורך לשלוח הצעה).
-    # LECTURE_INQUIRY לא בכאן: תזכורת ספציפית לארגון, ידנית.
 )
 
 
