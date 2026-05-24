@@ -228,27 +228,36 @@ export interface ProposalCard extends LeadCard {
   days_since_proposal: number | null;
 }
 
+// QuickActionChip לפי Spec v2.1 §5.7 + §16.4 — declarative.
+// 4 השדות הסמנטיים nullable: צ'יפים שנועה הוסיפה ידנית בלי למלא הכל.
+// ה-UI מציג רק chips ש-target_status שלהם לא null.
 export interface QuickActionChip {
   id: string;
   label: string;
-  action_type: string;
-  requires_content: boolean;
+  target_status: LeadStatus | null;
+  waiting_on: WaitingOn | null;
+  followup_task_type: string | null;  // TaskType-string (אין צורך ב-enum כי שמות חדשים יכולים להופיע)
+  auto_followup_days: number | null;
   sort_order: number;
   is_active: boolean;
 }
 
 export interface QuickActionChipCreate {
   label: string;
-  action_type: string;
-  requires_content?: boolean;
+  target_status?: LeadStatus | null;
+  waiting_on?: WaitingOn | null;
+  followup_task_type?: string | null;
+  auto_followup_days?: number | null;
   sort_order?: number;
   is_active?: boolean;
 }
 
 export interface QuickActionChipUpdate {
   label?: string;
-  action_type?: string;
-  requires_content?: boolean;
+  target_status?: LeadStatus | null;
+  waiting_on?: WaitingOn | null;
+  followup_task_type?: string | null;
+  auto_followup_days?: number | null;
   sort_order?: number;
   is_active?: boolean;
 }

@@ -19,6 +19,7 @@ from app.schemas.lead import (
 )
 from app.services import leads as leads_service
 from app.services import lead_actions as actions_service
+from app.services import quick_action_chips as chips_service
 
 router = APIRouter(prefix="/leads", tags=["leads"])
 
@@ -123,6 +124,26 @@ async def reopen_lead(
     lead_id: UUID, db: DbSession, user: CurrentUser
 ) -> LeadRead:
     lead = await leads_service.reopen_lead(db, lead_id, user.id)
+    return LeadRead.model_validate(lead)
+
+
+@router.post("/{lead_id}/apply-chip/{chip_id}", response_model=LeadRead)
+async def apply_chip(
+    lead_id: UUID,
+    chip_id: UUID,
+    db: DbSession,
+    user: CurrentUser,
+) -> LeadRead:
+    """
+    מפעיל צ'יפ מהיר על ליד — Spec v2.1 §16.4.
+
+    מבצע אטומית: ליד.status=target_status, ליד.waiting_on=waiting_on,
+    יוצר task חדש מסוג followup_task_type עם due_at=now+auto_followup_days,
+    ורושם activity. שגיאות: 404 (ליד/צ'יפ), 400 (ליד סגור / צ'יפ לא מאוכלס).
+    """
+    lead = await chips_service.apply_chip(
+        db, lead_id=lead_id, chip_id=chip_id, performed_by=user.id
+    )
     return LeadRead.model_validate(lead)
 
 

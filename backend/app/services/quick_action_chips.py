@@ -1,39 +1,42 @@
 """
-שירות צ'יפים מהירים — CRUD עם validation של action_type מול state_machine.
+שירות צ'יפים מהירים — CRUD לעמוד הגדרות + apply_chip לסיכום שיחה.
+
+לפי Spec v2.1 §5.7 + §16.4. צ'יפ הוא declarative: כשנועה לוחצת עליו,
+המערכת מבצעת 4 פעולות אטומיות לפי השדות שלו:
+  1. ליד → target_status
+  2. ליד.waiting_on → waiting_on
+  3. יוצר task מסוג followup_task_type, due_at = now + auto_followup_days
+  4. רושם activity
 """
 
 import logging
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.constants import (
+    CLOSED_LEAD_STATUSES,
+    ActivityType,
+    TaskStatus,
+)
 from app.core.exceptions import NotFoundError, ValidationError
-from app.core.state_machine import ACTIONS
+from app.models.lead import Lead
 from app.models.quick_action_chip import QuickActionChip
+from app.models.task import Task
 from app.schemas.quick_action_chip import (
     QuickActionChipCreate,
     QuickActionChipUpdate,
 )
+from app.services.activities import log_activity
+from app.services.tasks import sync_lead_next_action_cache
+from app.utils.work_hours import is_working_time, next_working_day_start
 
 logger = logging.getLogger(__name__)
 
 
-def _validate_action_type(action_type: str) -> None:
-    """
-    ה-action_type חייב להתאים למפתח ב-state_machine.ACTIONS.
-
-    שגיאה ידידותית בעברית למשתמש — בלי לחשוף את רשימת ה-action_types
-    הפנימיים (כלל 3 ב-CLAUDE.md: אל תחשוף מידע פנימי ב-API responses).
-    הפרטים נכנסים ל-log לדיבוג.
-    """
-    if action_type not in ACTIONS:
-        logger.warning(
-            "Rejected unknown action_type for chip: %r (valid: %s)",
-            action_type,
-            sorted(ACTIONS.keys()),
-        )
-        raise ValidationError("סוג פעולה לא תקף.")
+# ===== CRUD =====
 
 
 async def list_chips(
@@ -55,11 +58,20 @@ async def list_chips(
 async def create_chip(
     db: AsyncSession, payload: QuickActionChipCreate
 ) -> QuickActionChip:
-    _validate_action_type(payload.action_type)
     chip = QuickActionChip(
         label=payload.label,
-        action_type=payload.action_type,
-        requires_content=payload.requires_content,
+        target_status=(
+            str(payload.target_status) if payload.target_status else None
+        ),
+        waiting_on=(
+            str(payload.waiting_on) if payload.waiting_on else None
+        ),
+        followup_task_type=(
+            str(payload.followup_task_type)
+            if payload.followup_task_type
+            else None
+        ),
+        auto_followup_days=payload.auto_followup_days,
         sort_order=payload.sort_order,
         is_active=payload.is_active,
     )
@@ -72,12 +84,14 @@ async def create_chip(
 async def update_chip(
     db: AsyncSession, chip_id: UUID, payload: QuickActionChipUpdate
 ) -> QuickActionChip:
-    if payload.action_type is not None:
-        _validate_action_type(payload.action_type)
-
     values = payload.model_dump(exclude_unset=True)
     if not values:
         return await _get_chip_or_404(db, chip_id)
+
+    # Pydantic enums → str ב-DB.
+    for key in ("target_status", "waiting_on", "followup_task_type"):
+        if key in values and values[key] is not None:
+            values[key] = str(values[key])
 
     result = await db.execute(
         update(QuickActionChip)
@@ -114,3 +128,121 @@ async def _get_chip_or_404(
     if chip is None:
         raise NotFoundError("צ'יפ לא נמצא.")
     return chip
+
+
+# ===== Apply chip — סיכום שיחה ע"י לחיצה =====
+
+
+def _calc_followup_due_at(now_utc: datetime, days: int) -> datetime:
+    """
+    due_at = now + days. אם נופל מחוץ לשעות עבודה (לילה/שבת/חג) — נדחה
+    לתחילת יום העבודה הבא. עקבי עם _due_at_for_first_response.
+    """
+    candidate = now_utc + timedelta(days=days)
+    if not is_working_time(candidate):
+        return next_working_day_start(candidate)
+    return candidate
+
+
+async def apply_chip(
+    db: AsyncSession,
+    *,
+    lead_id: UUID,
+    chip_id: UUID,
+    performed_by: UUID | None,
+) -> Lead:
+    """
+    מבצע את 4 פעולות הצ'יפ אטומית. F-01 + F-05 + F-23.
+
+    שגיאות:
+    - chip לא נמצא / לא active → 404 / 400.
+    - chip חסר שדות סמנטיים (target_status/waiting_on/followup_task_type/days) → 400.
+    - lead לא נמצא → 404.
+    - lead סגור → 400 (F-23 guard ברמת ה-API).
+    """
+    chip = await _get_chip_or_404(db, chip_id)
+    if not chip.is_active:
+        raise ValidationError("צ'יפ לא פעיל.")
+    if (
+        chip.target_status is None
+        or chip.waiting_on is None
+        or chip.followup_task_type is None
+        or chip.auto_followup_days is None
+    ):
+        raise ValidationError(
+            "הצ'יפ לא הוגדר במלואו. ערכי את אותו בהגדרות לפני שימוש."
+        )
+
+    # Lead — חייב להיות פתוח. שליפה לבדיקה + הודעה ידידותית; ה-UPDATE
+    # למטה מותנה שוב ב-status (defense-in-depth כנגד race עם close_lead).
+    lead = (
+        await db.execute(select(Lead).where(Lead.id == lead_id))
+    ).scalar_one_or_none()
+    if lead is None:
+        raise NotFoundError("ליד לא נמצא.")
+    closed_values = [s.value for s in CLOSED_LEAD_STATUSES]
+    if lead.status in closed_values:
+        raise ValidationError(
+            "לא ניתן להפעיל צ'יפ על ליד סגור. פתחי אותו מחדש קודם."
+        )
+
+    now_utc = datetime.now(timezone.utc)
+    due_at = _calc_followup_due_at(now_utc, chip.auto_followup_days)
+
+    # אטומי בטרנזקציה אחת (אין commit לפני הסוף).
+    # 1. UPDATE Lead — מותנה ב-status פתוח. אם race עם close_lead → rowcount=0
+    #    ואנחנו עוצרים בלי לבצע את שאר הצעדים.
+    update_result = await db.execute(
+        update(Lead)
+        .where(Lead.id == lead_id, Lead.status.notin_(closed_values))
+        .values(
+            status=chip.target_status,
+            waiting_on=chip.waiting_on,
+            updated_at=func.now(),
+        )
+    )
+    if update_result.rowcount != 1:
+        await db.rollback()
+        raise ValidationError(
+            "מצב הליד השתנה תוך כדי הפעולה. רעני את הכרטיס ונסי שוב."
+        )
+
+    # 2. INSERT Task חדש
+    task = Task(
+        lead_id=lead_id,
+        type=chip.followup_task_type,
+        status=TaskStatus.OPEN.value,
+        due_at=due_at,
+        origin_rule=f"chip:{chip.label}",
+    )
+    db.add(task)
+    await db.flush()  # מקבל id ל-activity
+
+    # 3. log activity
+    await log_activity(
+        db,
+        lead_id=lead_id,
+        activity_type=ActivityType.CHIP_APPLIED,
+        performed_by=performed_by,
+        content=chip.label,
+        metadata={
+            "chip_id": str(chip.id),
+            "target_status": chip.target_status,
+            "waiting_on": chip.waiting_on,
+            "followup_task_type": chip.followup_task_type,
+            "auto_followup_days": chip.auto_followup_days,
+            "task_id": str(task.id),
+            "due_at": due_at.isoformat(),
+        },
+    )
+
+    # 4. sync next_action cache (כולל F-23 guard פנימי).
+    await sync_lead_next_action_cache(db, lead_id)
+
+    await db.commit()
+
+    # שליפה מחודשת — ה-attributes של lead object עלולים להיות stale אחרי commit.
+    refreshed = (
+        await db.execute(select(Lead).where(Lead.id == lead_id))
+    ).scalar_one()
+    return refreshed
