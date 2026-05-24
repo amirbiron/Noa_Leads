@@ -1,6 +1,6 @@
 # אפיון מערכת ניהול לידים ולקוחות לנועה
 
-> **גרסה:** 2.0 (מאוחד)
+> **גרסה:** 2.1
 > **תאריך:** מאי 2026
 > **לקוחה:** נועה - בימאית, מאמנת קול ועמידה מול קהל
 > **שותף עסקי:** אדיר גזית (אוטומציה בקלות)
@@ -36,6 +36,9 @@
 24. שלבי מימוש
 25. סקילים ומתי להשתמש בכל אחד
 26. שאלות פתוחות לנועה
+27. Acceptance Criteria
+28. הבחנה בין פאזות
+- Changelog
 
 ---
 
@@ -148,7 +151,7 @@ CREATE TABLE leads (
 
     -- מצב
     status VARCHAR(30) NOT NULL DEFAULT 'NEW',
-    waiting_on VARCHAR(20) DEFAULT 'NOAH',  -- NOAH / CLIENT / ASSISTANT / SYSTEM / NONE
+    waiting_on VARCHAR(30) DEFAULT 'NOAH',  -- NOAH / CLIENT / ASSISTANT / ASSISTANT_PENDING_NOAH / SYSTEM / NONE
     priority_level VARCHAR(20) DEFAULT 'normal',  -- normal / hot / vip
     preferred_contact VARCHAR(20) DEFAULT 'whatsapp',  -- phone / whatsapp / email
 
@@ -289,6 +292,8 @@ CREATE TABLE quick_action_chips (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     label VARCHAR(50) NOT NULL,
     target_status VARCHAR(30),
+    waiting_on VARCHAR(30),                   -- NOAH / CLIENT / ASSISTANT / ASSISTANT_PENDING_NOAH
+    followup_task_type VARCHAR(50),           -- retry_call / followup / send_proposal / dormant_check / etc.
     auto_followup_days INTEGER,
     sort_order INTEGER DEFAULT 0,
     is_active BOOLEAN DEFAULT TRUE,
@@ -309,13 +314,53 @@ CREATE TABLE users (
 );
 ```
 
-### 5.9 Enums מרכזיים
+### 5.9 טבלת `email_messages`
+
+```sql
+CREATE TABLE email_messages (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    lead_id UUID REFERENCES leads(id),
+    gmail_message_id VARCHAR(200) UNIQUE,
+    direction VARCHAR(20),                    -- inbound / outbound
+    from_address VARCHAR(200),
+    to_address VARCHAR(200),
+    subject TEXT,
+    raw_html TEXT,                            -- שמירת ה-HTML המקורי לתצוגה ו-debug
+    cleaned_text TEXT,                        -- הטקסט הנקי ששנשלח ל-AI
+    cleaning_metadata JSONB,                  -- purpose, ratio, truncated, timestamp
+    received_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_email_messages_lead ON email_messages(lead_id, received_at DESC);
+```
+
+### 5.10 טבלת `service_rates`
+
+```sql
+CREATE TABLE service_rates (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    service_category VARCHAR(50) NOT NULL,    -- clinic / workshops / production / digital_course
+    service_subtype VARCHAR(100) NOT NULL,    -- voice_development / public_speaking / etc.
+    default_price NUMERIC(10, 2),
+    default_duration_minutes INTEGER,
+    default_sessions_count INTEGER,           -- למשל 8 לשיקום קול, NULL לחד-פעמי
+    notes TEXT,
+    is_active BOOLEAN DEFAULT TRUE,
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(service_category, service_subtype)
+);
+```
+
+ייטענו אוטומטית בהתקנה הראשונית עם התעריפים שב-§15.2.
+
+### 5.11 Enums מרכזיים
 
 ```python
 LEAD_STATUSES = ['NEW', 'IN_PROGRESS', 'PROPOSAL_SENT', 'BOOKING_PENDING',
                  'BOOKED', 'WON', 'LOST', 'ARCHIVED']
 
-WAITING_ON = ['NOAH', 'CLIENT', 'ASSISTANT', 'SYSTEM', 'NONE']
+WAITING_ON = ['NOAH', 'CLIENT', 'ASSISTANT', 'ASSISTANT_PENDING_NOAH', 'SYSTEM', 'NONE']
 
 SERVICE_CATEGORIES = {
     'clinic': ['voice_development', 'public_speaking', 'voice_rehab'],
@@ -395,6 +440,7 @@ ACTIVITY_TYPES = [
 | כל סטטוס → WON | סימון "נסגרה עסקה" | ידני |
 | כל סטטוס → LOST | סימון "סגור ללא עסקה" | ידני, חובה closure_reason |
 | WON/LOST → IN_PROGRESS | lead_reopened | ידני |
+| ARCHIVED → IN_PROGRESS | lead_reopened | ידני |
 
 ### 6.4 שינוי סטטוס אוטומטי
 
@@ -723,14 +769,14 @@ ACTIVITY_TYPES = [
 
 ### 11.4 מנגנון "אחרי פגישה"
 
-30 דקות אחרי סיום אירוע, הקפצת מסך מהיר:
+30 דקות אחרי סיום אירוע, cron יוצר משימת `post_meeting_update` שתופיע בדף "פעולות היום" של נועה בכניסה הבאה למערכת. המשימה כוללת בחירה מהירה:
 - ממשיכים
 - לשלוח הצעה
 - לקבוע סדנה
 - לעקוב בעוד X זמן
 - לא רלוונטי כרגע
 
-אם לא נבחר כלום - נפתחת משימת `post_meeting_update` עם due_at של event_end + 24h.
+אם לא נבחר כלום תוך 24 שעות מסיום הפגישה - המשימה ממשיכה להופיע ב"פעולות היום" עד שתטופל.
 
 ---
 
@@ -936,17 +982,24 @@ ACTIVITY_TYPES = [
 
 **זרימת ההתראה:**
 - פולואפ מגיע למועדו → בועת התראה בדשבורד פעם אחת
-- נועה יכולה להגדיר תזכורת חוזרת (כמה פעמים, כל כמה זמן)
-- אם לא טופל אחרי כל ההתראות → עובר לעמוד נפרד "ממתין לטיפול" (לא בדשבורד הראשי)
+- אם לא טופל אחרי 7 ימים → עובר לעמוד נפרד "ממתין לטיפול" (לא בדשבורד הראשי)
 - בעמוד "ממתין לטיפול": מיון לפי וותק, אפשרות לסגור או להעביר לארכיון בלחיצה
 
-### 16.2 פוש לטלגרם - רק לליד חדש
+**פיצ'ר עתידי (פאזה 3):** אפשרות לנועה להגדיר תזכורת חוזרת (כמה פעמים, כל כמה זמן). בפאזה 1 - בועת התראה אחת + עמוד "ממתין לטיפול" מספיקים.
+
+### 16.2 הבחנה חשובה: "לא טופלו בזמן" מול "ממתין לטיפול"
+
+שני מושגים שונים:
+- **"לא טופלו בזמן"** (תובנה שבועית, §13.9) - **כל ליד שעבר את `next_action_due_at`** ולא טופל, אפילו אם זה רק יום אחד. מטרה: לתת תמונה רחבה של ביצועי השבוע.
+- **"ממתין לטיפול"** (עמוד נפרד, §22.7 `tasks/stuck`) - **רק לידים שתקועים 7+ ימים**. מטרה: לידים שדורשים פעולה דחופה, לא רעש על overdue זמני.
+
+### 16.3 פוש לטלגרם - רק לליד חדש
 
 הדבר היחיד שמקבל פוש מיידי הוא ליד חדש שנכנס. ההתראה הולכת לטלגרם, ולא למייל או וואטסאפ.
 
 **למה דווקא טלגרם:** מייל ווואטסאפ מלאים ברעש - התראות שם נבלעות. טלגרם, לעומת זאת, יכול לשמש ערוץ ייחודי רק להתראות מהמערכת. הצליל והאייקון של טלגרם הופכים לסימן אחד וברור: "ליד חדש". פחות סיכוי לפספס, יותר תגובה בזמן.
 
-### 16.3 צ'יפים מהירים לסיכום שיחה
+### 16.4 צ'יפים מהירים לסיכום שיחה
 
 אחרי שיחה, לא לפתוח טופס. במקום זה, כפתורי לחיצה אחת.
 
@@ -963,7 +1016,9 @@ ACTIVITY_TYPES = [
 
 המערכת מעדכנת סטטוס אוטומטית, קובעת פולואפ מתאים, ומתעדת בהיסטוריה.
 
-**הגדרה גמישה:** בהגדרות, נועה יכולה לערוך, להוסיף או להסיר צ'יפים. לכל צ'יפ אפשר להגדיר: שם, סטטוס שזה משייך אליו, ופולואפ אוטומטי (כן/לא, בעוד כמה ימים).
+**למה "לא רלוונטי כרגע" → IN_PROGRESS ולא LOST?** זה "לא רלוונטי **כרגע**" - חוזרים בעוד 60 יום. אם הליד באמת לא רלוונטי באופן סופי, נועה תסמן ידנית "סגור ללא עסקה" עם `closure_reason='not_relevant'`.
+
+**הגדרה גמישה:** בהגדרות, נועה יכולה לערוך, להוסיף או להסיר צ'יפים. לכל צ'יפ אפשר להגדיר: שם, סטטוס שזה משייך אליו, waiting_on, סוג פולואפ אוטומטי, ובעוד כמה ימים.
 
 ---
 
@@ -1315,16 +1370,19 @@ PATCH  /settings/service-rates
 
 | סקיל | מתי משתמשים | בסעיפים |
 |---|---|---|
-| `rtl-best-practices` | כל קומפוננטת UI, כל עמוד frontend | 12 (UX מהנייד), כל ה-frontend |
+| `hebrew-rtl-best-practices` | כל קומפוננטת UI, כל עמוד frontend | 12 (UX מהנייד), כל ה-frontend |
 | `israeli-phone-formatter` | שדה טלפון בכל מקום: יצירת ליד, חיפוש, תצוגה | 7 (שדות ליד), 8 (קליטה) |
 | `hebrew-i18n` | פורמט תאריכים, מטבע, יום ראשון כתחילת שבוע | 17 (כללי פולואפ), 23 (cron jobs) |
 | `shabbat-aware-scheduler` | זיהוי מתי שבת/חג/ערב חג, חישוב יום עבודה הבא | 17 (כללי פולואפ), 18 (מענה אחרי שעות), 23 (cron jobs) |
 | `accessibility-il` | תקינות נגישות לכל הממשק | כל ה-frontend |
 | `hebrew-date-converter` | המרת תאריכים עברי-לועזי (אם נדרש בסיכום השבועי) | 19 (AI - סיכומים) |
+| `hebrew-tailwind-preset` | קונפיגורציית Tailwind מותאמת לעברית | כל ה-frontend |
+| `gws-hebrew-email-automation` | אינטגרציה עם Gmail בעברית | 19 (AI), 20 (ניהול טוקנים) |
+| `hebrew-llm-eval-suite` | בדיקת איכות פלטי AI בעברית | 19 (AI - פאזה 3) |
 
 ### 25.2 הוראות לכל סקיל
 
-**rtl-best-practices:**
+**hebrew-rtl-best-practices:**
 - שימוש ב-logical CSS properties בלבד (`padding-inline-start` במקום `padding-left`)
 - `<html lang="he" dir="rtl">`
 - אייקונים אסימטריים (חיצים, chevrons) - flip ל-RTL
@@ -1359,6 +1417,18 @@ PATCH  /settings/service-rates
 - בסיכומים שבועיים: "השבוע, פרשת בלק"
 - חגים יהודיים בלוח השנה
 
+**hebrew-tailwind-preset:**
+- קונפיגורציית Tailwind מוכנה לעברית ו-RTL
+- שימוש בעיצוב הקומפוננטות מההתחלה
+
+**gws-hebrew-email-automation:**
+- חיבור Gmail עם תמיכת עברית
+- טיפול נכון ב-encoding של עברית במיילים יוצאים
+
+**hebrew-llm-eval-suite:**
+- בדיקת איכות פלטי AI בעברית בפאזה 3
+- אימות שסיכומים, סיווגים והצעות נשמעים נכון בעברית
+
 ---
 
 ## 26. שאלות פתוחות לנועה
@@ -1370,3 +1440,127 @@ PATCH  /settings/service-rates
 3. **אומניות הבמה - מפגש = שעה או שעתיים?** משפיע על חישוב הרווחיות
 4. **שעות זמינות לקליניקה** - האם קבועות בכל שבוע?
 5. **לקוחות קיימים** - האם יש מערכת קיימת לייבוא נתונים ממנה?
+
+---
+
+## 27. Acceptance Criteria - רשימות קונקרטיות
+
+לכל פיצ'ר עם רשימה קונקרטית במסמך, יש acceptance criteria שיש לוודא לפני סיום המימוש שלו.
+
+### 27.1 10 התבניות (§9.5)
+
+- [ ] בדיוק 10 תבניות seed נטענות בהתקנה ראשונית
+- [ ] הסיד רץ רק אם הטבלה ריקה
+- [ ] כל תבנית עם השדות: name, channel, target_audience, body, variables, is_active=true
+- [ ] השמות המדויקים: פתיחה - קליניקה / פתיחה - ארגון / פולואפ אחרי שיחה - קליניקה / פולואפ אחרי הצעה / חידוש קשר עדין / אישור פגישה / מענה אחרי שעות / הצעת מחיר - סדנה / הצעת תוכנית - שיקום/עמידה מול קהל / סיום תוכנית - הצעת המשך
+- [ ] הטקסטים תואמים בדיוק למה שמופיע במסמך
+
+### 27.2 6 הצ'יפים (§16.4)
+
+- [ ] בדיוק 6 ברירת מחדל, בסדר הבא: אין מענה, רוצה פרטים, מעוניין בשיחה, רוצה הצעה, לא רלוונטי כרגע, לחזור בעוד חודש
+- [ ] לכל צ'יפ: label, target_status, waiting_on, followup_task_type, auto_followup_days
+- [ ] התנהגות התואמת לטבלה ב-§16.4
+- [ ] בהגדרות → `/settings/chips` → CRUD מלא
+
+### 27.3 6 קטגוריות צבע ביומן (§10.1)
+
+- [ ] בדיוק 6 קטגוריות: לקוחות / סדנאות / הכנה / ניהול / אישי / חסום
+- [ ] colorId תואם לכל קטגוריה: 3 / 4 / 11 / 6 / 5 / 8
+- [ ] אירועים שהמערכת יוצרת אוטומטית מקבלים colorId=3 (לקוחות)
+
+### 27.4 תעריפי שירות (§15.2)
+
+- [ ] טבלת service_rates נטענת עם 8 שורות תעריפי ברירת מחדל
+- [ ] כל שורה עם service_category, service_subtype, default_price, default_duration_minutes
+- [ ] "בימוי הפקה" ו"קורס דיגיטלי" עם price=NULL (לבירור)
+- [ ] endpoint `/settings/service-rates` מאפשר עריכה
+
+### 27.5 8 הסטטוסים (§6.1)
+
+- [ ] בדיוק 8 ערכים ב-enum: NEW / IN_PROGRESS / PROPOSAL_SENT / BOOKING_PENDING / BOOKED / WON / LOST / ARCHIVED
+- [ ] כל המעברים בטבלת §6.3 מתאפשרים, ושאר המעברים חסומים
+- [ ] LOST דורש closure_reason לפני שמירה
+- [ ] ARCHIVED יכול לחזור ל-IN_PROGRESS
+
+### 27.6 כללי פולואפ (§17.1)
+
+- [ ] 5 כללים מוגדרים כקבועים: first_response=24h, warm_followup=48h, proposal_followup=3 ימי עסקים, dormant_check=60d, lecture_inquiry=24h
+- [ ] חישוב יום עבודה הבא משתמש ב-shabbat-aware-scheduler
+- [ ] אם due_at נופל ביום שאינו עבודה - מועבר ליום עבודה הבא 09:00
+
+---
+
+## 28. הבחנה בין "בפאזה X" ל"לא נכלל בכלל"
+
+### 28.1 בפאזה 1 (MVP) - חובה
+
+- כל מודל הנתונים (סעיף 5)
+- כל הסטטוסים (סעיף 6)
+- יצירת לידים ידנית + מטופס
+- 10 התבניות (סעיף 9)
+- 6 הצ'יפים (סעיף 16.4)
+- פולואפ עם בועות התראה (סעיף 16.1)
+- מענה אחרי שעות (סעיף 18)
+- חישוב רווחיות בסיסי (סעיף 15)
+- תוכניות מתמשכות (סעיף 14)
+- העברת בעלות בין נועה לעוזרת (סעיף 13.5)
+- ארכיון שקט (סעיף 12.10)
+- פוש לטלגרם לליד חדש (סעיף 16.3)
+- דשבורד עם תובנות שבועיות (סעיף 13.9)
+
+### 28.2 בפאזה 2
+
+- סנכרון Google Calendar מלא
+- דף קביעת תור ללידים
+- מנגנון אישור תורים
+- post-meeting update task
+- קטגוריות צבע ביומן
+
+### 28.3 בפאזה 3
+
+- חיבור Gmail וסיווג AI של פניות נכנסות
+- ניהול טוקנים ב-AI (סעיף 20)
+- סיכום יומי אוטומטי
+- סיכום שבועי אוטומטי
+- זיהוי לידים רדומים
+- עזרה בניסוח הצעות לארגונים
+- תזכורת חוזרת על פולואפים (פיצ'ר שנדחה מ-MVP)
+- UI לעריכת settings/followup-rules
+- תיעוד קולי עם תמלול (אם POC מצליח)
+
+### 28.4 לא נכלל בכלל (כרגע)
+
+- מערכת ניקוד לידים אוטומטית
+- אוטומציות "אם-אז" מורכבות (בסגנון Zapier)
+- בוטים שעונים אוטומטית ללקוחות
+- זיהוי כפילויות חכם
+- דוחות BI מתקדמים
+- חיבור לפלטפורמות כמו Meta Lead Ads (התשתית קיימת, החיבור הפועל יבוא בעתיד)
+
+---
+
+## Changelog
+
+**v2.1 (מאי 2026):**
+- תיקון סתירה: daily_summary לא נשלח לטלגרם אלא מופיע בדשבורד (§16.3)
+- הוספת ערך `ASSISTANT_PENDING_NOAH` ל-waiting_on enum
+- הוספת עמודות `waiting_on` ו-`followup_task_type` לטבלת quick_action_chips
+- הוספת טבלת `email_messages` (§5.9)
+- הוספת טבלת `service_rates` (§5.10)
+- דחיית תזכורת חוזרת לפאזה 3 (§16.1)
+- הבחנה ברורה בין "לא טופלו בזמן" (תובנה שבועית) לבין "ממתין לטיפול" (7+ ימים) (§16.2)
+- הוספת `ARCHIVED → IN_PROGRESS` ל-reopen flow
+- הוספת הסבר ל"לא רלוונטי כרגע" → IN_PROGRESS (לא LOST)
+- תיקון ניסוח §11.4: "הקפצת מסך" → "cron יוצר משימה שתופיע בדשבורד"
+- עדכון שמות סקילים לפי הסקילים הקיימים בריפו
+- הוספת 3 סקילים נוספים (hebrew-tailwind-preset, gws-hebrew-email-automation, hebrew-llm-eval-suite)
+- הוספת סעיף 27 - Acceptance Criteria
+- הוספת סעיף 28 - הבחנה בין פאזות
+
+**v2.0 (מאי 2026):**
+- איחוד כל המסמכים (product-spec, tech-spec, templates-seed, ai-token-management) למסמך אחד
+- מבנה הירארכי של 26 סעיפים
+- כל פיצ'ר מקבל מקום אחד יחיד במסמך (canonical source)
+
+**v1.x (לפני מאי 2026):**
+- מסמכים נפרדים (product-spec.html, tech-spec.md, וכו')
