@@ -124,9 +124,10 @@
 
 **ניקוי תוכן + token cap:** כל פונקציה שמקבלת תוכן מייל גולמי **חייבת** להעביר אותו דרך `clean_email_body_for_ai(body, purpose)` לפני קריאה ל-Anthropic. ראה `docs/phase-3-ai-token-management.md` למפרט מלא (תקרות per-purpose, שלבי ניקוי HTML, retry policy, סינון לפני AI). זה נון-נגוציאבל — באג שקרה ב-EmailFlow ולא נחזור עליו.
 
-**Error handling:**
-- Timeout → fallback definido (לסינון: treat as business; לסיכום: stats-only).
-- Rate limit → retry עם exponential backoff (max 3 פעמים) — מפורט ב-`phase-3-ai-token-management.md` §retry.
+**Error handling:** (מדיניות מלאה ב-`phase-3-ai-token-management.md` §retry)
+- שגיאות רשת זמניות (`APIConnectionError`, `APITimeoutError`, `InternalServerError`) → retry עם exponential backoff (max 3 פעמים).
+- **`RateLimitError` → לא לעשות retry.** במקום: לתפוס, להחזיר 503, לסמן `pending_classification=true` ב-DB, ולסמוך על job חוזר שיטפל אחרי 60 שניות. retry על rate limit מחמיר את הספירה (כל מייל גדול נחשב 3 דחיות).
+- Timeout במסלול fallback → לסינון: treat as business; לסיכום: stats-only.
 - שגיאת מפתח → log + fallback. *אסור* שהאפליקציה תפול בגלל AI.
 
 **Skill קיים:** `docs/Skills/hebrew-llm-eval-suite/` — לקרוא לפני בחירת מודל ל-prompts.
@@ -159,7 +160,9 @@
 2. config: `anthropic_api_key` (קיים ב-config).
 3. **`clean_email_body_for_ai(body, purpose)`** ב-`app/utils/email_clean.py` לפי המפרט ב-`docs/phase-3-ai-token-management.md`. בלי זה — לא ממשיכים לשלב 17.
 4. כתיבת prompts ב-prompts/ folder עם versioning.
-5. error handling, retries (exponential backoff), timeout.
+5. error handling לפי `phase-3-ai-token-management.md` §retry:
+   - backoff על שגיאות רשת זמניות בלבד.
+   - `RateLimitError` → 503 + `pending_classification=true` + cron חוזר (לא retry).
 6. לוגינג עלות per-call (לפי `phase-3-ai-token-management.md` §מדידה).
 
 ### שלב 17 — Gmail OAuth + watch

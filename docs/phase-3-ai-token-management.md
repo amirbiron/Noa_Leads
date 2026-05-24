@@ -146,9 +146,23 @@ email_id=<id>, purpose=<classification|summary|extraction>, raw_len=<תווים 
 
 ### 4. Double-check על false positives
 
-**זהירות:** יש לקוחות לגיטימיים שעוברים דרך mailchimp/sendgrid (אם הם משתמשים בכלים כאלה לעסק שלהם). זה נדיר, אבל קיים.
+**זהירות:** יש לקוחות לגיטימיים שעוברים דרך מערכות אוטומטיות —
+- מייל אישי שמוגדר עם From של "no-reply@..." בטעות (קורה בטפסי אתר).
+- לקוח שמשתמש ב-mailchimp/sendgrid לעסק שלו ופונה דרכם.
+- ניוזלטר שכולל בתוכו פנייה אישית בגוף.
 
-**הפתרון:** אם המייל סווג כ-spam לפי domain, אבל בגוף המייל יש מילים שמעידות על פנייה אישית — לשלוח ל-AI בכל זאת.
+**הפתרון:** ה-override של מילות-מפתח אישיות חל על **כל 3 ה-heuristics**
+לעיל (§1 From, §2 domain, §3 List-Unsubscribe). אם אחד מהם פסל את
+המייל, *אבל* בגוף המייל יש מילים שמעידות על פנייה אישית — לשלוח ל-AI
+בכל זאת. ההפסד של AI call אחד מיותר זול בהרבה מאובדן ליד אמיתי.
+
+ה-pipeline:
+```
+1. is_likely_personal_inquiry(body) ← בודק מילות מפתח (להלן)
+2. is_heuristic_spam = from_spam OR domain_spam OR list_unsubscribe
+3. if is_heuristic_spam AND NOT is_likely_personal_inquiry: skip AI, mark spam
+4. else: send to AI classifier
+```
 
 מילות מפתח שמעידות על פנייה אישית (regex case-insensitive):
 - `פנייה`, `מעוניין`, `מעוניינת`
@@ -156,7 +170,8 @@ email_id=<id>, purpose=<classification|summary|extraction>, raw_len=<תווים 
 - `יש לי שאלה`, `אני מחפש`, `אני מחפשת`
 - `רוצה לדעת`, `רוצה להתייעץ`
 
-זה רק כמה שורות קוד, אבל מונע אובדן של לידים אמיתיים.
+זה רק כמה שורות קוד, אבל מונע אובדן של לידים אמיתיים מכל אחד משלושת
+המסלולים — לא רק domain.
 
 ### 5. הערה לגבי לקוחות פרטיים
 
