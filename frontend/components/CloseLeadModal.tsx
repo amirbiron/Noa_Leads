@@ -79,8 +79,10 @@ export function CloseLeadModal({ lead, open, onClose, onClosed }: Props) {
   // (ב) קלט של נועה אם היא כבר התחילה להקליד.
   useEffect(() => {
     if (!open || !rates) return;
+    // filter על is_active: ה-UI של /settings/rates מתאר "תעריף פעיל
+    // (יוצע ב-CloseLeadModal)". תעריף שנועה ביטלה לא צריך לזרום ל-defaults.
     const subtypeMatch = rates.find(
-      (r) => r.service_subtype === lead.service_subtype,
+      (r) => r.service_subtype === lead.service_subtype && r.is_active,
     );
     const defaults = defaultsFromRate(subtypeMatch);
     setClosedValue((prev) => (prev === "" ? defaults.price : prev));
