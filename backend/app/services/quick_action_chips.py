@@ -163,9 +163,10 @@ async def apply_chip(
     - chip חסר שדות סמנטיים (target_status/waiting_on/followup_task_type/days) → 400.
     - lead לא נמצא → 404.
     - lead סגור → 400 (F-23 guard ברמת ה-API).
-    - ליד ב-BOOKING_PENDING + בקשת תור ממתינה לאישור + הצ'יפ משנה את
-      הסטטוס → 400. אחרת הליד היה נושר מ-/dashboard/pending והבקשה
-      הייתה נשכחת (ראו F-06).
+    - ליד ב-BOOKING_PENDING/BOOKED עם בקשת תור פעילה + הצ'יפ משנה את
+      הסטטוס → 400. אחרת הליד היה מאבד סינכרון עם היומן: BOOKING_PENDING
+      היה נושר מ-/dashboard/pending (F-06); BOOKED היה משאיר Google
+      Calendar event פעיל בלי context ב-CRM.
     """
     chip = await _get_chip_or_404(db, chip_id)
     if not chip.is_active:
@@ -193,27 +194,39 @@ async def apply_chip(
             "לא ניתן להפעיל צ'יפ על ליד סגור. פתחי אותו מחדש קודם."
         )
 
-    # ליד ב-BOOKING_PENDING עם בקשת תור פתוחה — לחיצה על chip שמשנה את
-    # הסטטוס היתה גורמת לליד להיעלם מ-/dashboard/pending (F-06) והבקשה
-    # הייתה נשכחת. דורש מנועה לטפל בבקשה (אישור / דחייה) קודם.
-    if (
-        lead.status == LeadStatus.BOOKING_PENDING.value
-        and chip.target_status != LeadStatus.BOOKING_PENDING.value
-    ):
-        pending_booking = (
-            await db.execute(
-                select(Booking.id)
-                .where(
-                    Booking.lead_id == lead_id,
-                    Booking.status == BookingStatus.PENDING_APPROVAL.value,
+    # ליד ב-BOOKING_PENDING / BOOKED עם בקשת תור פעילה — לחיצה על chip
+    # שמשנה את הסטטוס תנתק את ה-CRM מהיומן:
+    #   - BOOKING_PENDING + pending_approval: הליד נושר מ-/dashboard/pending
+    #     (F-06), הבקשה נשכחת.
+    #   - BOOKED + approved: הסטטוס יורד אבל ה-Google Calendar event נשאר
+    #     קיים ופעיל — נועה רואה פגישה ביומן בלי context ב-CRM.
+    # בשני המקרים, דורש מנועה לטפל בבקשה (אישור/דחייה/ביטול) קודם.
+    if chip.target_status != lead.status:
+        blocking_booking_status: str | None = None
+        if lead.status == LeadStatus.BOOKING_PENDING.value:
+            blocking_booking_status = BookingStatus.PENDING_APPROVAL.value
+        elif lead.status == LeadStatus.BOOKED.value:
+            blocking_booking_status = BookingStatus.APPROVED.value
+
+        if blocking_booking_status is not None:
+            active_booking = (
+                await db.execute(
+                    select(Booking.id)
+                    .where(
+                        Booking.lead_id == lead_id,
+                        Booking.status == blocking_booking_status,
+                    )
+                    .limit(1)
                 )
-                .limit(1)
-            )
-        ).scalar_one_or_none()
-        if pending_booking is not None:
-            raise ValidationError(
-                "יש בקשת תור הממתינה לאישור. אישרי או דחי אותה לפני שינוי סטטוס הליד."
-            )
+            ).scalar_one_or_none()
+            if active_booking is not None:
+                if lead.status == LeadStatus.BOOKING_PENDING.value:
+                    raise ValidationError(
+                        "יש בקשת תור הממתינה לאישור. אישרי או דחי אותה לפני שינוי סטטוס הליד."
+                    )
+                raise ValidationError(
+                    "יש פגישה מאושרת בלוח. בטלי או דחי את הפגישה לפני שינוי סטטוס הליד."
+                )
 
     now_utc = datetime.now(timezone.utc)
     due_at = _calc_followup_due_at(now_utc, chip.auto_followup_days)
@@ -225,16 +238,27 @@ async def apply_chip(
     #    touchpoint לכל דבר (נועה דיברה עם הליד וסיכמה) — אחרת weekly
     #    "responded in time" + מיון הדשבורד לא יראו את הפעולה. לא נוגעים
     #    ב-last_inbound_at / reply_boost_until — אלה לאינטראקציה מהלקוח.
+    update_values: dict = {
+        "status": chip.target_status,
+        "waiting_on": chip.waiting_on,
+        "last_outbound_at": now_utc,
+        "last_activity_type": ActivityType.CHIP_APPLIED.value,
+        "updated_at": func.now(),
+    }
+    # Side-effect לסטטוס PROPOSAL_SENT: לקבוע proposal_sent_at אם עוד לא
+    # נקבע. אחרת check_stuck_proposals לא יכיר את ההצעה ולא יוצר
+    # proposal_followup, ו-/dashboard/proposals יציג days_since_proposal
+    # לא תקין. COALESCE ב-DB משמרת תאריך הצעה מקורי אם נשלחה כבר.
+    # מקביל ל-mark_proposal_sent ב-state_machine.
+    if chip.target_status == LeadStatus.PROPOSAL_SENT.value:
+        update_values["proposal_sent_at"] = func.coalesce(
+            Lead.proposal_sent_at, now_utc
+        )
+
     update_result = await db.execute(
         update(Lead)
         .where(Lead.id == lead_id, Lead.status.notin_(closed_values))
-        .values(
-            status=chip.target_status,
-            waiting_on=chip.waiting_on,
-            last_outbound_at=now_utc,
-            last_activity_type=ActivityType.CHIP_APPLIED.value,
-            updated_at=func.now(),
-        )
+        .values(**update_values)
     )
     if update_result.rowcount != 1:
         await db.rollback()
