@@ -17,10 +17,17 @@ from app.constants import LeadStatus, TaskType, WaitingOn
 # סטטוסים שצ'יפ *לא* יכול להציב — מנוהלים ע"י flows ייעודיים:
 # - BOOKING_PENDING / BOOKED נקבעים ע"י booking flow (יצירת/אישור Booking).
 #   chip שמציב אותם ישירות יוצר ליד "תקוע" בלי שורה ב-bookings.
+# - PROPOSAL_SENT — קיים flow ייעודי (mark_proposal_sent action +
+#   ProposalSentConfirmModal) שדואג ל-WhatsApp template send לפני
+#   העברת הסטטוס. chip שמציב PROPOSAL_SENT עוקף את האישור הדו-שלבי
+#   ויכול לסמן "הצעה נשלחה" בלי שבאמת נשלחה ללקוח.
 # - WON / LOST / ARCHIVED נקבעים ע"י close_lead (closure_reason / closed_at).
+# - NEW אינו רלוונטי — chip click מרמז על אינטראקציה.
 # 6 הצ'יפים מ-§16.4 כולם target IN_PROGRESS — מתואם.
 _CHIP_FORBIDDEN_TARGETS = frozenset(
     {
+        LeadStatus.NEW,
+        LeadStatus.PROPOSAL_SENT,
         LeadStatus.BOOKING_PENDING,
         LeadStatus.BOOKED,
         LeadStatus.WON,

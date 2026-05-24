@@ -26,18 +26,15 @@ import type {
   WaitingOn,
 } from "@/lib/types";
 
-// אופציות לעריכה: לפי enums ב-Spec v2.1 §5.11.
-// IN_PROGRESS הוא ה-typical לפי §16.4 אבל נועה יכולה לבחור אחר.
-// BOOKING_PENDING + BOOKED *לא* מאופשרים — מנוהלים ע"י booking flow
-// (יצירת/אישור Booking row). chip שמציב אותם ישירות יוצר ליד "תקוע"
-// בלי שורה בbookings. ה-backend גם דוחה אותם ב-schema validator.
-// סגורים (WON / LOST / ARCHIVED) לא רלוונטיים — chip לא יוצרים על
-// ליד סגור (F-23), ויש להם flow ייעודי close_lead.
-const STATUS_OPTIONS: LeadStatus[] = [
-  "NEW",
-  "IN_PROGRESS",
-  "PROPOSAL_SENT",
-];
+// אופציות לעריכה: רק IN_PROGRESS. ה-backend חוסם את כל השאר
+// (_CHIP_FORBIDDEN_TARGETS ב-schemas/quick_action_chip.py):
+// - NEW: chip click מרמז על אינטראקציה.
+// - PROPOSAL_SENT: ProposalSentConfirmModal הוא ה-flow הייעודי
+//   (שולח WhatsApp ואז מסמן).
+// - BOOKING_PENDING / BOOKED: booking flow ייעודי.
+// - WON / LOST / ARCHIVED: close_lead flow ייעודי.
+// 6 הצ'יפים מ-§16.4 כולם target IN_PROGRESS — מתואם.
+const STATUS_OPTIONS: LeadStatus[] = ["IN_PROGRESS"];
 
 // SYSTEM ו-NONE לא רלוונטיים לchip — נועה לא בוחרת אותם ידנית.
 const WAITING_ON_OPTIONS: WaitingOn[] = [

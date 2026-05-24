@@ -188,7 +188,11 @@ async def apply_chip(
     # Defense in depth: chips שנוצרו לפני הוספת ה-validator ב-schema
     # (או דרך כתיבה ישירה ל-DB) לא יעקפו את ה-flows הייעודיים. השמירה
     # נעשית גם בschema של Create/Update + גם כאן בזמן apply.
+    # ראה _CHIP_FORBIDDEN_TARGETS ב-schemas/quick_action_chip.py להסבר
+    # על כל סטטוס שמוגן.
     forbidden_targets = {
+        LeadStatus.NEW.value,
+        LeadStatus.PROPOSAL_SENT.value,
         LeadStatus.BOOKING_PENDING.value,
         LeadStatus.BOOKED.value,
         LeadStatus.WON.value,
@@ -198,7 +202,7 @@ async def apply_chip(
     if chip.target_status in forbidden_targets:
         raise ValidationError(
             "הצ'יפ מוגדר עם סטטוס שלא ניתן להציב דרך chip "
-            "(תור / סגירה). השתמשי ב-flow הייעודי."
+            "(תור / סגירה / שליחת הצעה). השתמשי ב-flow הייעודי."
         )
 
     # Lead — חייב להיות פתוח. שליפה לבדיקה + הודעה ידידותית; ה-UPDATE
@@ -258,27 +262,18 @@ async def apply_chip(
     #    touchpoint לכל דבר (נועה דיברה עם הליד וסיכמה) — אחרת weekly
     #    "responded in time" + מיון הדשבורד לא יראו את הפעולה. לא נוגעים
     #    ב-last_inbound_at / reply_boost_until — אלה לאינטראקציה מהלקוח.
-    update_values: dict = {
-        "status": chip.target_status,
-        "waiting_on": chip.waiting_on,
-        "last_outbound_at": now_utc,
-        "last_activity_type": ActivityType.CHIP_APPLIED.value,
-        "updated_at": func.now(),
-    }
-    # Side-effect לסטטוס PROPOSAL_SENT: לקבוע proposal_sent_at אם עוד לא
-    # נקבע. אחרת check_stuck_proposals לא יכיר את ההצעה ולא יוצר
-    # proposal_followup, ו-/dashboard/proposals יציג days_since_proposal
-    # לא תקין. COALESCE ב-DB משמרת תאריך הצעה מקורי אם נשלחה כבר.
-    # מקביל ל-mark_proposal_sent ב-state_machine.
-    if chip.target_status == LeadStatus.PROPOSAL_SENT.value:
-        update_values["proposal_sent_at"] = func.coalesce(
-            Lead.proposal_sent_at, now_utc
-        )
-
+    # PROPOSAL_SENT אסור כtarget של chip (ProposalSentConfirmModal הוא ה-flow
+    # הייעודי), אז אין צורך ב-proposal_sent_at side-effect כאן.
     update_result = await db.execute(
         update(Lead)
         .where(Lead.id == lead_id, Lead.status.notin_(closed_values))
-        .values(**update_values)
+        .values(
+            status=chip.target_status,
+            waiting_on=chip.waiting_on,
+            last_outbound_at=now_utc,
+            last_activity_type=ActivityType.CHIP_APPLIED.value,
+            updated_at=func.now(),
+        )
     )
     if update_result.rowcount != 1:
         await db.rollback()

@@ -71,24 +71,26 @@ async def detect_dormant() -> None:
                 ),
             )
             .values(dormant_flag=True, updated_at=func.now())
-            .returning(Lead.id)
+            .returning(Lead.id, Lead.owner_id)  # owner_id ל-assigned_to ב-task החדש
         )
         result = await db.execute(stmt)
-        newly_dormant_ids = list(result.scalars().all())
+        newly_dormant = list(result.all())  # list of (id, owner_id) tuples
 
         # יצירת dormant_check task לכל ליד חדש שנדלק, idempotent כנגד
         # *כל* task פתוח (chip "לא רלוונטי כרגע" שיצר dormant_check, או
         # FIRST_RESPONSE/RETRY_CALL ישנים שנשארו תקועים). ה-task נוצר עם
-        # due_at=now כי הליד כבר 60 יום רדום.
+        # due_at=now כי הליד כבר 60 יום רדום. assigned_to=owner_id עקבי עם
+        # check_warm_followups / check_stuck_proposals / apply_chip.
         from app.services.tasks import sync_lead_next_action_cache
 
         tasks_created = 0
-        for lead_id in newly_dormant_ids:
+        for lead_id, owner_id in newly_dormant:
             if await _has_any_open_task(db, lead_id):
                 continue
             task = Task(
                 lead_id=lead_id,
                 type=TaskType.DORMANT_CHECK.value,
+                assigned_to=owner_id,
                 status=TaskStatus.OPEN.value,
                 due_at=now_utc,
                 origin_rule="auto_detect_dormant",
@@ -98,14 +100,14 @@ async def detect_dormant() -> None:
 
         if tasks_created > 0:
             await db.flush()  # נדרש כדי שה-sync יראה את ה-tasks החדשים
-            for lead_id in newly_dormant_ids:
+            for lead_id, _owner in newly_dormant:
                 await sync_lead_next_action_cache(db, lead_id)
 
         await db.commit()
 
     logger.info(
         "Marked %d leads as dormant, created %d dormant_check tasks",
-        len(newly_dormant_ids),
+        len(newly_dormant),
         tasks_created,
     )
 
