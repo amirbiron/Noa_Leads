@@ -228,6 +228,31 @@ export interface ProposalCard extends LeadCard {
   days_since_proposal: number | null;
 }
 
+export interface QuickActionChip {
+  id: string;
+  label: string;
+  action_type: string;
+  requires_content: boolean;
+  sort_order: number;
+  is_active: boolean;
+}
+
+export interface QuickActionChipCreate {
+  label: string;
+  action_type: string;
+  requires_content?: boolean;
+  sort_order?: number;
+  is_active?: boolean;
+}
+
+export interface QuickActionChipUpdate {
+  label?: string;
+  action_type?: string;
+  requires_content?: boolean;
+  sort_order?: number;
+  is_active?: boolean;
+}
+
 export interface StuckTaskItem {
   task_id: string;
   task_type: string;

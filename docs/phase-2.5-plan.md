@@ -74,21 +74,23 @@
 
 | # | פיצ'ר | חיוניות | מורכבות | המלצה |
 |---|---|---|---|---|
-| 2.1 | צ'יפים editable ב-settings | בינונית | בינונית | ✅ לעשות |
+| 2.1 | צ'יפים editable ב-settings | בינונית | בינונית | ✅ **בוצע** |
 | 2.2 | תזכורת חוזרת מתצורת settings | נמוכה | נמוכה | ⏸️ לדחות לפאזה 3 |
 | 2.3 | עמוד נפרד "ממתין לטיפול" | בינונית | נמוכה | ✅ לעשות |
 | 2.4 | קטגוריות צבע ב-Google Calendar | נמוכה | נמוכה | ✅ לעשות (חלקי — רק לקוחות) |
 | 2.5 | דגל "לא עסקי" ידני | נמוכה (עד פאזה 3) | נמוכה | ⏸️ לדחות לפאזה 3 (יחד עם Gmail) |
 | 2.6 | תיעוד קולי | אופציונלי | גבוהה | ⏸️ POC נפרד אחרי פאזה 3 |
 
-### 2.1 צ'יפים editable
+### 2.1 צ'יפים editable — ✅ הושלם
 
-**ה-spec:** 6 צ'יפים כברירת מחדל, ב-settings אפשר לערוך/להוסיף/למחוק. לכל צ'יפ: שם + סטטוס + פולואפ אוטומטי (כן/לא, בעוד כמה ימים).
+**ה-spec:** 6 צ'יפים כברירת מחדל, ב-settings אפשר לערוך/להוסיף/למחוק.
 
-**מימוש:**
-- **DB:** טבלה חדשה `quick_action_chips` (id, label, target_status, auto_followup_days, sort_order, is_active).
-- **Migration:** seed 6 הצ'יפים הקיימים (`אין מענה`, `סיכמתי שיחה`, `שלחתי תבנית`, `שלחתי הצעה`, `הוסיפי הערה`, `הודעה נכנסת`).
-- **Backend:** GET/POST/PATCH/DELETE על `/settings/chips`.
+**מימוש שבוצע:**
+- **DB:** טבלה `quick_action_chips` (id, label, action_type, requires_content, sort_order, is_active). migration 0010 עם seed 6 ברירת מחדל (UUIDs דטרמיניסטיים).
+- **Backend:** GET (active_only optional) / POST / PATCH / DELETE על `/chips`. validation שה-action_type מוכר ב-state_machine.ACTIONS.
+- **Frontend:** דף חדש `/settings/chips` עם list + edit/add/delete/sort/toggle. QuickActions טוען מ-API במקום hardcoded.
+
+**הבדל מה-spec המקורי:** במקום `target_status + auto_followup_days` המורכבים, ה-chip מצביע ל-`action_type` קיים ב-state_machine — הבחירה של "מה קורה כשלוחצים" מבוקרת מחוץ לטבלה. נשאר flexibility ל-Noa (label, order, active) בלי לכפול logic ב-DB. אם בעתיד תרצה התנהגות חדשה שלא קיימת — נוסיף ל-state_machine.
 - **Frontend:** דף `/settings/chips` עם רשימה+עריכה. `QuickActions.tsx` יביא מה-API במקום hardcoded.
 
 ### 2.3 עמוד "ממתין לטיפול"
