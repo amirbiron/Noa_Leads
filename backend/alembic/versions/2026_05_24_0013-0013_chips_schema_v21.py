@@ -136,7 +136,12 @@ def upgrade() -> None:
     #    הסמנטיקה שלהם לא תואמת לאפיון — לא ניתן לתרגם 1:1. נועה תקבל
     #    את 6 החדשים מ-§16.4. צ'יפים אחרים נשארים נגיעים.
     bind.execute(
-        sa.text("DELETE FROM quick_action_chips WHERE id = ANY(:ids)"),
+        sa.text(
+            # ::text cast חיוני: ANY עם array של strings נכשל מול עמודת
+            # UUID ב-PostgreSQL. השוואה כ-text עובדת בכל driver. 6 שורות
+            # בלבד — לא משפיע על ביצועים.
+            "DELETE FROM quick_action_chips WHERE id::text = ANY(:ids)"
+        ),
         {"ids": _OLD_SEED_IDS},
     )
 
@@ -188,7 +193,12 @@ def downgrade() -> None:
 
     # 2. מחיקת 6 ה-seeds החדשים (UUIDs דטרמיניסטיים 0013).
     bind.execute(
-        sa.text("DELETE FROM quick_action_chips WHERE id = ANY(:ids)"),
+        sa.text(
+            # ::text cast חיוני: ANY עם array של strings נכשל מול עמודת
+            # UUID ב-PostgreSQL. השוואה כ-text עובדת בכל driver. 6 שורות
+            # בלבד — לא משפיע על ביצועים.
+            "DELETE FROM quick_action_chips WHERE id::text = ANY(:ids)"
+        ),
         {"ids": [c["id"] for c in _DEFAULT_CHIPS_V21]},
     )
 

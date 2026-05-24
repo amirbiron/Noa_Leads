@@ -19,9 +19,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.constants import (
     CLOSED_LEAD_STATUSES,
     ActivityType,
+    BookingStatus,
+    LeadStatus,
     TaskStatus,
 )
 from app.core.exceptions import NotFoundError, ValidationError
+from app.models.booking import Booking
 from app.models.lead import Lead
 from app.models.quick_action_chip import QuickActionChip
 from app.models.task import Task
@@ -160,6 +163,9 @@ async def apply_chip(
     - chip חסר שדות סמנטיים (target_status/waiting_on/followup_task_type/days) → 400.
     - lead לא נמצא → 404.
     - lead סגור → 400 (F-23 guard ברמת ה-API).
+    - ליד ב-BOOKING_PENDING + בקשת תור ממתינה לאישור + הצ'יפ משנה את
+      הסטטוס → 400. אחרת הליד היה נושר מ-/dashboard/pending והבקשה
+      הייתה נשכחת (ראו F-06).
     """
     chip = await _get_chip_or_404(db, chip_id)
     if not chip.is_active:
@@ -186,6 +192,28 @@ async def apply_chip(
         raise ValidationError(
             "לא ניתן להפעיל צ'יפ על ליד סגור. פתחי אותו מחדש קודם."
         )
+
+    # ליד ב-BOOKING_PENDING עם בקשת תור פתוחה — לחיצה על chip שמשנה את
+    # הסטטוס היתה גורמת לליד להיעלם מ-/dashboard/pending (F-06) והבקשה
+    # הייתה נשכחת. דורש מנועה לטפל בבקשה (אישור / דחייה) קודם.
+    if (
+        lead.status == LeadStatus.BOOKING_PENDING.value
+        and chip.target_status != LeadStatus.BOOKING_PENDING.value
+    ):
+        pending_booking = (
+            await db.execute(
+                select(Booking.id)
+                .where(
+                    Booking.lead_id == lead_id,
+                    Booking.status == BookingStatus.PENDING_APPROVAL.value,
+                )
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if pending_booking is not None:
+            raise ValidationError(
+                "יש בקשת תור הממתינה לאישור. אישרי או דחי אותה לפני שינוי סטטוס הליד."
+            )
 
     now_utc = datetime.now(timezone.utc)
     due_at = _calc_followup_due_at(now_utc, chip.auto_followup_days)
