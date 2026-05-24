@@ -85,20 +85,16 @@ async def create_post_meeting_tasks() -> None:
             .correlate(Booking)
         )
 
-        # task עבור הליד נוצר ע"י cron זה לאחרונה = דילוג.
-        # אינדמפוטנטיות בין riliki: כולל גם DONE/CANCELED, אחרת אחרי
-        # שנועה מסמנת done — הריצה הבאה בחלון 48h יוצרת משימה כפולה
-        # על אותה פגישה. מספיק origin_rule='post_meeting_cron' כדי
-        # למקד רק במשימות שאנחנו יצרנו (לא tasks ידניים אחרים).
-        recent_post_meeting_subq = (
+        # task שמקושר ל-booking הזה כבר נוצר ע"י cron זה = דילוג.
+        # אינדמפוטנטיות per-booking (כל סטטוס: OPEN/DONE/CANCELED), אחרת
+        # אחרי שנועה מסמנת done — הריצה הבאה בחלון 48h תיצור משימה כפולה
+        # על אותה פגישה. ה-FK ל-booking_id (migration 0008) מאפשר dedup
+        # מדויק: ליד עם 2 פגישות שונות בחלון מקבל 2 משימות נפרדות.
+        existing_for_this_booking_subq = (
             select(Task.id)
             .where(
-                Task.lead_id == Booking.lead_id,
+                Task.booking_id == Booking.id,
                 Task.type == TaskType.POST_MEETING_UPDATE.value,
-                Task.origin_rule == "post_meeting_cron",
-                # buffer של 2x החלון — בטוח שגם אחרי שהבooking יצא מהחלון
-                # נזכור שכבר התרענו עליו לפני זמן קצר.
-                Task.created_at > lookback - timedelta(hours=_LOOKBACK_HOURS),
             )
             .correlate(Booking)
         )
@@ -128,7 +124,7 @@ async def create_post_meeting_tasks() -> None:
                     ]
                 ),
                 not_(exists(google_canceled_subq)),
-                not_(exists(recent_post_meeting_subq)),
+                not_(exists(existing_for_this_booking_subq)),
             )
         )
         rows = (await db.execute(stmt)).all()
@@ -137,15 +133,15 @@ async def create_post_meeting_tasks() -> None:
             logger.info("No post-meeting tasks to create")
             return
 
-        # dedup לפי lead_id — ליד עם מספר bookings בחלון יקבל משימה אחת
-        unique_lead_ids: set = set()
+        # יוצרים task per-booking. ה-dedup לפי booking_id ב-WHERE כבר
+        # מבטיח שלא ניצור 2 משימות לאותה פגישה (גם בין riliki שונות).
+        # ליד עם 2 פגישות שונות בחלון מקבל 2 משימות — כל פגישה דורשת
+        # התייחסות נפרדת.
         for row in rows:
-            unique_lead_ids.add(row.lead_id)
-
-        for lead_id in unique_lead_ids:
             db.add(
                 Task(
-                    lead_id=lead_id,
+                    lead_id=row.lead_id,
+                    booking_id=row.id,
                     type=TaskType.POST_MEETING_UPDATE.value,
                     due_at=now_utc,  # יופיע מיד ב-/today
                     status=TaskStatus.OPEN.value,
@@ -154,11 +150,7 @@ async def create_post_meeting_tasks() -> None:
             )
         await db.commit()
 
-    logger.info(
-        "Created %d post-meeting tasks (from %d qualifying bookings)",
-        len(unique_lead_ids),
-        len(rows),
-    )
+    logger.info("Created %d post-meeting tasks", len(rows))
 
 
 if __name__ == "__main__":

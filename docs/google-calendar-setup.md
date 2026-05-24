@@ -85,7 +85,19 @@ python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().d
 | `GOOGLE_REDIRECT_URI` | `https://noa-leads-backend.onrender.com/google/auth/callback` |
 | `FRONTEND_URL` | `https://noa-leads-frontend.onrender.com` |
 | `BACKEND_URL` | `https://noa-leads-backend.onrender.com` (לסנכרון הפוך — שלב 14) |
-| `SECRETS_ENCRYPTION_KEY` | מ-שלב 5 (כבר ייווצר אוטומטית עם `generateValue: true`, אבל אם רוצים לקבוע ערך ספציפי — שלב 5) |
+| `SECRETS_ENCRYPTION_KEY` | ראה הסבר מתחת לטבלה |
+
+**ל-`SECRETS_ENCRYPTION_KEY` יש שתי אפשרויות** (לבחור אחת):
+
+- **א. Render auto-generate** — ב-render.yaml או ב-Environment UI לסמן
+  `generateValue: true`. Render ייצור ערך אקראי בטוח פעם אחת. **מומלץ
+  לפרודקשן** — מפתח לא עובר בכלל דרכך.
+- **ב. ידני משלב 5** — מריצים את פקודת ה-Python בשלב 5 ומדביקים את
+  הערך כ-value. שימושי אם רוצים לסנכרן את אותו מפתח בין dev/prod (לא
+  מומלץ לפרודקשן — אז כל מי שיש לו גישה ל-env vars רואה אותו).
+
+> **אזהרה**: אסור להחליף מפתח אחרי שsecrets נשמרו (refresh_tokens של
+> Google). החלפה תכשיל פענוח, ונועה תצטרך להתחבר מחדש דרך /settings.
 
 Save Changes — Render יבצע redeploy אוטומטי.
 

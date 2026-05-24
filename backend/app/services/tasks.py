@@ -112,15 +112,16 @@ async def create_first_response_task(
 
 def _due_at_for_first_response(now: datetime) -> datetime:
     """
-    מחזיר datetime ב-UTC עבור due_at:
-    - בתוך שעות עבודה: now (מיידי)
-    - מחוץ: תחילת יום העבודה הבא ב-Asia/Jerusalem
-    """
-    from app.utils.work_hours import is_working_time  # avoid circular at import
+    due_at של FIRST_RESPONSE = now + 24h.
 
-    if is_working_time(now):
-        return now
-    return next_working_day_start(now).astimezone(timezone.utc)
+    לפי האפיון (סעיף יב): "תזכורות פולואפ הן בהגדרה לא דחופות — אם משהו
+    דורש מינימום 24 שעות לפני שמתריעים עליו". הפרדה חשובה:
+    - ה-task עצמו נראה מיד ב-/today (סטטוס OPEN תמיד מוצג).
+    - is_overdue (=> badge "באיחור" + alerts) מקבל true רק אחרי 24h.
+
+    לא רוצים להציק על ליד בן שעה. אחרי יום שלם בלי טיפול — אז כן.
+    """
+    return now + timedelta(hours=24)
 
 
 # ===================== Snooze =====================
