@@ -402,4 +402,16 @@ async def list_stuck_tasks(db: AsyncSession) -> list[tuple[Task, Lead]]:
         .order_by(Task.due_at.asc())
     )
     rows = (await db.execute(stmt)).all()
-    return [(task, lead) for task, lead in rows]
+
+    # dedup לפי lead_id — שורה אחת לכל ליד, ה-task הישן ביותר שלו (כי
+    # ה-order_by מציב ישנים קודם). מבטיח שספירת הרשימה = stuck_count
+    # ב-dashboard (שסופר לידים), אחרת ליד עם 2+ tasks overdue היה
+    # מנפח את העמוד.
+    seen_leads: set = set()
+    deduped: list[tuple[Task, Lead]] = []
+    for task, lead in rows:
+        if lead.id in seen_leads:
+            continue
+        seen_leads.add(lead.id)
+        deduped.append((task, lead))
+    return deduped
