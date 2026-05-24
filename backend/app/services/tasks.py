@@ -112,16 +112,14 @@ async def create_first_response_task(
 
 def _due_at_for_first_response(now: datetime) -> datetime:
     """
-    due_at של FIRST_RESPONSE = now + 24h.
+    due_at של FIRST_RESPONSE = now (מיידי).
 
-    לפי האפיון (סעיף יב): "תזכורות פולואפ הן בהגדרה לא דחופות — אם משהו
-    דורש מינימום 24 שעות לפני שמתריעים עליו". הפרדה חשובה:
-    - ה-task עצמו נראה מיד ב-/today (סטטוס OPEN תמיד מוצג).
-    - is_overdue (=> badge "באיחור" + alerts) מקבל true רק אחרי 24h.
-
-    לא רוצים להציק על ליד בן שעה. אחרי יום שלם בלי טיפול — אז כן.
+    כדי שה-task יופיע ב-/today מיד (הdashboard מסנן due_at < סוף היום).
+    האפיון מבקש "מינימום 24 שעות לפני שמתריעים" — מימוש זה דרך
+    is_overdue per-type ב-dashboard, לא דרך due_at: ה-badge "באיחור"
+    מקבל true רק אחרי 24h מ-created_at של ה-task. ראה dashboard._is_overdue.
     """
-    return now + timedelta(hours=24)
+    return now
 
 
 # ===================== Snooze =====================

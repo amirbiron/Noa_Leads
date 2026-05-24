@@ -54,10 +54,11 @@ async def create_post_meeting_tasks() -> None:
     lookback = now_utc - timedelta(hours=_LOOKBACK_HOURS)
 
     async with AsyncSessionLocal() as db:
-        # ביטול מ-Google = הפגישה לא קרתה. סינון מצמצם:
-        # type=meeting_canceled (לא meeting_rescheduled — שינוי זמן אומר
-        # שהפגישה כן התקיימה, רק במועד אחר), ו-source=google_calendar_sync,
-        # ו-booking_id תואם.
+        # ביטול מ-Google = הפגישה לא קרתה — אבל *רק* אם הביטול קרה לפני
+        # מועד הפגישה. אם נועה מוחקת אירוע ב-Google אחרי שהפגישה כבר
+        # התקיימה (כניקיון יומן), לא רוצים לדכא את ה-post_meeting task.
+        # ה-created_at של ה-activity הוא הזמן שהsync תפס את הביטול,
+        # שמייצג בקירוב טוב את זמן הביטול ב-Google.
         google_canceled_subq = (
             select(Activity.id)
             .where(
@@ -67,6 +68,8 @@ async def create_post_meeting_tasks() -> None:
                 == "google_calendar_sync",
                 Activity.activity_metadata["booking_id"].astext
                 == cast(Booking.id, String),
+                # רק ביטולים שקרו לפני מועד הסיום של הפגישה.
+                Activity.created_at < Booking.requested_slot_end,
             )
             .correlate(Booking)
         )

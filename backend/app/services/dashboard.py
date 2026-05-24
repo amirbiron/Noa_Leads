@@ -12,7 +12,7 @@ from uuid import UUID
 from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.constants import CLOSED_LEAD_STATUSES, LeadStatus, TaskStatus
+from app.constants import CLOSED_LEAD_STATUSES, LeadStatus, TaskStatus, TaskType
 from app.models.lead import Lead
 from app.models.task import Task
 from app.schemas.dashboard import (
@@ -216,7 +216,7 @@ async def get_today_actions(db: AsyncSession) -> list[TodayActionItem]:
                 lead_organization=lead.organization_name,
                 task_type=task.type,
                 due_at=task.due_at,
-                is_overdue=task.due_at <= now_utc,
+                is_overdue=_calc_is_overdue(task, now_utc),
                 state_color=derive_state_color(lead, now_utc),
                 priority_level=lead.priority_level,
                 preferred_contact=lead.preferred_contact,
@@ -224,6 +224,22 @@ async def get_today_actions(db: AsyncSession) -> list[TodayActionItem]:
             )
         )
     return items
+
+
+# grace period per-type ל-is_overdue. FIRST_RESPONSE לפי האפיון (סעיף יב):
+# "מינימום 24 שעות לפני שמתריעים". ה-task מופיע ב-/today מיד (due_at=now)
+# אבל ה-badge "באיחור" מקבל true רק אחרי 24h.
+_OVERDUE_GRACE: dict[str, timedelta] = {
+    TaskType.FIRST_RESPONSE.value: timedelta(hours=24),
+}
+
+
+def _calc_is_overdue(task, now_utc: datetime) -> bool:
+    """is_overdue with per-type grace from task.created_at."""
+    grace = _OVERDUE_GRACE.get(task.type)
+    if grace is not None:
+        return task.created_at + grace <= now_utc
+    return task.due_at <= now_utc
 
 
 # ===================== פניות חדשות =====================
