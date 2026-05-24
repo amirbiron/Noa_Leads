@@ -43,8 +43,9 @@ class Lead(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     status: Mapped[str] = mapped_column(
         String(30), nullable=False, default="NEW", server_default="NEW"
     )
+    # VARCHAR(30) לפי Spec §5.1 — מספיק ל-ASSISTANT_PENDING_NOAH (22 תווים).
     waiting_on: Mapped[str] = mapped_column(
-        String(20), nullable=False, default="NOAH", server_default="NOAH"
+        String(30), nullable=False, default="NOAH", server_default="NOAH"
     )
     priority_level: Mapped[str] = mapped_column(
         String(20), nullable=False, default="normal", server_default="normal"
