@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import secrets
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from google.auth.exceptions import RefreshError
@@ -22,6 +22,7 @@ from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
+from jose import JWTError, jwt as jose_jwt
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -94,21 +95,70 @@ def generate_code_verifier() -> str:
     return secrets.token_urlsafe(64)
 
 
-def build_auth_url(code_verifier: str) -> tuple[str, str]:
+# === state encoding (JWT חתום) ===
+# המוטיב: ב-Render כל subdomain הוא site נפרד לפי Public Suffix List, אז
+# cookies שנשמרים מ-/google/auth/start (cross-origin XHR) לא יגיעו ל-
+# /google/auth/callback (top-level navigation מ-Google). הפתרון: לקודד את
+# code_verifier + nonce ב-JWT חתום שעובר דרך פרמטר `state` של OAuth.
+# המנגנון cookieless לחלוטין, בטוח מ-CSRF בזכות החתימה + exp + nonce.
+
+_STATE_TTL_SECONDS = 600  # 10 דקות מספיק ל-flow רגיל
+_STATE_ALG = "HS256"
+
+
+def encode_oauth_state(code_verifier: str) -> str:
     """
-    מחזיר (auth_url, state). הקורא שומר state + code_verifier ב-session
-    (cookie חתום). בקאלבק נטען אותם בחזרה לאימות.
+    מקודד code_verifier + nonce ב-JWT חתום ב-JWT_SECRET_KEY.
+    התוצאה נשלחת כפרמטר state ל-Google ומוחזרת אלינו בקאלבק.
+    """
+    s = get_settings()
+    now = datetime.now(tz=timezone.utc)
+    payload = {
+        "ver": code_verifier,
+        "nonce": secrets.token_urlsafe(16),  # מגן מפני replay
+        "iat": int(now.timestamp()),
+        "exp": int((now + timedelta(seconds=_STATE_TTL_SECONDS)).timestamp()),
+        "use": "google_oauth",  # type tag — מונע שימוש חוזר ב-JWTs אחרים
+    }
+    return jose_jwt.encode(payload, s.jwt_secret_key, algorithm=_STATE_ALG)
+
+
+def decode_oauth_state(state: str) -> str:
+    """
+    מאמת חתימה + exp ומחזיר code_verifier. זורק ValidationError אם state
+    לא תקין, פג תוקף, או נחתם בשונה.
+    """
+    s = get_settings()
+    try:
+        payload = jose_jwt.decode(state, s.jwt_secret_key, algorithms=[_STATE_ALG])
+    except JWTError as e:
+        raise ValidationError("state לא תקף") from e
+    if payload.get("use") != "google_oauth":
+        raise ValidationError("state לא תקף")
+    verifier = payload.get("ver")
+    if not isinstance(verifier, str):
+        raise ValidationError("state לא תקף")
+    return verifier
+
+
+def build_auth_url(code_verifier: str) -> str:
+    """
+    מחזיר את ה-auth URL להפניית הbrowser ל-Google. ה-state כבר מוטמע ב-URL
+    (cookieless flow — ראה encode_oauth_state).
     """
     flow = _new_flow()
     flow.code_verifier = code_verifier
-    auth_url, state = flow.authorization_url(
+    state = encode_oauth_state(code_verifier)
+    auth_url, _ = flow.authorization_url(
         # offline → מקבלים גם refresh_token (לא רק access)
         access_type="offline",
         # prompt=consent → מבטיח refresh_token גם בחיבור חוזר
         prompt="consent",
         include_granted_scopes="true",
+        # מחליפים את ה-state ש-google-auth ייצור אוטומטית בlנו
+        state=state,
     )
-    return auth_url, state
+    return auth_url
 
 
 async def exchange_code_and_save(

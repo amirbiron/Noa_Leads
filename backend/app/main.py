@@ -9,7 +9,6 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from starlette.middleware.sessions import SessionMiddleware
 
 from app.api.routes import auth as auth_routes
 from app.api.routes import dashboard as dashboard_routes
@@ -92,21 +91,10 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    # SessionMiddleware נדרש ל-OAuth flow של Google (שמירת state +
-    # code_verifier בין /google/auth/start ל-/google/auth/callback).
-    # ראה: docs/references/google-calendar-blueprint.md סעיף 1 (PKCE+state).
-    # ה-cookie חתום (HMAC) עם JWT_SECRET_KEY — לא נעוף לתוכן רגיש מעבר
-    # למזהי state רנדומליים, אז שיתוף המפתח עם JWT הוא acceptable trade-off.
-    # same_site=none + https_only=True — חובה כי frontend ו-backend הם
-    # subdomains שונים ב-Render (cross-origin). דפדפנים מודרניים מאפשרים
-    # Secure cookies גם על localhost דרך HTTP — אז זה עובד גם בדב.
-    app.add_middleware(
-        SessionMiddleware,
-        secret_key=settings.jwt_secret_key,
-        same_site="none",
-        https_only=True,
-        max_age=600,  # 10 דקות — מספיק ל-OAuth flow, מינימום surface
-    )
+    # אין SessionMiddleware: ב-*.onrender.com כל subdomain הוא site נפרד
+    # לפי Public Suffix List, ודפדפנים חוסמים cross-site cookies.
+    # ה-OAuth state מקודד ב-JWT חתום שעובר דרך פרמטר state של OAuth עצמו
+    # (cookieless flow). ראה: app/services/google_calendar.py.
 
     _register_exception_handlers(app)
 
