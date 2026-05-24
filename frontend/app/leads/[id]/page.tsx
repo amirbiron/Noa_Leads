@@ -328,10 +328,12 @@ function Meta({ label, value }: { label: string; value: string }) {
 
 function CopyBookingLinkButton({ token }: { token: string }) {
   const [copied, setCopied] = useState(false);
-  // נבנה ידנית במקום process.env כדי לעבוד גם בdev עם host אחר
+  // נבנה ידנית במקום process.env כדי לעבוד גם בdev עם host אחר.
+  // encodeURIComponent הגנתי — UUID לא מכיל תווים מיוחדים, אבל אם הפורמט
+  // ישתנה בעתיד הגנה זו תמנע URL שבור.
   const url =
     typeof window !== "undefined"
-      ? `${window.location.origin}/book/${token}`
+      ? `${window.location.origin}/book/${encodeURIComponent(token)}`
       : "";
 
   async function copy() {

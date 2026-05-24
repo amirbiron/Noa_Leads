@@ -125,6 +125,7 @@ async def get_booking_page_info(db: AsyncSession, token: UUID) -> BookingPageInf
         default_duration_minutes=default_duration_minutes(lead.service_category),
         has_active_booking=active is not None,
         active_booking_at=active.requested_slot_start if active else None,
+        active_booking_end=active.requested_slot_end if active else None,
         active_booking_status=active.status if active else None,
     )
 
@@ -258,7 +259,11 @@ async def _fetch_google_busy(
         return busy, True
     except Exception:
         logger.exception("FreeBusy query failed; falling back to DB-busy only")
-        return [], True  # התרגום ל-UI: "סנכרון יומן זמני לא זמין"
+        # מחזירים False כדי שה-UI יציג את אותה הודעה כמו ב-not_connected:
+        # "סנכרון יומן זמני לא פעיל". המשתמש יבין שייתכן שיש אירוע ביומן
+        # שלא נספר. כיוון שהאמת היא שהקריאה נכשלה — זה דיוק יותר טוב
+        # מאשר להגיד שהסנכרון פעיל.
+        return [], False
 
 
 def _freebusy_query(
@@ -325,21 +330,47 @@ async def create_booking_request(
     """
     lead = await get_lead_by_booking_token(db, token)
 
-    # ולידציה: עתידי
+    # ולידציה בסיסית: עתידי + סדר זמנים
     now_utc = datetime.now(timezone.utc)
     if slot_start < now_utc:
         raise ValidationError("הסלוט שנבחר כבר עבר. רעני את הדף וכבחרי שוב.")
     if slot_end <= slot_start:
         raise ValidationError("נתוני זמן לא תקינים.")
 
-    # ולידציה: אין כבר תור פעיל
+    # ולידציה מחמירה: הסלוט חייב להתאים לכללי הזמינות (שעות עבודה,
+    # יום עבודה, אורך לפי קטגוריה, יישור ל-grid 30 דק'). אחרת קלינט
+    # זדוני יכול לבקש 03:00 בשבת בלילה.
+    duration = default_duration_minutes(lead.service_category)
+    actual_duration = (slot_end - slot_start).total_seconds() / 60
+    if abs(actual_duration - duration) > 0.01:
+        raise ValidationError(
+            f"משך הסלוט חייב להיות {duration} דקות."
+        )
+    day_local = slot_start.astimezone(ISRAEL_TZ).date()
+    candidates = _candidate_slots(day_local, duration)
+    # השוואה ב-UTC כדי לא להסתבך עם offset
+    target = (
+        slot_start.astimezone(timezone.utc),
+        slot_end.astimezone(timezone.utc),
+    )
+    candidates_utc = [
+        (cs.astimezone(timezone.utc), ce.astimezone(timezone.utc))
+        for cs, ce in candidates
+    ]
+    if target not in candidates_utc:
+        raise ValidationError(
+            "המועד לא בטווח הסלוטים המוצעים. בחרי מועד מהרשימה."
+        )
+
+    # ולידציה: אין כבר תור פעיל (בדיקה רכה, ה-DB unique index יתפוס race)
     existing = await _get_active_booking(db, lead.id)
     if existing is not None:
         raise ConflictError(
             "כבר יש לך בקשת תור פעילה. צרי קשר אם רוצה להחליף מועד."
         )
 
-    # בדיקה חוזרת מול busy ranges — מגן מ-race בין הצגת הסלוט לאישור
+    # בדיקה חוזרת מול busy ranges — מגן מ-race בין הצגת הסלוט לאישור.
+    # ה-DB EXCLUDE constraint יתפוס כל race שיחמוק מכאן.
     google_busy, _ = await _fetch_google_busy(db, slot_start, slot_end)
     db_busy = await _fetch_db_busy(db, slot_start, slot_end)
     if not _slot_free(slot_start, slot_end, google_busy + db_busy, now_utc):
@@ -347,7 +378,10 @@ async def create_booking_request(
             "הסלוט כבר תפוס. בחרי מועד אחר מהרשימה המעודכנת."
         )
 
-    # insert + עדכון סטטוס הליד באותה טרנזקציה
+    # insert + עדכון סטטוס הליד באותה טרנזקציה.
+    # DB constraints (ראה migration 0006):
+    # - idx_bookings_active_lead UNIQUE WHERE active → תופס race "2 תורים לליד"
+    # - ck_bookings_no_overlap EXCLUDE WHERE active → תופס race "2 תורים לאותו slot"
     booking = Booking(
         lead_id=lead.id,
         requested_slot_start=slot_start,
@@ -358,9 +392,11 @@ async def create_booking_request(
     try:
         await db.flush()
     except IntegrityError as e:
-        # partial unique index — race נדיר אבל אפשרי
         await db.rollback()
-        raise ConflictError("הסלוט כבר תפוס. בחרי מועד אחר.") from e
+        # שתי האפשרויות הופכות לאותה הודעה ידידותית למשתמש
+        raise ConflictError(
+            "הסלוט כבר תפוס או שיש לך כבר תור פעיל. בחרי מועד אחר."
+        ) from e
 
     # סטטוס הליד → BOOKING_PENDING (atomic, רק אם פתוח)
     from sqlalchemy import func, update

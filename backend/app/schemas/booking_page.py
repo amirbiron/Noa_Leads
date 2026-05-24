@@ -2,10 +2,10 @@
 סכמות לדף קביעת תור הציבורי (/book/{token}).
 """
 
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class BookingPageInfo(BaseModel):
@@ -20,6 +20,7 @@ class BookingPageInfo(BaseModel):
     # הUI יציג זאת ולא יאפשר בקשה חדשה.
     has_active_booking: bool = False
     active_booking_at: datetime | None = None
+    active_booking_end: datetime | None = None
     active_booking_status: str | None = None
 
 
@@ -48,9 +49,21 @@ class CreateBookingRequest(BaseModel):
     # פרטים אופציונליים שהליד יכול לעדכן בעת הזמנה
     notes: str | None = Field(default=None, max_length=500)
 
+    @field_validator("slot_start", "slot_end")
+    @classmethod
+    def must_be_tz_aware(cls, v: datetime) -> datetime:
+        # חובה לכלול timezone offset — אחרת השוואה עם now_utc למטה תיכשל.
+        # מנרמלים ל-UTC כדי להבטיח אחידות בכל הקוד.
+        if v.tzinfo is None:
+            raise ValueError(
+                "תאריך/שעה חייבים לכלול אזור זמן (ISO 8601 עם offset)."
+            )
+        return v.astimezone(timezone.utc)
+
 
 class CreateBookingResponse(BaseModel):
     booking_id: UUID
     status: str  # "pending_approval"
     slot_start: datetime
     slot_end: datetime
+

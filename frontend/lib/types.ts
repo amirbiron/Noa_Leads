@@ -116,6 +116,7 @@ export interface BookingPageInfo {
   timezone: string;
   has_active_booking: boolean;
   active_booking_at: string | null;
+  active_booking_end: string | null;
   active_booking_status: string | null;
 }
 

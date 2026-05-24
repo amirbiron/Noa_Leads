@@ -195,13 +195,15 @@ export default function BookingPage() {
       info.active_booking_status === "approved"
         ? "אושר ע\"י נועה"
         : "ממתין לאישור";
+    // active_booking_end עשוי להיות null בלידים ישנים מאוד; fallback ל-start
+    const endLabel = info.active_booking_end ?? info.active_booking_at;
     return (
       <CenteredCard>
         <div className="text-center space-y-3">
           <Calendar className="mx-auto text-state-green" size={48} aria-hidden />
           <div className="text-lg font-semibold">כבר יש לך בקשת תור</div>
           <div className="text-base text-gray-900">
-            {fullSlotLabel(info.active_booking_at, info.active_booking_at)}
+            {fullSlotLabel(info.active_booking_at, endLabel)}
           </div>
           <div className="text-sm text-state-orange bg-state-orange/10 rounded-lg px-3 py-2 mt-2">
             {statusLabel}
