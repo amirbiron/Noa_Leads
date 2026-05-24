@@ -71,6 +71,8 @@ export const ACTIVITY_TYPE_LABELS: Record<string, string> = {
   meeting_requested: "נתבקש תור",
   meeting_approved: "פגישה אושרה",
   meeting_rejected: "פגישה נדחתה",
+  meeting_rescheduled: "מועד הפגישה עודכן",
+  meeting_canceled: "פגישה בוטלה",
   proposal_sent: "נשלחה הצעה",
   followup_scheduled: "תוזמן פולואפ",
   owner_changed: "הוחלפה בעלות",
@@ -159,6 +161,12 @@ function pluralizeTimeUnit(
   if (n === 1) return one;
   if (n === 2) return two;
   return `${n} ${other}`;
+}
+
+// משך זמן בדקות — "דקה" / "שתי דקות" / "N דקות". משמש למשל בדף הbooking
+// להצגת default_duration_minutes.
+export function pluralizeMinutes(n: number): string {
+  return pluralizeTimeUnit(n, "דקה", "שתי דקות", "דקות");
 }
 
 export function formatRelativeHebrew(iso: string | null): string {

@@ -121,6 +121,8 @@ class ActivityType(StrEnum):
     MEETING_REQUESTED = "meeting_requested"
     MEETING_APPROVED = "meeting_approved"
     MEETING_REJECTED = "meeting_rejected"
+    MEETING_RESCHEDULED = "meeting_rescheduled"
+    MEETING_CANCELED = "meeting_canceled"
     PROPOSAL_SENT = "proposal_sent"
     FOLLOWUP_SCHEDULED = "followup_scheduled"
     OWNER_CHANGED = "owner_changed"

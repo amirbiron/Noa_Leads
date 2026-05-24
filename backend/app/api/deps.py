@@ -7,7 +7,8 @@ from typing import Annotated
 from fastapi import Depends, Header
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import AuthError
+from app.constants import UserRole
+from app.core.exceptions import AuthError, ForbiddenError
 from app.core.security import decode_access_token
 from app.db.session import get_db
 from app.models.user import User
@@ -36,3 +37,13 @@ async def current_user(
 
 CurrentUser = Annotated[User, Depends(current_user)]
 DbSession = Annotated[AsyncSession, Depends(get_db)]
+
+
+async def require_owner(user: CurrentUser) -> User:
+    """guard לפעולות שזמינות רק לבעלים (לא לעוזרת)."""
+    if user.role != UserRole.OWNER.value:
+        raise ForbiddenError("פעולה זו זמינה לבעלים בלבד.")
+    return user
+
+
+OwnerOnly = Annotated[User, Depends(require_owner)]

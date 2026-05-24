@@ -101,8 +101,81 @@ export interface Lead {
   closed_value: string | null;
   actual_hours: string | null;
   personal_note: string | null;
+  booking_token: string;
   created_at: string;
   updated_at: string;
+}
+
+// ===== Booking page (ציבורי) =====
+
+export interface BookingPageInfo {
+  lead_name: string;
+  service_category: string;
+  service_subtype: string | null;
+  default_duration_minutes: number;
+  timezone: string;
+  has_active_booking: boolean;
+  active_booking_at: string | null;
+  active_booking_end: string | null;
+  active_booking_status: string | null;
+}
+
+export interface TimeSlot {
+  start: string;
+  end: string;
+}
+
+export interface DayAvailability {
+  date: string;
+  slots: TimeSlot[];
+}
+
+export interface AvailabilityResponse {
+  days: DayAvailability[];
+  includes_google_busy: boolean;
+}
+
+export interface CreateBookingResponse {
+  booking_id: string;
+  status: string;
+  slot_start: string;
+  slot_end: string;
+}
+
+// ===== Booking admin (אישור/דחייה ע"י נועה/עוזרת) =====
+
+export type BookingStatus =
+  | "pending_approval"
+  | "approved"
+  | "rejected"
+  | "canceled";
+
+export interface BookingRead {
+  id: string;
+  lead_id: string;
+  requested_slot_start: string;
+  requested_slot_end: string;
+  status: BookingStatus;
+  google_calendar_event_id: string | null;
+  created_at: string;
+  approved_at: string | null;
+  rejected_at: string | null;
+}
+
+export interface PendingBookingItem {
+  id: string;
+  lead_id: string;
+  lead_name: string;
+  lead_phone: string | null;
+  service_category: string;
+  service_subtype: string | null;
+  requested_slot_start: string;
+  requested_slot_end: string;
+  created_at: string;
+}
+
+export interface PendingBookingsResponse {
+  items: PendingBookingItem[];
 }
 
 export interface LeadCreate {

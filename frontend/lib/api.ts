@@ -4,6 +4,11 @@
 import { clearTokens, getAccessToken, getRefreshToken, setTokens } from "./auth";
 import type {
   Activity,
+  AvailabilityResponse,
+  BookingPageInfo,
+  BookingRead,
+  CreateBookingResponse,
+  PendingBookingsResponse,
   HomeDashboard,
   Lead,
   LeadCard,
@@ -58,6 +63,9 @@ async function fetcher<T>(path: string, opts: FetcherOpts = {}): Promise<T> {
     ...rest,
     headers,
     body: body !== undefined ? JSON.stringify(body) : undefined,
+    // אין credentials כי אנחנו ב-cross-origin (subdomains שונים ב-Render).
+    // auth ב-Bearer header, OAuth state ב-URL (לא cookies) — ראה
+    // app/services/google_calendar.py:encode_oauth_state.
   });
 
   // 401 → ננסה refresh פעם אחת ואז retry
@@ -254,4 +262,58 @@ export const api = {
   // ----- Settings -----
   listServiceRates: () =>
     fetcher<ServiceRate[]>("/settings/service-rates"),
+
+  // ----- Google Calendar -----
+  getGoogleStatus: () =>
+    fetcher<{
+      connected: boolean;
+      google_account_email?: string | null;
+      calendar_id?: string | null;
+      timezone?: string | null;
+      connected_at?: string | null;
+      auth_invalid: boolean;
+    }>("/google/status"),
+
+  startGoogleAuth: () =>
+    fetcher<{ auth_url: string }>("/google/auth/start"),
+
+  disconnectGoogle: () =>
+    fetcher<void>("/google/disconnect", { method: "POST" }),
+
+  // ----- Booking page (ציבורי, ללא auth) -----
+  getBookingPageInfo: (token: string) =>
+    fetcher<BookingPageInfo>(`/booking/${token}`, { retryAuth: false }),
+
+  getBookingAvailability: (
+    token: string,
+    dateFrom: string,
+    dateTo: string,
+  ) =>
+    fetcher<AvailabilityResponse>(
+      `/booking/${token}/availability?date_from=${dateFrom}&date_to=${dateTo}`,
+      { retryAuth: false },
+    ),
+
+  createBooking: (
+    token: string,
+    payload: { slot_start: string; slot_end: string; notes?: string },
+  ) =>
+    fetcher<CreateBookingResponse>(`/booking/${token}`, {
+      method: "POST",
+      body: payload,
+      retryAuth: false,
+    }),
+
+  // ----- Booking admin (אישור/דחייה ע"י נועה/עוזרת) -----
+  listPendingBookings: () =>
+    fetcher<PendingBookingsResponse>(`/bookings/pending`),
+
+  getActiveBookingForLead: (leadId: string) =>
+    fetcher<BookingRead | null>(`/bookings/lead/${leadId}/active`),
+
+  approveBooking: (id: string) =>
+    fetcher<BookingRead>(`/bookings/${id}/approve`, { method: "POST" }),
+
+  rejectBooking: (id: string) =>
+    fetcher<BookingRead>(`/bookings/${id}/reject`, { method: "POST" }),
 };

@@ -55,6 +55,21 @@ services:
         generateValue: true
       - key: CORS_ORIGINS
         sync: false
+      # פאזה 2 — Google Calendar OAuth. ראה: docs/google-calendar-setup.md
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_REDIRECT_URI
+        sync: false
+      # Fernet key — חייב פורמט ספציפי (32 bytes URL-safe base64, 44 תווים).
+      # Render's generateValue יוצר מחרוזת אלפא-נומרית אקראית שלא תקפה כ-Fernet
+      # → encryption.py יחזיר plaintext fallback ו-secrets ישמרו לא מוצפנים.
+      # ייצור ידני: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+      - key: SECRETS_ENCRYPTION_KEY
+        sync: false
+      - key: FRONTEND_URL
+        sync: false
       - fromGroup: noa-leads-shared
       - fromGroup: noa-leads-python
 

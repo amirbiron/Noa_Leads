@@ -11,6 +11,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
+import { GoogleCalendarSection } from "@/components/GoogleCalendarSection";
 import { SectionHeader } from "@/components/SectionHeader";
 import { api, ApiError } from "@/lib/api";
 import { clearTokens } from "@/lib/auth";
@@ -96,6 +97,15 @@ export default function SettingsPage() {
         <NavRow href="/templates" icon={<FileText size={18} />} label="תבניות הודעה" />
         <NavRow href="/proposals" icon={<Send size={18} className="rtl:-scale-x-100" />} label="הצעות פתוחות" />
       </ul>
+
+      {/* אינטגרציות — owner-only: כל מסלולי /google/* דורשים OwnerOnly,
+          אז לעוזרת זה היה נראה כשגיאת 403 קבועה במקום אזור מוסתר. */}
+      {me?.role === "owner" && (
+        <>
+          <SectionHeader title="אינטגרציות" />
+          <GoogleCalendarSection />
+        </>
+      )}
 
       {/* חוקי פולואפ */}
       <SectionHeader

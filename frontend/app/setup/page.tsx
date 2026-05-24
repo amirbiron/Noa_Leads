@@ -77,11 +77,7 @@ export default function SetupPage() {
   return (
     <main className="min-h-screen flex items-center justify-center p-6">
       <div className="bg-white rounded-2xl shadow-sm border border-gray-100 w-full max-w-sm p-6">
-        <h1 className="text-xl font-semibold mb-1">הגדרה ראשונית</h1>
-        <p className="text-sm text-gray-500 mb-5">
-          נראה שזה ה-deploy הראשון. צרי את משתמש הבעלים של המערכת — תוכלי
-          להתחבר איתו מיד.
-        </p>
+        <h1 className="text-xl font-semibold mb-5">הרשמה</h1>
 
         <form onSubmit={submit} className="space-y-4">
           <label className="block">

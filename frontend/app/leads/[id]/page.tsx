@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import {
   ArrowRightLeft,
+  CalendarPlus,
   FileText,
   Mail,
   MessageCircle,
@@ -16,6 +17,7 @@ import { AddProgramModal } from "@/components/AddProgramModal";
 import { AppShell } from "@/components/AppShell";
 import { CloseLeadModal } from "@/components/CloseLeadModal";
 import { DynamicActionButton } from "@/components/DynamicActionButton";
+import { PendingBookingCard } from "@/components/PendingBookingCard";
 import { ProgramCard } from "@/components/ProgramCard";
 import { QuickActions } from "@/components/QuickActions";
 import { SectionHeader } from "@/components/SectionHeader";
@@ -33,7 +35,13 @@ import {
   labelSubtype,
   labelWaiting,
 } from "@/lib/hebrew";
-import type { Activity, Lead, Program, StateColor } from "@/lib/types";
+import type {
+  Activity,
+  BookingRead,
+  Lead,
+  Program,
+  StateColor,
+} from "@/lib/types";
 
 function inferStateColor(lead: Lead): StateColor {
   if (["WON", "LOST", "ARCHIVED"].includes(lead.status)) return "gray";
@@ -53,6 +61,7 @@ export default function LeadDetailPage() {
   const [lead, setLead] = useState<Lead | null>(null);
   const [activities, setActivities] = useState<Activity[]>([]);
   const [programs, setPrograms] = useState<Program[]>([]);
+  const [activeBooking, setActiveBooking] = useState<BookingRead | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [templateOpen, setTemplateOpen] = useState(false);
@@ -64,14 +73,19 @@ export default function LeadDetailPage() {
   async function load() {
     setError(null);
     try {
-      const [l, t, p] = await Promise.all([
+      const [l, t, p, b] = await Promise.all([
         api.getLead(id),
         api.getTimeline(id),
         api.listProgramsForLead(id),
+        // active booking — מוצג בכרטיס אישור/דחייה כשהליד ב-BOOKING_PENDING.
+        // נטען תמיד (גם כשהליד לא pending) כי זול ומאפשר תצוגה גם של booking
+        // approved בעתיד (שלב 14+).
+        api.getActiveBookingForLead(id),
       ]);
       setLead(l);
       setActivities(t);
       setPrograms(p);
+      setActiveBooking(b);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "שגיאה בטעינה");
     } finally {
@@ -178,6 +192,12 @@ export default function LeadDetailPage() {
             )}
           </div>
 
+          {/* בקשת תור ממתינה — בראש לפי החשיבות (קריאה לפעולה ראשונה
+              שנועה צריכה) */}
+          {activeBooking && activeBooking.status === "pending_approval" && (
+            <PendingBookingCard booking={activeBooking} onChanged={load} />
+          )}
+
           {/* כפתור "מה עכשיו?" — רק לליד פתוח */}
           {!["WON", "LOST", "ARCHIVED"].includes(lead.status) && (
             <DynamicActionButton lead={lead} onActionDone={load} />
@@ -203,6 +223,11 @@ export default function LeadDetailPage() {
                 העברה
               </button>
             </div>
+          )}
+
+          {/* קישור לדף קביעת תור — להעתקה ושיתוף עם הליד */}
+          {!["WON", "LOST", "ARCHIVED"].includes(lead.status) && (
+            <CopyBookingLinkButton token={lead.booking_token} />
           )}
 
           {/* תוכניות מתמשכות */}
@@ -317,5 +342,39 @@ function Meta({ label, value }: { label: string; value: string }) {
       </div>
       <div className="text-xs font-medium text-gray-800 mt-0.5">{value}</div>
     </div>
+  );
+}
+
+function CopyBookingLinkButton({ token }: { token: string }) {
+  const [copied, setCopied] = useState(false);
+  // נבנה ידנית במקום process.env כדי לעבוד גם בdev עם host אחר.
+  // encodeURIComponent הגנתי — UUID לא מכיל תווים מיוחדים, אבל אם הפורמט
+  // ישתנה בעתיד הגנה זו תמנע URL שבור.
+  const url =
+    typeof window !== "undefined"
+      ? `${window.location.origin}/book/${encodeURIComponent(token)}`
+      : "";
+
+  async function copy() {
+    if (!url) return;
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1800);
+    } catch {
+      // fallback: בחלק מהדפדפנים clipboard API נחסם — נציג את הקישור
+      // עצמו ל-copy ידני (כרגע פשוט נדפיס כשגיאה)
+      window.prompt("העתיקי את הקישור:", url);
+    }
+  }
+
+  return (
+    <button
+      onClick={copy}
+      className="w-full rounded-lg bg-white border border-gray-200 py-2.5 text-sm font-medium flex items-center justify-center gap-1.5"
+    >
+      <CalendarPlus size={15} aria-hidden />
+      {copied ? "הקישור הועתק ✓" : "העתקת קישור לקביעת תור"}
+    </button>
   );
 }
