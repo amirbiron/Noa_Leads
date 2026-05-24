@@ -209,6 +209,11 @@ services:
       - fromGroup: noa-leads-python
 
   # חידוש watch channel של Google Calendar (תוקף ~שבוע) — יומי 04:00 ישראל (01:00 UTC, F-13)
+  # נדרשים אותם Google env vars כמו ב-web service: ה-job מפענח tokens מ-DB
+  # (SECRETS_ENCRYPTION_KEY), מרענן access token (GOOGLE_CLIENT_ID/SECRET),
+  # ורושם webhook URL חזרה ל-backend (BACKEND_URL).
+  # יש להזין את הערכים ידנית ב-Render UI עבור ה-cron (sync:false → לא אוטומטי
+  # מה-web). אחרת `renew_watch_if_needed` ידלג בשקט ו-watch channels יפוגו.
   - type: cron
     name: noa-renew-calendar-watch
     runtime: python
@@ -222,5 +227,15 @@ services:
         fromDatabase:
           name: noa-leads-db
           property: connectionString
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_REDIRECT_URI
+        sync: false
+      - key: SECRETS_ENCRYPTION_KEY
+        sync: false
+      - key: BACKEND_URL
+        sync: false
       - fromGroup: noa-leads-shared
       - fromGroup: noa-leads-python
