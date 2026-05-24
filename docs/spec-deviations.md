@@ -192,23 +192,21 @@
 
 ---
 
-### F-09: מצב בעלות 3 — "עוזרת ממתין לאישור נועה" חסר — 🟠
+### F-09: מצב בעלות 3 — "עוזרת ממתין לאישור נועה" — 🟡 חלקי
 
-**Spec §13.5:** "שלושה מצבי בעלות: באחריות נועה, באחריות עוזרת, **באחריות עוזרת ממתין לאישור נועה**."
+**Spec v2.1 §5.11 + §13.5:** "שלושה מצבי בעלות: באחריות נועה, באחריות עוזרת, **באחריות עוזרת ממתין לאישור נועה**." ה-enum ב-§5.11: `['NOAH', 'CLIENT', 'ASSISTANT', 'ASSISTANT_PENDING_NOAH', 'SYSTEM', 'NONE']`.
 
-**Code:** `backend/app/constants.py:WaitingOn` — מכיל `NOAH`, `CLIENT`, `ASSISTANT`, `SYSTEM`, `NONE`. **אין** ערך ל-"עוזרת ממתין לאישור נועה" (מצב 3).
+**Code:** `backend/app/constants.py:WaitingOn` — נוסף `ASSISTANT_PENDING_NOAH`. ה-frontend מכיר אותו (`WAITING_ON_LABELS` + chip editor option).
 
-**Severity:** בינוני — אין מצב טכני לייצוג זה. נועה לא תוכל לסמן/לראות לידים ב-state זה.
-
-**Open decision:** **גישה למימוש**:
-- (א) ערך enum נוסף `ASSISTANT_PENDING_APPROVAL` ב-`WaitingOn` (מבלבל קצת — זה גם owner וגם waiting state).
-- (ב) שדה נפרד `awaiting_owner_approval: bool` ב-Lead (סמנטיקה נקייה: owner=ASSISTANT + flag).
-- (ג) field `ownership_state` ייעודי עם 3 ערכים (NOAH/ASSISTANT/ASSISTANT_PENDING).
+**Severity:** בינוני — הערך נוסף לenum, אבל ה-flow המלא של "העברה לאישור" עדיין לא מומש (אין endpoint דבוק).
 
 **Acceptance:**
-- [ ] Migration מוסיף את המנגנון שנבחר.
-- [ ] `transfer_lead` תומך בשליחה למצב "ממתין לאישור" + endpoint לאישור.
-- [ ] תצוגה ב-`/leads` ו-card עם סימון ויזואלי ייחודי למצב.
+- [x] `WaitingOn` enum כולל `ASSISTANT_PENDING_NOAH` (commit הזה).
+- [x] frontend label + chip editor אופציה.
+- [ ] `transfer_lead` תומך בשליחה למצב "ממתין לאישור" + endpoint לאישור (UI flow מלא).
+- [ ] תצוגה ייחודית ויזואלית ב-`/leads` ו-card.
+
+**הערה:** ה-flow המלא נשאר ב-Wave B (לא חוסם MVP).
 
 ---
 
@@ -225,9 +223,9 @@
 **Severity:** בינוני — קריטריון שגוי, מציג רעש (overdue זמני) במקום lattes ימים.
 
 **Acceptance:**
-- [ ] `list_stuck_tasks`: `Task.due_at <= now_utc - 7 days`.
-- [ ] `weekly_insights.stuck_count` נשאר על כל overdue (תובנת §13.9 השבועית).
-- [ ] בדיקה: ליד שעבר את due_at לפני 3 ימים לא יופיע ב-`/tasks/stuck` אבל ייספר ב-stuck_count.
+- [x] `list_stuck_tasks`: `Task.due_at <= now_utc - timedelta(days=7)`.
+- [x] `weekly_insights.stuck_count` נשאר על כל overdue (תובנת §13.9 השבועית).
+- [x] בדיקה: ליד שעבר את due_at לפני 3 ימים לא יופיע ב-`/tasks/stuck` אבל ייספר ב-stuck_count.
 
 ---
 

@@ -350,19 +350,25 @@ async def _get_task_or_404(db: AsyncSession, task_id: UUID) -> Task:
 
 async def list_stuck_tasks(db: AsyncSession) -> list[tuple[Task, Lead]]:
     """
-    "ממתין לטיפול" — משימות פעילות שעבר ה-due_at שלהן (overdue).
+    "ממתין לטיפול" — Spec v2.1 §16.2 + §22.7: לידים שתקועים **7+ ימים**
+    (due_at <= now - 7d), לא סתם overdue זמני.
 
-    הקריטריון זהה ל-stuck_count ב-dashboard (due_at <= now) — כך שהקליק
-    על "לא טופלו בזמן" בדף הבית מוביל לרשימה המכילה את אותן יחידות.
+    הבחנה ברורה לפי §16.2:
+    - `weekly_insights.stuck_count` (תובנה שבועית, §13.9) — כל overdue,
+      אפילו יום אחד. נשאר ב-due_at <= now.
+    - `/tasks/stuck` (העמוד הנפרד) — רק 7+ ימים. כאן.
+
+    הסף הוגדר באפיון כדי שהעמוד יציג רק מקרים שבאמת דורשים פעולה
+    דחופה, ולא רעש של overdue זמני שבמילא יוצג ב"פעולות היום".
 
     מודל פשוט (אחרי הסרת grace per-type): due_at = alert time תמיד.
     snooze מעדכן due_at, FIRST_RESPONSE נוצר עם due_at=now+24h, וכו'.
-    אין צורך בלוגיקת CASE.
 
     מסונן ללידים פתוחים (defense in depth — close_lead מבטל tasks).
     מיון לפי due_at עולה (ישנים קודם).
     """
     now_utc = datetime.now(timezone.utc)
+    stuck_threshold = now_utc - timedelta(days=7)
 
     stmt = (
         select(Task, Lead)
@@ -371,7 +377,7 @@ async def list_stuck_tasks(db: AsyncSession) -> list[tuple[Task, Lead]]:
             Task.status.in_(
                 [TaskStatus.OPEN.value, TaskStatus.SNOOZED.value]
             ),
-            Task.due_at <= now_utc,
+            Task.due_at <= stuck_threshold,
             Lead.status.notin_([s.value for s in CLOSED_LEAD_STATUSES]),
         )
         .order_by(Task.due_at.asc())
@@ -379,9 +385,8 @@ async def list_stuck_tasks(db: AsyncSession) -> list[tuple[Task, Lead]]:
     rows = (await db.execute(stmt)).all()
 
     # dedup לפי lead_id — שורה אחת לכל ליד, ה-task הישן ביותר שלו (כי
-    # ה-order_by מציב ישנים קודם). מבטיח שספירת הרשימה = stuck_count
-    # ב-dashboard (שסופר לידים), אחרת ליד עם 2+ tasks overdue היה
-    # מנפח את העמוד.
+    # ה-order_by מציב ישנים קודם). מבטיח עמוד נקי גם אם לליד יש כמה
+    # tasks תקועים.
     seen_leads: set = set()
     deduped: list[tuple[Task, Lead]] = []
     for task, lead in rows:

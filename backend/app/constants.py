@@ -38,6 +38,10 @@ class WaitingOn(StrEnum):
     NOAH = "NOAH"            # אצל נועה (הבעלים)
     CLIENT = "CLIENT"        # אצל הלקוח
     ASSISTANT = "ASSISTANT"  # אצל העוזרת
+    # Spec v2.1 §5.11 + §13.5: מצב בעלות שלישי — העוזרת ביצעה משהו
+    # שדורש אישור של נועה (למשל אישור הצעת מחיר). הפיצ'ר עצמו (F-09)
+    # נמצא ב-Wave B; הערך נוסף ל-enum כדי שschema/validation יכירו בו.
+    ASSISTANT_PENDING_NOAH = "ASSISTANT_PENDING_NOAH"
     SYSTEM = "SYSTEM"        # ממתין לפעולה אוטומטית
     NONE = "NONE"            # סגור / לא רלוונטי
 

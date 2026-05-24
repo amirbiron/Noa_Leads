@@ -35,6 +35,7 @@ export const WAITING_ON_LABELS: Record<string, string> = {
   NOAH: "אצלי",
   CLIENT: "אצל הלקוח",
   ASSISTANT: "אצל העוזרת",
+  ASSISTANT_PENDING_NOAH: "ממתין לאישורי",
   SYSTEM: "פעולה אוטומטית",
   NONE: "—",
 };

@@ -37,7 +37,13 @@ const STATUS_OPTIONS: LeadStatus[] = [
 // סגורים (WON / LOST / ARCHIVED) לא רלוונטיים — chip לא יוצרים על
 // ליד סגור (F-23).
 
-const WAITING_ON_OPTIONS: WaitingOn[] = ["NOAH", "CLIENT", "ASSISTANT"];
+// SYSTEM ו-NONE לא רלוונטיים לchip — נועה לא בוחרת אותם ידנית.
+const WAITING_ON_OPTIONS: WaitingOn[] = [
+  "NOAH",
+  "CLIENT",
+  "ASSISTANT",
+  "ASSISTANT_PENDING_NOAH",
+];
 
 // TaskType — לפי Spec §17.1 + §16.4. הצ'יפים השכיחים יוצרים את 4 האלה.
 const TASK_TYPE_OPTIONS = [

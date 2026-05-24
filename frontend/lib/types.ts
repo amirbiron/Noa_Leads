@@ -11,7 +11,13 @@ export type LeadStatus =
   | "LOST"
   | "ARCHIVED";
 
-export type WaitingOn = "NOAH" | "CLIENT" | "ASSISTANT" | "SYSTEM" | "NONE";
+export type WaitingOn =
+  | "NOAH"
+  | "CLIENT"
+  | "ASSISTANT"
+  | "ASSISTANT_PENDING_NOAH"  // Spec v2.1 §5.11 — F-09
+  | "SYSTEM"
+  | "NONE";
 
 export type ServiceCategory = "clinic" | "workshops" | "production" | "digital_course";
 
