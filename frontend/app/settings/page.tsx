@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
   ChevronLeft,
+  Coins,
   FileText,
   LogOut,
   Send,
@@ -16,19 +17,6 @@ import { SectionHeader } from "@/components/SectionHeader";
 import { api, ApiError } from "@/lib/api";
 import { clearTokens } from "@/lib/auth";
 import type { User } from "@/lib/types";
-
-// תעריפי שירות לפי תוכן האפיון (product-spec.md, "תעריפי ברירת מחדל").
-// כרגע read-only. עריכה ב-UI תתווסף כשנבנה את ה-backend לכך.
-const SERVICE_RATES = [
-  { name: "פיתוח קול", price: "300 ₪", duration: "מפגש" },
-  { name: "עמידה מול קהל", price: "2,400 ₪", duration: "8 מפגשים" },
-  { name: "שיקום קול", price: "2,400 ₪", duration: "8 מפגשים" },
-  { name: "סדנה / הרצאה", price: "2,000 ₪", duration: "שעתיים" },
-  { name: "אומניות הבמה", price: "6,000–8,000 ₪", duration: "3–4 מפגשים" },
-  { name: "ליווי הפקה", price: "9,600 ₪", duration: "3–4 חודשים" },
-  { name: "בימוי הפקה", price: "לבירור", duration: "משתנה" },
-  { name: "קורס דיגיטלי", price: "לבירור", duration: "12 מפגשים" },
-];
 
 const FOLLOWUP_RULES = [
   { label: "פולואפ הצעה תקועה", value: "אחרי 3 ימים ללא תגובה" },
@@ -96,6 +84,13 @@ export default function SettingsPage() {
       <ul className="space-y-2">
         <NavRow href="/templates" icon={<FileText size={18} />} label="תבניות הודעה" />
         <NavRow href="/settings/chips" icon={<Sparkles size={18} />} label="צ'יפים מהירים" />
+        {me?.role === "owner" && (
+          <NavRow
+            href="/settings/rates"
+            icon={<Coins size={18} />}
+            label="תעריפי שירות"
+          />
+        )}
         <NavRow href="/proposals" icon={<Send size={18} className="rtl:-scale-x-100" />} label="הצעות פתוחות" />
       </ul>
 
@@ -125,25 +120,6 @@ export default function SettingsPage() {
         ))}
       </ul>
 
-      {/* תעריפי שירות */}
-      <SectionHeader
-        title="תעריפי שירות"
-        hint="ברירות מחדל — לערכים בפועל בכרטיס לקוח"
-      />
-      <ul className="bg-white rounded-xl border border-gray-200 divide-y divide-gray-100">
-        {SERVICE_RATES.map((s) => (
-          <li
-            key={s.name}
-            className="flex items-baseline justify-between gap-3 px-3.5 py-2.5 text-sm"
-          >
-            <div>
-              <div className="text-gray-800 font-medium">{s.name}</div>
-              <div className="text-xs text-gray-400">{s.duration}</div>
-            </div>
-            <span className="text-gray-700 shrink-0">{s.price}</span>
-          </li>
-        ))}
-      </ul>
 
       {/* AI status — נכבה תמיד בפאזה 1 */}
       <SectionHeader title="פיצ'רים עתידיים" />

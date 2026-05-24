@@ -26,6 +26,7 @@ import type {
   ProgramUpdate,
   ProgramWithLead,
   ServiceRate,
+  ServiceRateUpdate,
   StuckTaskItem,
   Template,
   TemplateCreate,
@@ -292,6 +293,13 @@ export const api = {
   // ----- Settings -----
   listServiceRates: () =>
     fetcher<ServiceRate[]>("/settings/service-rates"),
+
+  // owner-only. PATCH partial — שלחי רק שדות שמשתנים.
+  updateServiceRate: (subtype: string, payload: ServiceRateUpdate) =>
+    fetcher<ServiceRate>(`/settings/service-rates/${subtype}`, {
+      method: "PATCH",
+      body: payload,
+    }),
 
   // ----- Google Calendar -----
   getGoogleStatus: () =>

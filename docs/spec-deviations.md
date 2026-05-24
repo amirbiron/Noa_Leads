@@ -68,26 +68,24 @@
 
 ---
 
-### F-03: טבלת `service_rates` — 🟡 חלקי (backend הושלם)
+### F-03: טבלת `service_rates` — 🟢 הושלם
 
 **Spec v2.1 §5.10:** טבלת `service_rates` עם service_category/subtype/default_price/default_duration_minutes/default_sessions_count/notes/is_active. נטענת אוטומטית מ-§15.2.
 
-**Code:** הושלם backend (commit הזה):
+**Code:**
 - migration 0015 — טבלת service_rates + seed 10 ערכי ברירת מחדל מ-§15.2.
 - model app/models/service_rate.py + schema service_rate.py.
 - service app/services/service_rates.py — list + update_by_subtype.
-- routes/settings.py: GET קורא מ-DB; PATCH /settings/service-rates/{subtype} חדש (owner-only).
+- routes/settings.py: GET קורא מ-DB; PATCH /settings/service-rates/{subtype} owner-only.
 - utils/service_rates.py נמחק (הוחלף ע"י DB).
-
-**עדיין לא נעשה:** frontend UI לעריכה ב-/settings (יבוצע בcommit נפרד).
-
-**Severity:** בינוני — backend מוכן, UI חסר.
+- frontend: `app/settings/rates/page.tsx` — owner מקבל NavRow ב-/settings,
+  קבוצה לפי category, inline editor per row (מחיר / דקות / מפגשים / notes / פעיל).
 
 **Acceptance:**
 - [x] Migration `service_rates` עם seeds מטבלת §15.2.
 - [x] GET endpoint קורא מ-DB.
 - [x] PATCH endpoint owner-only.
-- [ ] frontend UI ב-/settings (next commit).
+- [x] frontend UI ב-/settings/rates.
 
 **Acceptance (אם הוחלט hardcoded):**
 - [ ] תעריפים ב-`constants.py` כ-`DEFAULT_TARIFFS: dict[str, Decimal]`.
