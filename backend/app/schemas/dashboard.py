@@ -56,6 +56,10 @@ class TodayActionItem(BaseModel):
     priority_level: str
     preferred_contact: str
     service_category: str | None  # אופציונלי לפי Spec §7.1 (F-04)
+    # F-20: כפתור פעולה ישיר ב-/today לפי preferred_contact. nullable כי
+    # לא כל ליד חייב טלפון/מייל (Spec §7.1 — רק שם+מקור+אחד מהשניים חובה).
+    lead_phone: str | None
+    lead_email: str | None
 
 
 # ===== הצעות פתוחות =====

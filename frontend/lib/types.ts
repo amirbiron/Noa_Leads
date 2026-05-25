@@ -308,6 +308,9 @@ export interface TodayActionItem {
   priority_level: string;
   preferred_contact: string;
   service_category: string | null;  // F-04: אופציונלי
+  // F-20: לכפתור פעולה ישיר ב-/today (tel: / wa.me / mailto:).
+  lead_phone: string | null;
+  lead_email: string | null;
 }
 
 export interface ProfitableServiceInsight {

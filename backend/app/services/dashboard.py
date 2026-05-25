@@ -239,6 +239,8 @@ async def get_today_actions(db: AsyncSession) -> list[TodayActionItem]:
                 priority_level=lead.priority_level,
                 preferred_contact=lead.preferred_contact,
                 service_category=lead.service_category,
+                lead_phone=lead.phone,
+                lead_email=lead.email,
             )
         )
     return items
