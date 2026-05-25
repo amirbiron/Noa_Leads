@@ -72,11 +72,6 @@ export function TodayActionRow({ item, onChanged }: Props) {
           <div className="flex items-center gap-2">
             <StateDot color={item.state_color} />
             <span className="font-medium truncate">{item.lead_name}</span>
-            {item.is_overdue && (
-              <span className="text-[10px] font-semibold text-state-red bg-state-red/15 px-1.5 py-0.5 rounded">
-                באיחור
-              </span>
-            )}
           </div>
           <div className="mt-1 text-sm text-gray-600 truncate">
             {labelTaskType(item.task_type)}

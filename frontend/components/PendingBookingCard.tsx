@@ -93,7 +93,7 @@ export function PendingBookingCard({
           className="rounded-lg bg-state-green text-white py-2.5 text-sm font-medium flex items-center justify-center gap-1.5 disabled:opacity-50"
         >
           <CheckCircle2 size={16} aria-hidden />
-          {submitting === "approve" ? "מאשרת…" : "אשרי"}
+          {submitting === "approve" ? "מאשרת…" : "אישור"}
         </button>
         <button
           onClick={handleReject}
@@ -101,7 +101,7 @@ export function PendingBookingCard({
           className="rounded-lg bg-white border border-state-red/40 text-state-red py-2.5 text-sm font-medium flex items-center justify-center gap-1.5 disabled:opacity-50"
         >
           <XCircle size={16} aria-hidden />
-          {submitting === "reject" ? "דוחה…" : "דחי"}
+          {submitting === "reject" ? "דוחה…" : "דחייה"}
         </button>
       </div>
       <div className="text-xs text-gray-500 text-center mt-2">

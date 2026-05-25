@@ -215,7 +215,11 @@ export default function LeadDetailPage() {
 
           {/* כפתור "מה עכשיו?" — רק לליד פתוח */}
           {!["WON", "LOST", "ARCHIVED"].includes(lead.status) && (
-            <DynamicActionButton lead={lead} onActionDone={load} />
+            <DynamicActionButton
+              lead={lead}
+              activeBooking={activeBooking}
+              onActionDone={load}
+            />
           )}
 
           {/* כפתורי תבנית + העברה — רק לליד פתוח */}
@@ -286,7 +290,7 @@ export default function LeadDetailPage() {
 
           {/* צ'יפים לסיכום שיחה */}
           <div>
-            <SectionHeader title="פעולות מהירות" />
+            <SectionHeader title="סיכומי שיחה" />
             <QuickActions lead={lead} onActionDone={load} />
           </div>
 

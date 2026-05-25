@@ -18,6 +18,7 @@ export function LeadCardRow({ lead }: { lead: LeadCard }) {
   const cls = STATE_COLORS[lead.state_color];
   // אייקון ⏳ ליד שם הליד כשהכדור אצל הלקוח (לפי האפיון יב). מחכה לי
   // (ברירת מחדל) = אין סימון, כי רוב הלידים בכל מקרה אצל נועה.
+  // האייקון מופיע אחרי הלייבל ("הלקוח ⏳") — סדר קריאה טבעי ב-RTL.
   const waitingOnClient = lead.waiting_on === "CLIENT";
   return (
     <Link
@@ -35,11 +36,11 @@ export function LeadCardRow({ lead }: { lead: LeadCard }) {
             <span className="font-medium truncate">{lead.full_name}</span>
             {waitingOnClient && (
               <span
-                className="text-sm"
-                aria-label="מחכה ללקוח"
-                title="מחכה ללקוח"
+                className="text-xs text-gray-500 inline-flex items-center gap-1"
+                aria-label="ממתין ללקוח"
+                title="ממתין ללקוח"
               >
-                ⏳
+                הלקוח <span aria-hidden>⏳</span>
               </span>
             )}
             {lead.has_recent_reply && (

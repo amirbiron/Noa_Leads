@@ -3,12 +3,19 @@
 import { useState } from "react";
 import { ArrowLeft } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
-import type { Lead } from "@/lib/types";
+import type { BookingRead, Lead } from "@/lib/types";
 import { ProposalSentConfirmModal } from "./ProposalSentConfirmModal";
+
+// 30 דקות אחרי תחילת הפגישה — חלון מינימלי לפני שמציעים סימון "התקיימה".
+// קודם לכן: ייתכן שהפגישה עוד לא קרתה / עדיין באמצע, אין טעם להציע.
+const MIN_MINUTES_AFTER_MEETING_START = 30;
 
 // כפתור "מה עכשיו?" — דינמי לפי סטטוס הליד.
 // פעולה אחת ראשית גדולה, מובילה לפעולה הטבעית הבאה.
-function nextAction(lead: Lead): {
+function nextAction(
+  lead: Lead,
+  activeBooking: BookingRead | null,
+): {
   label: string;
   action: string;
   description?: string;
@@ -31,8 +38,15 @@ function nextAction(lead: Lead): {
       return { label: "פולואפ על ההצעה", action: "mark_template_sent" };
     case "BOOKING_PENDING":
       return { label: "אשרי פגישה", action: "approve_meeting" };
-    case "BOOKED":
+    case "BOOKED": {
+      // מציע "סמני שהפגישה התקיימה" רק 30+ דקות אחרי התחלת הפגישה.
+      // לפני כן הכפתור יהיה לא רלוונטי (פגישה עוד לא קרתה / באמצע).
+      if (!activeBooking) return null;
+      const start = new Date(activeBooking.requested_slot_start).getTime();
+      const minutesSinceStart = (Date.now() - start) / (60 * 1000);
+      if (minutesSinceStart < MIN_MINUTES_AFTER_MEETING_START) return null;
       return { label: "סמני שהפגישה התקיימה", action: "log_call_completed" };
+    }
     default:
       return null;
   }
@@ -40,15 +54,17 @@ function nextAction(lead: Lead): {
 
 export function DynamicActionButton({
   lead,
+  activeBooking,
   onActionDone,
 }: {
   lead: Lead;
+  activeBooking: BookingRead | null;
   onActionDone: () => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [proposalOpen, setProposalOpen] = useState(false);
-  const next = nextAction(lead);
+  const next = nextAction(lead, activeBooking);
   if (!next) return null;
 
   async function run() {
