@@ -27,7 +27,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import re
 from typing import Literal, TypeVar
 
 from anthropic import (
@@ -295,27 +294,32 @@ class LeadDraft(BaseModel):
 
 # ===== JSON parsing =====
 
-# גרידי `\{.*\}` עם DOTALL — תופס מה-`{` הראשון עד ה-`}` האחרון בטקסט,
-# מטפל בקינון פנימי וב-prose שAI לפעמים מוסיף לפני/אחרי (למרות הוראה
-# מפורשת לא להוסיף). אם אין `{...}` בכלל — _parse_json_response זורק AIError.
-_JSON_BLOCK_RE = re.compile(r"\{.*\}", re.DOTALL)
-
 
 def _parse_json_response(text: str, model_cls: type[T]) -> T:
     """
-    מאתר JSON block בתוך response של AI ומפרס דרך Pydantic. שלוש שגיאות
-    אפשריות (כולן → AIError, caller יטפל ב-retry / manual review):
-    1. אין JSON block בכלל ב-response.
+    מאתר JSON block בתוך response של AI ומפרס דרך Pydantic.
+
+    משתמש ב-json.JSONDecoder().raw_decode() במקום regex: ה-decoder עוצר
+    אוטומטית בסוף ה-JSON ומתעלם מ-trailing prose. ה-regex הקודם
+    `\\{.*\\}` היה greedy עד ה-`}` האחרון בטקסט — אם AI הוסיף prose
+    שמכיל `}` (למשל "JSON: {...} — כפי שצוין למעלה}"), כל הגוץ' היה
+    נספח ל-match וה-parsing נשבר. raw_decode מטפל גם בקינון פנימי בלי
+    הבעיה הזו.
+
+    שלוש שגיאות אפשריות (כולן → AIError, caller יטפל ב-retry / manual review):
+    1. אין `{` בכלל ב-response.
     2. JSON לא תקף (syntax error).
     3. JSON תקף אבל לא תואם לschema (Pydantic ValidationError).
     """
-    match = _JSON_BLOCK_RE.search(text)
-    if not match:
+    start = text.find("{")
+    if start < 0:
         raise AIError(f"No JSON block in AI response: {text[:200]!r}")
     try:
-        data = json.loads(match.group(0))
+        data, _end = json.JSONDecoder().raw_decode(text[start:])
     except json.JSONDecodeError as e:
-        raise AIError(f"Invalid JSON in AI response: {e}; text={text[:200]!r}") from e
+        raise AIError(
+            f"Invalid JSON in AI response: {e}; text={text[:200]!r}"
+        ) from e
     try:
         return model_cls.model_validate(data)
     except ValidationError as e:
