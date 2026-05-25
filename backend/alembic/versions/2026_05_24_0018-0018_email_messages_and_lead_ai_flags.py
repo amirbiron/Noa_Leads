@@ -76,10 +76,13 @@ def upgrade() -> None:
             nullable=False,
         ),
     )
+    # שימוש ב-sa.desc(column) במקום sa.text("col DESC") — תואם להגדרת
+    # ה-Index ב-model (desc("received_at")), כך ש-alembic autogenerate
+    # לא יזהה diff בכל ריצה.
     op.create_index(
         "idx_email_messages_lead",
         "email_messages",
-        ["lead_id", sa.text("received_at DESC")],
+        ["lead_id", sa.desc("received_at")],
     )
 
     # ===== Lead AI flags (Spec §20.12 + §20.13) =====

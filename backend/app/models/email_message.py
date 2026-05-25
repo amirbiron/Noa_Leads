@@ -14,7 +14,7 @@ True (Spec §20.13).
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, func
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, desc, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -69,11 +69,14 @@ class EmailMessage(UUIDPrimaryKeyMixin, Base):
     )
 
     # מיון לפי תאריך לתצוגה ב-timeline של ליד.
+    # שימוש ב-desc("received_at") במקום postgresql_ops={"received_at":
+    # "DESC"} — postgresql_ops נועד ל-operator classes (text_pattern_ops
+    # וכו'), לא לסדר מיון. גרם ל-Alembic autogenerate לזהות diff מדומה
+    # ולנסות drop/recreate בכל ריצה (Alembic issue #1285).
     __table_args__ = (
         Index(
             "idx_email_messages_lead",
             "lead_id",
-            "received_at",
-            postgresql_ops={"received_at": "DESC"},
+            desc("received_at"),
         ),
     )
