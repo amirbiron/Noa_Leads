@@ -76,6 +76,15 @@ services:
         sync: false
       - key: FRONTEND_URL
         sync: false
+      # BACKEND_URL נדרש ל-Calendar watch (Stage 12) ול-Pub/Sub JWT audience
+      # verification ב-webhook של Gmail (Phase 3 Stage 18 commit 4/4).
+      - key: BACKEND_URL
+        sync: false
+      # Phase 3 Stage 18 commit 4/4 — אופציונלי.
+      # אם מוגדר: ה-webhook של Gmail יאמת שה-OIDC token חתום ע"י ה-SA הספציפי
+      # (defense in depth מעבר לחתימת Google). אם None — רק חתימת Google תאומת.
+      - key: GMAIL_PUBSUB_SERVICE_ACCOUNT
+        sync: false
       - fromGroup: noa-leads-shared
       - fromGroup: noa-leads-python
 
@@ -292,5 +301,39 @@ services:
         sync: false
       - key: SECRETS_ENCRYPTION_KEY
         sync: false
+      - fromGroup: noa-leads-shared
+      - fromGroup: noa-leads-python
+
+  # retry של email_messages שסיווג AI שלהם נכשל (Phase 3 Stage 18 commit 4/4, F-16).
+  # רץ כל דקה (Spec §23). מטפל ב-AIRateLimitError ו-AIError שדחו את הclassify
+  # ב-webhook הראשי — כל ריצה לוקחת batch של עד 10 רשומות. אחרי
+  # AI_MAX_CLASSIFICATION_RETRIES ניסיונות נוצר ליד עם manual_review_needed=True.
+  # דורש: ANTHROPIC_API_KEY (shared) + Google OAuth (לרענון tokens של Gmail
+  # למקרה שצריך apply_filter_label) + SECRETS_ENCRYPTION_KEY.
+  - type: cron
+    name: noa-retry-pending-classification
+    runtime: python
+    plan: starter
+    rootDir: backend
+    schedule: "* * * * *"
+    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
+    startCommand: python -m jobs.retry_pending_classification
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: noa-leads-db
+          property: connectionString
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GMAIL_REDIRECT_URI
+        sync: false
+      - key: SECRETS_ENCRYPTION_KEY
+        sync: false
+      # AI_MODEL_* envs יורשים defaults מ-config.py אם לא מוגדרים.
+      # AI_CLASSIFY_CONFIDENCE_THRESHOLD, AI_MAX_CLASSIFICATION_RETRIES,
+      # AI_FILTER_LABEL_NAME גם defaults — אם מתאם רוצה לכוונן אחרי deploy,
+      # יוסיף ידנית ב-Render UI.
       - fromGroup: noa-leads-shared
       - fromGroup: noa-leads-python

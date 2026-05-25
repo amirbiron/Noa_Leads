@@ -16,6 +16,7 @@ from app.api.routes import bookings as bookings_routes
 from app.api.routes import dashboard as dashboard_routes
 from app.api.routes import quick_action_chips as chips_routes
 from app.api.routes import google_calendar as google_routes
+from app.api.routes import gmail_webhook as gmail_webhook_routes
 from app.api.routes import google_gmail as gmail_routes
 from app.api.routes import google_webhook as google_webhook_routes
 from app.api.routes import intake as intake_routes
@@ -172,6 +173,7 @@ def create_app() -> FastAPI:
     app.include_router(google_routes.router)
     app.include_router(gmail_routes.router)
     app.include_router(google_webhook_routes.router)
+    app.include_router(gmail_webhook_routes.router)
     app.include_router(booking_routes.router)
     app.include_router(bookings_routes.router)
 

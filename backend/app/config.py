@@ -65,6 +65,10 @@ class Settings(BaseSettings):
     # callback אחר). נדרש לרשום ב-Google Cloud Console.
     gmail_redirect_uri: str | None = None
     gmail_pubsub_topic: str | None = None
+    # אופציונלי: service account email שחתום על ה-OIDC token של Pub/Sub
+    # Push (Phase 3 Stage 18 commit 4/4). אם מוגדר, ה-webhook יאמת
+    # שה-token חתום ע"י ה-SA הספציפי. אם None — רק חתימת Google תיאמת.
+    gmail_pubsub_service_account: str | None = None
 
     # מפתח Fernet להצפנת tokens של Google ב-DB. ייצור:
     # `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`

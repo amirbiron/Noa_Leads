@@ -56,15 +56,26 @@
 
 ---
 
-### F-02: טבלת `email_messages` חסרה — 🟢
+### F-02: טבלת `email_messages` חסרה — 🟢 הושלם
 
 **Spec §5 + §20.10:** טבלה לשמירת ה-HTML הגולמי, הטקסט המנוקה, ו-cleaning_metadata לכל מייל שנכנס.
 
-**Code:** לא קיים — אין טבלה ולא endpoint.
+**Code (תיקון — Phase 3 Stage 18):**
+- migration 0018 — טבלת `email_messages` (id, lead_id, gmail_message_id UNIQUE, direction, from/to/subject, raw_html, cleaned_text, cleaning_metadata JSONB, received_at, classification_retry_count, created_at) + 2 דגלי AI ב-leads.
+- model `app/models/email_message.py` עם index על `(lead_id, desc(received_at))`.
+- `app/services/gmail_intake.py` — pipeline מלא: idempotency check על `gmail_message_id`, save row לפני AI calls (לaudit + retry), עדכון `lead_id` אחרי יצירת ליד.
+- `cleaning_metadata` נכתב מתוך `clean_email_body_for_ai` (purpose, raw_len, cleaned_len, ratio, truncated).
+- Webhook `POST /webhooks/gmail` (במקום `/intake/email` placeholder שהוסר) + Pub/Sub Push integration.
 
-**Severity:** accepted-deviation — מתועד ב-`docs/phase-3-plan.md` כחלק מפאזה 3 (Gmail intake + AI classification).
+**Deviation מהSpec:** Spec §22.3 ציין `/intake/email`, ממומש כ-`/webhooks/gmail`
+לעקביות עם `/webhooks/google-calendar` (Phase 2). שניהם Pub/Sub Push targets.
 
-**Acceptance:** אין לטפל עכשיו. כשנממש פאזה 3 — יווצר migration ייעודי.
+**Acceptance:**
+- [x] Migration `email_messages` עם כל השדות מ-§5.9 + §20.10/13.
+- [x] gmail_message_id UNIQUE → idempotency.
+- [x] cleaning_metadata JSONB נכתב מ-`clean_email_body_for_ai`.
+- [x] `email_messages.lead_id` מתעדכן אחרי יצירת ליד.
+- [x] direction="inbound" עבור כל מייל נכנס; outbound דחוי לפאזה עתידית.
 
 ---
 
@@ -335,15 +346,29 @@
 
 ---
 
-### F-16: `retry_pending_classification` cron חסר — 🟢
+### F-16: `retry_pending_classification` cron חסר — 🟢 הושלם
 
-**Spec §23:** Cron כל 60 שניות לעיבוד מחדש של לידים עם `pending_classification=true`.
+**Spec §23:** Cron כל 60 שניות לעיבוד מחדש של מיילים שסיווג AI שלהם נכשל.
 
-**Code:** השדה `pending_classification` מוגדר ב-§5.1 בSpec, אבל אין אצלנו מימוש (פאזה 3).
+**Code (תיקון — Phase 3 Stage 18 commit 4/4):**
+- `backend/jobs/retry_pending_classification.py` — שולפת `email_messages` עם
+  `lead_id IS NULL AND classification_retry_count < AI_MAX_CLASSIFICATION_RETRIES`,
+  batch של עד 10 רשומות, מקריאה ל-`gmail_intake.retry_pending_email`.
+- `gmail_intake.retry_pending_email` מעלה count, מנסה classify+extract, אם
+  הגיע ל-MAX יוצרת ליד עם `manual_review_needed=True` ו-full_name משדה From.
+- `render.yaml` cron `noa-retry-pending-classification` schedule `* * * * *`.
 
-**Severity:** accepted — חלק מפאזה 3 (AI integration).
+**Deviation מהSpec:** הSpec דיבר על "לידים עם `pending_classification=true`"
+(שדה ב-leads). אצלנו ה-pending מבוטא ב-email_messages עם `lead_id IS NULL` —
+המודל המתאים יותר (ליד נוצר רק אחרי סיווג מוצלח / MAX retries). השדה
+`lead.pending_classification` נשמר במודל למקרים אחרים בעתיד.
 
-**Acceptance:** ייווצר במסגרת פאזה 3 יחד עם clean_email_body_for_ai.
+**Acceptance:**
+- [x] Cron schedule `* * * * *` (כל דקה).
+- [x] Batch limit (10) — לא להעמיס Anthropic API.
+- [x] retry_count++ לפני הניסיון (לא יתקע ב-loop אם הניסיון קורס).
+- [x] בהגעה ל-MAX → ליד עם `manual_review_needed=True`, מקושר ל-email_message.
+- [x] שגיאות per-message לא מפילות את הbatch.
 
 ---
 
