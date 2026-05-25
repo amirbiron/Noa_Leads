@@ -61,43 +61,55 @@ export function TemplatePickerSheet({
     setTemplates([]);
     setPresetFailed(false);
 
+    // cancelled flag למקרה ש-useEffect שב לרוץ (פותחים/סוגרים מהר) או
+    // ה-component unmounts במהלך fetch. בלי זה ה-setState יקרא אחרי
+    // unmount — warning של React (לא קריסה, אבל מיותר).
+    let cancelled = false;
+
     // תמיד טוענים את כל הרשימה הפעילה — בלי סינון channel/audience.
-    // 1. מסנן channel היה גורם ל-email-pref + 404 → רשימה ריקה (תבניות
-    //    email מוסתרות).
-    // 2. גם pick ידני של תבנית "WA" עבור ליד email-pref עובד (forceChannel
-    //    מנצח את template.channel לבניית הקישור).
-    // 3. preload הרשימה גם ב-preset mode הופך fallback ל-instant כש-
-    //    getTemplate/renderTemplate נכשלים — אין refetch.
+    // - manual mode (אין preset): מציג רשימה.
+    // - preset mode: רשימה pre-loaded כדי שfallback (preset failure) יהיה
+    //   instant, בלי refetch.
     // הרשימה ~10 שורות, זול.
-    const listPromise = api
-      .listTemplates(true)
-      .then((items) => setTemplates(items))
-      .catch((err) => {
-        // נדאג שיהיה error אם הרשימה נכשלת אבל לא נדרוס error קיים מ-
-        // preset שכבר נכשל.
-        setError((prev) =>
-          prev || (err instanceof ApiError ? err.message : "שגיאה בטעינה"),
-        );
-      });
+    const loadList = async () => {
+      try {
+        const items = await api.listTemplates(true);
+        if (!cancelled) setTemplates(items);
+      } catch (err) {
+        if (!cancelled) {
+          // לא דורסים error קיים מ-preset שכבר נכשל.
+          setError((prev) =>
+            prev || (err instanceof ApiError ? err.message : "שגיאה בטעינה"),
+          );
+        }
+      }
+    };
 
-    if (presetTemplateId) {
-      // preset path: מנסים לטעון + לרנדר את הקנונית. אם נכשל — fallback
-      // ל-manual list (presetFailed=true). הרשימה ממילא נטענת במקביל.
-      api
-        .getTemplate(presetTemplateId)
-        .then((t) => pickTemplate(t))
-        .catch((err) => {
-          setError(err instanceof ApiError ? err.message : "שגיאה בטעינה");
-          setPresetFailed(true);
-        })
-        .finally(() => {
-          // חכים גם לרשימה כדי שכשנעבור ל-fallback היא תהיה מוכנה.
-          void listPromise.finally(() => setLoading(false));
-        });
-      return;
-    }
+    const loadPreset = async () => {
+      if (!presetTemplateId) return;
+      try {
+        const tpl = await api.getTemplate(presetTemplateId);
+        if (cancelled) return;
+        // pickTemplate ב-await — אחרת ה-finally של ה-orchestrator היה
+        // נסגר לפני renderTemplate, ו-loading היה מתפנה כשה-UI עדיין
+        // לא היה ב-preview state. תיקון bugbot.
+        await pickTemplate(tpl);
+      } catch (err) {
+        if (cancelled) return;
+        setError(err instanceof ApiError ? err.message : "שגיאה בטעינה");
+        setPresetFailed(true);
+      }
+    };
 
-    void listPromise.finally(() => setLoading(false));
+    // הרצה מקבילית — שניהם רצים יחד; setLoading(false) רק אחרי שגם
+    // הרשימה וגם ה-preset (כולל render) הסתיימו.
+    void Promise.all([loadList(), loadPreset()]).finally(() => {
+      if (!cancelled) setLoading(false);
+    });
+
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, presetTemplateId]);
 
@@ -182,10 +194,22 @@ export function TemplatePickerSheet({
         }
       }
 
+      // ה-action האפקטיבי: ב-preset mode (קנונית הצליחה לטעון) actionType
+      // מתאים לתבנית — אם role היה 'proposal', הקנונית היא T8/T9. ב-manual
+      // mode (preset failed, או secondary picker) המשתמש בוחר חופשי —
+      // אסור לקדם ל-PROPOSAL_SENT רק כי ה-role המקורי היה 'proposal'.
+      // לכן ב-manual mode כופים mark_template_sent (לא משנה סטטוס מ-
+      // IN_PROGRESS, רק last_outbound + activity + auto-close tasks).
+      // תיקון bugbot.
+      const effectiveActionType =
+        inManualMode && actionType === "mark_proposal_sent"
+          ? "mark_template_sent"
+          : actionType;
+
       // רק אחרי שהפתיחה הצליחה (WA) / handoff בוצע (mailto) — סימון במערכת.
       // ה-action (mark_template_sent או mark_proposal_sent) מעדכן סטטוס +
       // activity + סוגר tasks (AUTO_CLOSE_TASK_TYPES). פירוט ב-state_machine.py.
-      await api.performAction(lead.id, actionType, {
+      await api.performAction(lead.id, effectiveActionType, {
         metadata: { template_id: selected.id },
       });
       onSent();

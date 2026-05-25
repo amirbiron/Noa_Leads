@@ -122,7 +122,12 @@ async def auto_select_template_for_lead(
     הסיגנל הזה (404, לא 200+null) מפשט את ה-branching ב-frontend.
     """
     lead = await get_lead_or_404(db, lead_id)
-    audience = "organization" if lead.organization_name else "private"
+    # organization_name יכול להיות whitespace-only (truthy ב-Python אבל
+    # ה-edit flow מנרמל לעיתים ל-NULL). bool(lead.organization_name) לבד
+    # היה גורם לפיצול בין הסיווג כאן ל-איך הליד באמת מאוחסן/מוצג. strip()
+    # פותר את ה-drift (תיקון bugbot).
+    has_org = bool(lead.organization_name and lead.organization_name.strip())
+    audience = "organization" if has_org else "private"
     key: tuple[str, str | None] = (
         (role, None) if role == "proposal_followup" else (role, audience)
     )
