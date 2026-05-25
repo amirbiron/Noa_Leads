@@ -42,9 +42,13 @@
 1. פתח את ה-OAuth 2.0 Client שכבר יצרת עבור Calendar.
 2. תחת **Authorized redirect URIs** הוסף:
    ```
-   https://noa-leads-backend.onrender.com/google/gmail/callback
+   https://noa-leads-backend.onrender.com/google-gmail/auth/callback
    ```
    (החלף `noa-leads-backend.onrender.com` לדומיין הפרודקשן האמיתי.)
+
+   > **שים לב:** הקידומת היא `google-gmail` עם **מקף** (לא נטוי) — נפרדת
+   > מ-`/google/auth/callback` של Calendar, כדי שכל אינטגרציה תקבל callback
+   > עצמאי (scopes שונים, failure isolation).
 3. "Save".
 
 ## שלב 4 — יצירת Pub/Sub topic
@@ -103,7 +107,7 @@
 
 | Env var | ערך |
 |---|---|
-| `GMAIL_REDIRECT_URI` | `https://noa-leads-backend.onrender.com/google/gmail/callback` |
+| `GMAIL_REDIRECT_URI` | `https://noa-leads-backend.onrender.com/google-gmail/auth/callback` |
 | `GMAIL_PUBSUB_TOPIC` | `projects/<PROJECT_ID>/topics/gmail-incoming` (מ-שלב 4) |
 | `GMAIL_PUBSUB_SERVICE_ACCOUNT` | אופציונלי — ה-email של ה-SA משלב 6, למשל `gmail-push-sa@<PROJECT>.iam.gserviceaccount.com`. אם תשאיר ריק, רק חתימת Google תיבדק (פחות חזק, אך עדיין מאומת). |
 | `BACKEND_URL` | `https://noa-leads-backend.onrender.com` (אם עוד לא היה) |
