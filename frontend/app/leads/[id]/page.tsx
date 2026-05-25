@@ -19,6 +19,7 @@ import { AppShell } from "@/components/AppShell";
 import { CloseLeadModal } from "@/components/CloseLeadModal";
 import { DynamicActionButton } from "@/components/DynamicActionButton";
 import { EditLeadModal } from "@/components/EditLeadModal";
+import { IncomingEmailsSection } from "@/components/IncomingEmailsSection";
 import { PendingBookingCard } from "@/components/PendingBookingCard";
 import { ProgramCard } from "@/components/ProgramCard";
 import { QuickActions } from "@/components/QuickActions";
@@ -40,6 +41,7 @@ import {
 import type {
   Activity,
   BookingRead,
+  EmailMessage,
   Lead,
   Program,
   StateColor,
@@ -64,6 +66,7 @@ export default function LeadDetailPage() {
   const [activities, setActivities] = useState<Activity[]>([]);
   const [programs, setPrograms] = useState<Program[]>([]);
   const [activeBooking, setActiveBooking] = useState<BookingRead | null>(null);
+  const [emails, setEmails] = useState<EmailMessage[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [templateOpen, setTemplateOpen] = useState(false);
@@ -76,7 +79,7 @@ export default function LeadDetailPage() {
   async function load() {
     setError(null);
     try {
-      const [l, t, p, b] = await Promise.all([
+      const [l, t, p, b, e] = await Promise.all([
         api.getLead(id),
         api.getTimeline(id),
         api.listProgramsForLead(id),
@@ -84,11 +87,14 @@ export default function LeadDetailPage() {
         // נטען תמיד (גם כשהליד לא pending) כי זול ומאפשר תצוגה גם של booking
         // approved בעתיד (שלב 14+).
         api.getActiveBookingForLead(id),
+        // מיילים נכנסים — Spec §20.10. ריק לליד שלא נקלט ממייל.
+        api.getLeadEmails(id),
       ]);
       setLead(l);
       setActivities(t);
       setPrograms(p);
       setActiveBooking(b);
+      setEmails(e);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "שגיאה בטעינה");
     } finally {
@@ -273,6 +279,15 @@ export default function LeadDetailPage() {
           {/* קישור לדף קביעת תור — להעתקה ושיתוף עם הליד */}
           {!["WON", "LOST", "ARCHIVED"].includes(lead.status) && (
             <CopyBookingLinkButton token={lead.booking_token} />
+          )}
+
+          {/* מיילים נכנסים (Spec §20.10) — לליד שנקלט ממייל. הסקציה
+              לא מוצגת כשאין מיילים (IncomingEmailsSection מחזיר null). */}
+          {emails.length > 0 && (
+            <div>
+              <SectionHeader title="מיילים נכנסים" count={emails.length} />
+              <IncomingEmailsSection emails={emails} />
+            </div>
           )}
 
           {/* תוכניות מתמשכות */}

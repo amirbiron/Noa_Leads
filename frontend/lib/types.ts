@@ -224,6 +224,19 @@ export interface Activity {
   created_at: string;
 }
 
+// מייל נכנס שקושר לליד (Spec §20.10). מקור: GET /leads/{id}/emails.
+// שדות פנימיים (gmail_message_id, processing_status, classification_retry_count,
+// cleaning_metadata, raw_html) לא נחשפים מה-backend — לא ב-MVP.
+export interface EmailMessage {
+  id: string;
+  from_address: string | null;
+  to_address: string | null;
+  subject: string | null;
+  cleaned_text: string | null;
+  received_at: string | null;
+  created_at: string;
+}
+
 // ===== Dashboard =====
 
 export interface LeadCard {

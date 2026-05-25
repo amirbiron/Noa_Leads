@@ -458,3 +458,25 @@ async def get_timeline(db: AsyncSession, lead_id: UUID):
     )
     result = await db.execute(stmt)
     return list(result.scalars().all())
+
+
+async def get_lead_emails(db: AsyncSession, lead_id: UUID):
+    """מייל נכנס שקושרו לליד, מהחדש לישן.
+
+    משתמש ב-idx_email_messages_lead (lead_id + DESC received_at). received_at
+    יכול להיות None ב-rows ישנים — nullslast() + secondary sort על created_at
+    כ-tie-breaker יציב.
+    """
+    await get_lead_or_404(db, lead_id)
+
+    from app.models.email_message import EmailMessage  # local — מונע circular
+    stmt = (
+        select(EmailMessage)
+        .where(EmailMessage.lead_id == lead_id)
+        .order_by(
+            EmailMessage.received_at.desc().nullslast(),
+            EmailMessage.created_at.desc(),
+        )
+    )
+    result = await db.execute(stmt)
+    return list(result.scalars().all())

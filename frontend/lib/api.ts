@@ -8,6 +8,7 @@ import type {
   BookingPageInfo,
   BookingRead,
   CreateBookingResponse,
+  EmailMessage,
   PendingBookingsResponse,
   HomeDashboard,
   QuickActionChip,
@@ -176,6 +177,10 @@ export const api = {
 
   getTimeline: (id: string) =>
     fetcher<Activity[]>(`/leads/${id}/timeline`),
+
+  // מיילים נכנסים שקושרו לליד (Spec §20.10). מסודר מהחדש לישן.
+  getLeadEmails: (id: string) =>
+    fetcher<EmailMessage[]>(`/leads/${id}/emails`),
 
   performAction: (
     leadId: string,
