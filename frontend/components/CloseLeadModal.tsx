@@ -150,7 +150,7 @@ export function CloseLeadModal({ lead, open, onClose, onClosed }: Props) {
 
   return (
     <div className="fixed inset-0 z-50 bg-black/40 flex items-end sm:items-center justify-center">
-      <div className="bg-white w-full sm:max-w-md sm:rounded-2xl rounded-t-2xl shadow-xl max-h-[95vh] flex flex-col">
+      <div className="bg-white w-full sm:max-w-md sm:rounded-2xl rounded-t-2xl shadow-xl max-h-[95dvh] flex flex-col">
         <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 shrink-0">
           <h2 className="font-semibold">סגירת ליד</h2>
           <button

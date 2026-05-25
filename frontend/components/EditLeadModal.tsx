@@ -128,11 +128,20 @@ export function EditLeadModal({ lead, open, onClose, onSaved }: Props) {
   const subtypeOptions = category ? SUBTYPES_BY_CATEGORY[category] : [];
 
   return (
+    // dvh ולא vh כדי שמקסימום הגובה יתחשב בקיווה הכתובת/keyboard של מובייל
+    // (iOS Safari דחף תוכן מעל המסך עם vh). flex-col + shrink-0 על header
+    // ו-footer + overflow-y-auto על body מבטיח שהכותרת + הכפתורים תמיד
+    // נשארים גלויים גם בטופס ארוך. ה-form עוטף את כל המבנה כדי שכפתור
+    // submit בfooter יעבוד.
     <div className="fixed inset-0 z-50 bg-black/40 flex items-end sm:items-center justify-center">
-      <div className="bg-white w-full sm:max-w-md sm:rounded-2xl rounded-t-2xl shadow-xl max-h-[95vh] flex flex-col">
+      <form
+        onSubmit={handleSubmit}
+        className="bg-white w-full sm:max-w-md sm:rounded-2xl rounded-t-2xl shadow-xl max-h-[95dvh] flex flex-col"
+      >
         <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 shrink-0">
           <h2 className="font-semibold">עריכת ליד</h2>
           <button
+            type="button"
             onClick={onClose}
             className="text-gray-400 hover:text-gray-600"
             aria-label="סגירה"
@@ -141,10 +150,7 @@ export function EditLeadModal({ lead, open, onClose, onSaved }: Props) {
           </button>
         </div>
 
-        <form
-          onSubmit={handleSubmit}
-          className="overflow-y-auto p-4 space-y-4"
-        >
+        <div className="overflow-y-auto p-4 space-y-4">
           <Field label="שם מלא *">
             <input
               required
@@ -265,16 +271,26 @@ export function EditLeadModal({ lead, open, onClose, onSaved }: Props) {
               {error}
             </div>
           )}
+        </div>
 
+        <div className="border-t border-gray-100 p-3 flex gap-2 shrink-0">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={busy}
+            className="flex-1 rounded-lg bg-gray-100 text-gray-800 py-3 font-medium disabled:opacity-50"
+          >
+            ביטול
+          </button>
           <button
             type="submit"
             disabled={busy || !fullName.trim()}
-            className="w-full rounded-lg bg-gray-900 text-white py-3 font-medium disabled:opacity-50"
+            className="flex-1 rounded-lg bg-gray-900 text-white py-3 font-medium disabled:opacity-50"
           >
             {busy ? "שומרת…" : "שמירה"}
           </button>
-        </form>
-      </div>
+        </div>
+      </form>
     </div>
   );
 }

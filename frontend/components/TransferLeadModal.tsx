@@ -60,9 +60,11 @@ export function TransferLeadModal({
   if (!open) return null;
 
   return (
+    // dvh + flex-col + sticky header/footer — מבטיח שהכותרת והכפתורים
+    // נשארים גלויים גם עם רשימה ארוכה של משתמשים.
     <div className="fixed inset-0 z-50 bg-black/40 flex items-end sm:items-center justify-center">
-      <div className="bg-white w-full sm:max-w-md sm:rounded-2xl rounded-t-2xl shadow-xl">
-        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
+      <div className="bg-white w-full sm:max-w-md sm:rounded-2xl rounded-t-2xl shadow-xl max-h-[95dvh] flex flex-col">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 shrink-0">
           <h2 className="font-semibold">העברת ליד</h2>
           <button
             onClick={onClose}
@@ -73,7 +75,7 @@ export function TransferLeadModal({
           </button>
         </div>
 
-        <div className="p-4 space-y-4">
+        <div className="overflow-y-auto p-4 space-y-4">
           {loading && (
             <div className="text-sm text-gray-400 text-center py-4">טוען…</div>
           )}
@@ -125,11 +127,20 @@ export function TransferLeadModal({
               {error}
             </div>
           )}
+        </div>
 
+        <div className="border-t border-gray-100 p-3 flex gap-2 shrink-0">
+          <button
+            onClick={onClose}
+            disabled={busy}
+            className="flex-1 rounded-lg bg-gray-100 text-gray-800 py-3 font-medium disabled:opacity-50"
+          >
+            ביטול
+          </button>
           <button
             onClick={submit}
             disabled={busy || !selectedId}
-            className="w-full rounded-lg bg-gray-900 text-white py-3 font-medium disabled:opacity-50"
+            className="flex-1 rounded-lg bg-gray-900 text-white py-3 font-medium disabled:opacity-50"
           >
             {busy ? "מעבירה…" : "העברה"}
           </button>
