@@ -48,6 +48,14 @@ class Settings(BaseSettings):
     ai_model_daily_summary: str | None = None
     ai_model_proposal_draft: str | None = None
     ai_model_dormant_detection: str | None = None
+    # Spec §20.11: תווית Gmail למיילים שסוננו ע"י AI כספאם.
+    # שינוי אינו retroactive — ראה admin note ב-§20.11.
+    ai_filter_label_name: str = "סוננו אוטומטית"
+    # Spec §20.12: סף בטחון. מתחת לזה — ליד מסומן low_confidence_classification.
+    ai_classify_confidence_threshold: float = 0.7
+    # Spec §20.13: כמה פעמים cron retry_pending_classification ינסה לפני
+    # יצירת ליד עם manual_review_needed=True. שמרני (10 דקות לAPI להתאושש).
+    ai_max_classification_retries: int = 10
 
     # ===== Google =====
     google_client_id: str | None = None

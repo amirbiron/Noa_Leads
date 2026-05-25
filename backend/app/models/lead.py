@@ -74,6 +74,16 @@ class Lead(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     pending_classification: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false"
     )
+    # Spec §20.12: AI סיווג כעסקי אבל confidence < threshold. סימן ויזואלי
+    # בכרטיס ("AI לא בטוח — בדוק"). false-negative protection — §8.4.
+    low_confidence_classification: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    # Spec §20.13: אחרי AI_MAX_CLASSIFICATION_RETRIES כישלונות ב-classifier,
+    # נוצר ליד עם הדגל הזה. נועה צריכה לעבור ידנית.
+    manual_review_needed: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
 
     # ===== מקור =====
     # form / email / manual / referral / facebook / וכו'
@@ -186,5 +196,17 @@ class Lead(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             "idx_leads_pending_classification",
             "pending_classification",
             postgresql_where="pending_classification = TRUE",
+        ),
+        # Spec §20.12 + §20.13 — דגלי AI לסינון "צריכים בדיקה" בדשבורד.
+        # מוצהר ב-model + ב-migration 0018.
+        Index(
+            "idx_leads_low_confidence",
+            "low_confidence_classification",
+            postgresql_where="low_confidence_classification = TRUE",
+        ),
+        Index(
+            "idx_leads_manual_review",
+            "manual_review_needed",
+            postgresql_where="manual_review_needed = TRUE",
         ),
     )
