@@ -216,11 +216,34 @@ async def retry_pending_email(db: AsyncSession, email_msg: EmailMessage) -> None
     """
     נקראת מ-cron retry_pending_classification. מנסה שוב classify+extract.
     אם retry_count מגיע ל-MAX → יצירת ליד עם manual_review_needed=True.
+
+    הערה על heuristic spam filter: לא מורצים שוב כאן (bugbot finding 2).
+    הסיבה — ה-heuristic רץ ב-process_incoming_message *לפני* שמירה כ-pending,
+    ולכן כל row שמגיע לפה בוודאות עבר את הסינון. ה-heuristic גם דטרמיניסטי
+    על אותו from/headers/body, ועל retry אין לנו את ה-headers המלאים בDB
+    (רק from_address). מבחירה: לא לקרוא ל-Gmail API שוב רק כדי להריץ heuristic
+    זהה.
     """
     max_retries = get_settings().ai_max_classification_retries
 
-    # מעלים את ה-count כבר עכשיו (לפני הניסיון). כך גם בקריסה לא ננסה
-    # לעד. אם הניסיון יצליח ויקשר lead_id — ה-row יצא מתנאי הcron.
+    # כבר מעבר ל-MAX — מצב recovery (manual_review_lead נכשל בעבר).
+    # bugbot finding 1: לפני התיקון, count היה מתקדם ל-MAX לפני
+    # _create_manual_review_lead; אם הוא היה זורק exception, ה-row היה
+    # נשאר 'pending' עם count >= MAX, וה-cron (שסיננה גם לפי `< MAX`)
+    # לא היה אוסף אותו לעולם. עכשיו: cron אוספת לפי processing_status
+    # בלבד, וה-MAX check עבר לתוך הפונקציה הזו.
+    if email_msg.classification_retry_count >= max_retries:
+        logger.warning(
+            "Email msg %s already at MAX (%d) — retrying manual_review_needed lead creation",
+            email_msg.id,
+            max_retries,
+        )
+        await _create_manual_review_lead(db, email_msg)
+        return
+
+    # מעלים את ה-count לפני הניסיון. אם הניסיון קורס באמצע (process killed),
+    # ה-count כבר התקדם — לא תקועים ב-loop של אותו ניסיון נצחי. אם נכשל
+    # ב-AIError, gracefully נשאר 'pending' עם count חדש.
     email_msg.classification_retry_count += 1
     await db.commit()
     await db.refresh(email_msg)
@@ -229,7 +252,9 @@ async def retry_pending_email(db: AsyncSession, email_msg: EmailMessage) -> None
     subject = email_msg.subject or ""
 
     if email_msg.classification_retry_count >= max_retries:
-        # נכנע — יצירת ליד עם manual_review_needed כדי שנועה תטפל ידנית.
+        # הגענו ל-MAX אחרי ה-increment הנוכחי — manual_review.
+        # אם הקריאה תזרוק exception, ה-row יישאר 'pending' עם count=MAX,
+        # והענף למעלה (count>=MAX) יטפל בהרצה הבאה.
         logger.warning(
             "Email msg %s reached MAX retries (%d) — creating lead with manual_review_needed",
             email_msg.id,
