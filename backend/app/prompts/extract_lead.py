@@ -34,6 +34,18 @@ SYSTEM_PROMPT = """\
 - production: production_guidance, production_directing
 - digital_course: digital_course
 
+**מיפוי מונחים בעברית → subtype** (Spec §1):
+- "פיתוח קול" → clinic / voice_development
+- "עמידה מול קהל" → clinic / public_speaking
+- "שיקום קול" / "לקויות קוליות" → clinic / voice_rehab
+- "סדנת דיבור" / "סדנת הופעה" / "שפת גוף" → workshops / workshop_speaking
+- "אומניות הבמה" → workshops / stage_arts
+- "הרצאה לארגון" / "הרצאה לחברה" → workshops / lecture_organization
+- "הרצאה אקדמית" / "הרצאה באוניברסיטה" → workshops / lecture_academic
+- "ליווי הפקה" → production / production_guidance
+- "בימוי" / "בימוי הפקה" → production / production_directing
+- "קורס דיגיטלי" / "קורס היברידי" → digital_course / digital_course
+
 אם מהמייל לא ברור — service_category=null וזה בסדר. נועה תסווג ידנית.
 
 לגבי full_name: אם לא מפורש בגוף, נסה לחלץ מ-display name של הכתובת \

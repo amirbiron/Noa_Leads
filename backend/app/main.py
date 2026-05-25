@@ -10,6 +10,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from app.api.routes import admin as admin_routes
 from app.api.routes import auth as auth_routes
 from app.api.routes import booking_page as booking_routes
 from app.api.routes import bookings as bookings_routes
@@ -176,6 +177,7 @@ def create_app() -> FastAPI:
     app.include_router(gmail_webhook_routes.router)
     app.include_router(booking_routes.router)
     app.include_router(bookings_routes.router)
+    app.include_router(admin_routes.router)
 
     return app
 
