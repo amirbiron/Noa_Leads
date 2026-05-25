@@ -112,6 +112,19 @@ export default function LeadDetailPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
+  // Refetch בחזרה מטאב/אפליקציה אחרת — קריטי לתרחיש פגישה: נועה
+  // עזבה את הדף לטלפון, הפגישה הסתיימה, חוזרת — צריכה לראות את
+  // כפתור "סמני שהפגישה התקיימה" שמופיע אחרי slot_end.
+  useEffect(() => {
+    if (!id) return;
+    function onFocus() {
+      void load();
+    }
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
+
   return (
     <AppShell>
       {loading && (

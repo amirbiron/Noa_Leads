@@ -1,14 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ArrowLeft } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import type { BookingRead, Lead } from "@/lib/types";
 import { ProposalSentConfirmModal } from "./ProposalSentConfirmModal";
-
-// 30 דקות אחרי תחילת הפגישה — חלון מינימלי לפני שמציעים סימון "התקיימה".
-// קודם לכן: ייתכן שהפגישה עוד לא קרתה / עדיין באמצע, אין טעם להציע.
-const MIN_MINUTES_AFTER_MEETING_START = 30;
 
 // כפתור "מה עכשיו?" — דינמי לפי סטטוס הליד.
 // פעולה אחת ראשית גדולה, מובילה לפעולה הטבעית הבאה.
@@ -39,12 +35,12 @@ function nextAction(
     case "BOOKING_PENDING":
       return { label: "אשרי פגישה", action: "approve_meeting" };
     case "BOOKED": {
-      // מציע "סמני שהפגישה התקיימה" רק 30+ דקות אחרי התחלת הפגישה.
-      // לפני כן הכפתור יהיה לא רלוונטי (פגישה עוד לא קרתה / באמצע).
+      // מציע "סמני שהפגישה התקיימה" רק אחרי שהפגישה הסתיימה (slot_end).
+      // ה-backend ממשיך להחזיר APPROVED past-end booking כל עוד הליד
+      // עדיין BOOKED — פגישות קצרות (<30 דק') ופגישות שעבר זמנן עובדות.
       if (!activeBooking) return null;
-      const start = new Date(activeBooking.requested_slot_start).getTime();
-      const minutesSinceStart = (Date.now() - start) / (60 * 1000);
-      if (minutesSinceStart < MIN_MINUTES_AFTER_MEETING_START) return null;
+      const end = new Date(activeBooking.requested_slot_end).getTime();
+      if (Date.now() < end) return null;
       return { label: "סמני שהפגישה התקיימה", action: "log_call_completed" };
     }
     default:
@@ -61,6 +57,23 @@ export function DynamicActionButton({
   activeBooking: BookingRead | null;
   onActionDone: () => void;
 }) {
+  // Tick לרענון UI כשעובר ה-slot_end בזמן שהמסך פתוח. ה-tick מחושב
+  // ל-זמן המדויק של slot_end (לא polling) — שינוי מצב יחיד ברגע הנכון.
+  const [, forceRender] = useState(0);
+  useEffect(() => {
+    if (
+      lead.status !== "BOOKED" ||
+      !activeBooking ||
+      activeBooking.status !== "approved"
+    ) {
+      return;
+    }
+    const end = new Date(activeBooking.requested_slot_end).getTime();
+    const msUntilEnd = end - Date.now();
+    if (msUntilEnd <= 0) return;  // כבר עבר — אין צורך ב-timer
+    const t = setTimeout(() => forceRender((n) => n + 1), msUntilEnd + 1000);
+    return () => clearTimeout(t);
+  }, [lead.status, activeBooking]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [proposalOpen, setProposalOpen] = useState(false);

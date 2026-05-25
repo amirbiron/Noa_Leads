@@ -658,9 +658,42 @@ async def list_pending_bookings(
 async def get_active_booking_for_lead(
     db: AsyncSession, lead_id: UUID
 ) -> Booking | None:
-    """external wrapper על _get_active_booking — לרישום בנתיב admin
-    שמציג את ה-booking הפעיל בכרטיס הליד."""
-    return await _get_active_booking(db, lead_id)
+    """
+    מחזיר את ה-booking הרלוונטי לכרטיס הליד:
+    1. pending_approval / approved שעדיין בעתיד (כמו _get_active_booking הפנימי).
+    2. + APPROVED שעבר slot_end *אם* הליד עדיין במצב BOOKED — נדרש כדי
+       שכפתור "סמני שהפגישה התקיימה" יישאר זמין אחרי שהפגישה הסתיימה.
+       ברגע שנועה תסמן `log_call_completed`, הסטטוס יעבור (NEW/IN_PROGRESS
+       בהתאם ל-state machine) וה-booking יחדל להופיע.
+
+    _get_active_booking הפנימי נשאר strict (slot_end > now) — משמש
+    ב-create_booking_request לבדיקת קונפליקטים, שם לא רוצים שעבר ישפיע.
+    """
+    active = await _get_active_booking(db, lead_id)
+    if active is not None:
+        return active
+
+    # Fallback: ליד BOOKED עם APPROVED שעבר slot_end → מציגים כדי שכפתור
+    # "סמני שהפגישה התקיימה" יופיע. מסנן גם past meetings ישנות שלא
+    # נסגרו (>30 יום) כדי לא להציג zombie bookings אם משהו השתבש.
+    from app.models.lead import Lead
+
+    now_utc = datetime.now(timezone.utc)
+    cutoff = now_utc - timedelta(days=30)
+    result = await db.execute(
+        select(Booking)
+        .join(Lead, Lead.id == Booking.lead_id)
+        .where(
+            Booking.lead_id == lead_id,
+            Booking.status == BookingStatus.APPROVED.value,
+            Booking.requested_slot_end <= now_utc,
+            Booking.requested_slot_end >= cutoff,
+            Lead.status == LeadStatus.BOOKED.value,
+        )
+        .order_by(Booking.requested_slot_start.desc())
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
 
 
 async def approve_booking(
