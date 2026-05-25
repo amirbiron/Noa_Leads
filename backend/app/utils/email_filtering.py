@@ -57,9 +57,12 @@ def is_heuristic_spam(from_addr: str | None, headers: dict | None) -> bool:
         if pattern in addr_lower:
             return True
 
-    # 2. domain blacklist
+    # 2. domain blacklist — suffix match: ספקי שיווק כמעט תמיד שולחים
+    # מתת-domain ("bounce.sendgrid.net", "mail.mailchimp.com"). exact
+    # match על sendgrid.net לבדו היה מחמיץ אותם. ה-"." dot prefix מונע
+    # false positive על "notspendgrid.net".
     domain = _extract_domain(addr_lower)
-    if domain and domain in SPAM_DOMAINS:
+    if domain and _matches_spam_domain(domain):
         return True
 
     # 3. List-Unsubscribe header. headers ב-Gmail API מגיע כ-list of
@@ -103,6 +106,20 @@ def should_skip_ai_classification(
 # 2. "Display Name <user@domain.com>" — RFC 2822, נפוץ ב-Gmail API
 # הregex מחפש @ ואז את ה-domain עד whitespace/>/סוף, בלי anchor $.
 _EMAIL_DOMAIN_RE = re.compile(r"@([\w.-]+?)(?:[>\s]|$)")
+
+
+def _matches_spam_domain(domain: str) -> bool:
+    """True אם domain == root או subdomain של root ב-SPAM_DOMAINS.
+
+    דוגמאות:
+    - "sendgrid.net" → True (exact)
+    - "bounce.sendgrid.net" → True (subdomain)
+    - "notspendgrid.net" → False (אין dot לפני root)
+    """
+    return any(
+        domain == root or domain.endswith("." + root)
+        for root in SPAM_DOMAINS
+    )
 
 
 def _extract_domain(addr: str) -> str | None:
