@@ -278,6 +278,68 @@ async def get_new_leads(
     return [_lead_to_card(lead, now_utc) for lead in result.scalars().all()]
 
 
+# ===================== Polling (auto-refresh) =====================
+
+# cap על תוצאות poll להגנה מ-spike נדיר (Bulk import וכו'). לרוב 0-3
+# שינויים ב-poll, ה-limit לא מופעל בפועל.
+_POLL_DELTA_LIMIT = 20
+
+
+async def poll_dashboard_delta(
+    db: AsyncSession, *, since: datetime
+) -> tuple[list[LeadCard], list[LeadCard], datetime]:
+    """Delta מאז `since`: לידים חדשים + לידים שקיבלו תגובה. מחזיר גם
+    את ה-server_time anchor ל-poll הבא.
+
+    שני queries נפרדים:
+    - new_leads: `created_at > since`.
+    - replies: `last_inbound_at > since` AND `last_inbound_at > created_at`
+      (התנאי השני מונע כפילות — ליד שהומר ממייל נכנס יופיע ב-new,
+      לא ב-replies). סינון לסגורים — אין טעם להציג toast על תגובה
+      לליד WON/LOST/ARCHIVED.
+
+    **server_time anchor — תיקון bugbot:** captured *לפני* הqueries,
+    לא אחרי. אם נחזיר datetime.now() אחרי הqueries, rows שעמדו ב-commit
+    במהלך חלון הqueries יהיו עם created_at < הערך המוחזר, אבל
+    uncommitted בתחילת הquery → לא ב-result set. ה-client היה משדר
+    since=server_time בפול הבא ומפספס אותם. capture לפני = anchor
+    מוקדם מספיק שכל commit שיקרה במהלך הqueries יקבל created_at >
+    anchor → poll הבא יתפוס. trade-off: edge case של duplicate
+    בpoll הבא (overlap window ~ms), זניח.
+
+    **sequential ולא asyncio.gather — תיקון bugbot:** AsyncSession של
+    SQLAlchemy לא בטוח ל-overlapping operations על אותו connection.
+    asyncio.gather גרם ל-asyncpg "another operation is in progress"
+    אקראית. ההפרש ~10-30ms ל-poll — זניח לחווית UI.
+    """
+    server_time = datetime.now(timezone.utc)
+
+    new_q = (
+        select(Lead)
+        .where(Lead.created_at > since)
+        .order_by(Lead.created_at.desc())
+        .limit(_POLL_DELTA_LIMIT)
+    )
+    replies_q = (
+        select(Lead)
+        .where(
+            Lead.last_inbound_at > since,
+            Lead.last_inbound_at > Lead.created_at,
+            ~Lead.status.in_(CLOSED_LEAD_STATUSES),
+        )
+        .order_by(Lead.last_inbound_at.desc())
+        .limit(_POLL_DELTA_LIMIT)
+    )
+    new_res = await db.execute(new_q)
+    replies_res = await db.execute(replies_q)
+
+    new_cards = [_lead_to_card(l, server_time) for l in new_res.scalars().all()]
+    reply_cards = [
+        _lead_to_card(l, server_time) for l in replies_res.scalars().all()
+    ]
+    return new_cards, reply_cards, server_time
+
+
 # ===================== ממתין לטיפול =====================
 
 async def get_pending(

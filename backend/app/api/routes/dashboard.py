@@ -2,10 +2,13 @@
 Dashboard routes — מסך הבית, פעולות היום, ממתין, הצעות, תובנות.
 """
 
-from fastapi import APIRouter
+from datetime import datetime
+
+from fastapi import APIRouter, Query
 
 from app.api.deps import CurrentUser, DbSession
 from app.schemas.dashboard import (
+    DashboardPollResponse,
     HomeDashboardResponse,
     PendingResponse,
     ProposalsResponse,
@@ -59,3 +62,29 @@ async def proposals(db: DbSession, user: CurrentUser) -> ProposalsResponse:
 @router.get("/weekly", response_model=WeeklyInsights)
 async def weekly(db: DbSession, user: CurrentUser) -> WeeklyInsights:
     return await dashboard_service.get_weekly_insights(db)
+
+
+@router.get("/poll", response_model=DashboardPollResponse)
+async def poll(
+    db: DbSession,
+    user: CurrentUser,
+    since: datetime = Query(..., description="ISO 8601 — last poll time"),
+) -> DashboardPollResponse:
+    """Delta מאז `since`: לידים חדשים + לידים שקיבלו תגובה.
+
+    Pydantic auto-parses `?since=2026-05-25T10:30:00Z` ל-datetime.
+    אם ה-client שולח naive datetime (ללא tz), Pydantic מקבל; אבל
+    ההשוואה ב-DB עם timestamptz columns תכשל. בפועל ה-frontend תמיד
+    שולח server_time שחזר עם tz (UTC).
+
+    ה-service מחזיר server_time שלקח *לפני* הqueries — anchor שמונע
+    איבוד rows שcommit במהלך חלון הquery (תיקון bugbot).
+    """
+    new_leads, replies, server_time = await dashboard_service.poll_dashboard_delta(
+        db, since=since
+    )
+    return DashboardPollResponse(
+        new_leads=new_leads,
+        leads_with_inbound_replies=replies,
+        server_time=server_time,
+    )

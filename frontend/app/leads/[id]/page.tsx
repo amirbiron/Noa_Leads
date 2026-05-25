@@ -17,6 +17,7 @@ import {
 import { AddProgramModal } from "@/components/AddProgramModal";
 import { AppShell } from "@/components/AppShell";
 import { CloseLeadModal } from "@/components/CloseLeadModal";
+import { useDashboardPollContext } from "@/components/DashboardPollProvider";
 import { DynamicActionButton } from "@/components/DynamicActionButton";
 import { EditLeadModal } from "@/components/EditLeadModal";
 import { IncomingEmailsSection } from "@/components/IncomingEmailsSection";
@@ -137,6 +138,21 @@ export default function LeadDetailPage() {
     return () => window.removeEventListener("focus", onFocus);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
+
+  // Refetch כשהפולינג זיהה שהליד *הזה* עודכן (תגובה חדשה, וכו').
+  // ה-check על `id ∈ recentlyUpdatedLeadIds` מונע רענון מיותר כשנועה
+  // צופה בליד אחר וליד אחר קיבל תגובה — היא לא מאבדת focus/scroll.
+  // recentlyUpdatedLeadIds לא ב-deps כי הוא נוצר חדש בכל poll (Set
+  // חדש) — pollVersion הוא ה-trigger היציב.
+  const { pollVersion, recentlyUpdatedLeadIds } = useDashboardPollContext();
+  useEffect(() => {
+    if (!id) return;
+    if (pollVersion === 0) return;
+    if (recentlyUpdatedLeadIds.has(id)) {
+      void load();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pollVersion, id]);
 
   return (
     <AppShell>

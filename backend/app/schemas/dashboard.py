@@ -140,3 +140,18 @@ class ProposalsResponse(BaseModel):
 
 class TodayResponse(BaseModel):
     items: list[TodayActionItem]
+
+
+# ===== Polling (auto-refresh) =====
+
+class DashboardPollResponse(BaseModel):
+    """Delta מאז `since` שה-client העביר ל-GET /dashboard/poll.
+
+    שתי רשימות נפרדות (לא איחוד) כדי שה-frontend יבחין בין toast של
+    "ליד חדש" ל-toast של "תגובה חדשה". `server_time` הוא ה-anchor
+    ל-poll הבא (מבדיל clock skew של ה-client).
+    """
+
+    new_leads: list[LeadCard]
+    leads_with_inbound_replies: list[LeadCard]
+    server_time: datetime

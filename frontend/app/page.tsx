@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Moon, Sparkles, TrendingUp } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
+import { useDashboardPollContext } from "@/components/DashboardPollProvider";
 import { EmptyState } from "@/components/EmptyState";
 import { LeadCardRow } from "@/components/LeadCardRow";
 import { SectionHeader } from "@/components/SectionHeader";
@@ -32,6 +33,14 @@ export default function HomePage() {
   useEffect(() => {
     void load();
   }, []);
+
+  // auto-refresh כשהפולינג זיהה לידים חדשים / תגובות. ה-pollVersion
+  // עולה רק כש-delta non-empty, אז אין רענון מיותר.
+  const { pollVersion } = useDashboardPollContext();
+  useEffect(() => {
+    if (pollVersion === 0) return; // השינוי הראשוני (mount) כבר טוען
+    void load();
+  }, [pollVersion]);
 
   return (
     <AppShell title="בית">
