@@ -25,8 +25,10 @@ summarize_daily) ב-Stage הזה — הן יתווספו ב-Stages 17/18/19 לצ
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
-from typing import Literal
+import re
+from typing import Literal, TypeVar
 
 from anthropic import (
     APIConnectionError,
@@ -35,10 +37,16 @@ from anthropic import (
     InternalServerError,
     RateLimitError,
 )
+from pydantic import BaseModel, Field, ValidationError
 
 from app.config import get_settings
+from app.constants import ServiceCategory
+from app.prompts import classify_email as classify_prompts
+from app.prompts import extract_lead as extract_prompts
 
 logger = logging.getLogger(__name__)
+
+T = TypeVar("T", bound=BaseModel)
 
 
 # ===== Exceptions =====
@@ -199,11 +207,23 @@ class AIClient:
     async def _call_once(
         self, model: str, system: str, user: str, max_tokens: int
     ) -> tuple[str, dict]:
-        """ניסיון בודד. לא תופס חריגות — _complete אחראית על הretry."""
+        """ניסיון בודד. לא תופס חריגות — _complete אחראית על הretry.
+
+        ה-system נשלח כ-content block עם cache_control ephemeral —
+        Anthropic prompt caching, ~90% חיסכון על system tokens בקריאות
+        חוזרות (cache hit חי כ-5 דקות אחרי כל קריאה). ל-classifier
+        שרץ מאות פעמים ביום זה משמעותי.
+        """
         message = await self._client.messages.create(
             model=model,
             max_tokens=max_tokens,
-            system=system,
+            system=[
+                {
+                    "type": "text",
+                    "text": system,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
             messages=[{"role": "user", "content": user}],
         )
         # תכן הטקסט — בלוק ראשון מסוג text.
@@ -214,6 +234,14 @@ class AIClient:
         usage = {
             "input_tokens": message.usage.input_tokens,
             "output_tokens": message.usage.output_tokens,
+            # cache hit ratio — אם זמין ב-API response. מאפשר monitoring
+            # של ה-cache effectiveness בעתיד (Spec §20.9).
+            "cache_creation_input_tokens": getattr(
+                message.usage, "cache_creation_input_tokens", 0
+            ),
+            "cache_read_input_tokens": getattr(
+                message.usage, "cache_read_input_tokens", 0
+            ),
             "model": message.model,
         }
         return text, usage
@@ -234,3 +262,134 @@ def get_ai_client() -> AIClient:
     if _ai_client is None:
         _ai_client = AIClient(get_settings().anthropic_api_key)
     return _ai_client
+
+
+# ===== Result models — Phase 3 Stage 18 =====
+
+
+class ClassificationResult(BaseModel):
+    """תוצאת classify_email. רף ההחלטה (0.7) של ה-caller, לא של ה-model."""
+
+    is_business: bool
+    confidence: float = Field(ge=0.0, le=1.0)
+    reason: str = Field(max_length=200)
+
+
+class LeadDraft(BaseModel):
+    """
+    תוצאת extract_lead_from_email. שדות nullable כדי לסבול נתונים חסרים —
+    Pydantic לא יפיל את ה-extract אם AI החזיר phone ריק או category לא ידוע.
+
+    service_subtype נשאר str פתוח: ה-Pydantic לא valid אותו מול
+    SERVICE_SUBTYPES (הקטגוריה תלוית-תוכן). ה-caller (commit 4/4) יסנן —
+    אם subtype לא תקף → null.
+    """
+
+    full_name: str
+    phone: str | None = None
+    email: str | None = None
+    service_category: ServiceCategory | None = None
+    service_subtype: str | None = None
+    subject_summary: str = Field(max_length=200)
+
+
+# ===== JSON parsing =====
+
+# גרידי `\{.*\}` עם DOTALL — תופס מה-`{` הראשון עד ה-`}` האחרון בטקסט,
+# מטפל בקינון פנימי וב-prose שAI לפעמים מוסיף לפני/אחרי (למרות הוראה
+# מפורשת לא להוסיף). אם אין `{...}` בכלל — _parse_json_response זורק AIError.
+_JSON_BLOCK_RE = re.compile(r"\{.*\}", re.DOTALL)
+
+
+def _parse_json_response(text: str, model_cls: type[T]) -> T:
+    """
+    מאתר JSON block בתוך response של AI ומפרס דרך Pydantic. שלוש שגיאות
+    אפשריות (כולן → AIError, caller יטפל ב-retry / manual review):
+    1. אין JSON block בכלל ב-response.
+    2. JSON לא תקף (syntax error).
+    3. JSON תקף אבל לא תואם לschema (Pydantic ValidationError).
+    """
+    match = _JSON_BLOCK_RE.search(text)
+    if not match:
+        raise AIError(f"No JSON block in AI response: {text[:200]!r}")
+    try:
+        data = json.loads(match.group(0))
+    except json.JSONDecodeError as e:
+        raise AIError(f"Invalid JSON in AI response: {e}; text={text[:200]!r}") from e
+    try:
+        return model_cls.model_validate(data)
+    except ValidationError as e:
+        raise AIError(
+            f"AI response doesn't match {model_cls.__name__}: {e}"
+        ) from e
+
+
+# ===== Public methods —  classify + extract =====
+#
+# שתי הפונקציות מקבלות subject + cleaned_body (caller חייב כבר לעבור
+# דרך clean_email_body_for_ai מ-Stage 16 + heuristic filter מ-Stage 16).
+# החזרת Pydantic results מאפשרת validation מובנה ושמירה ב-DB.
+
+
+async def classify_email(
+    *, subject: str, cleaned_body: str
+) -> ClassificationResult:
+    """
+    מסווג מייל כעסקי/לא-עסקי. caller (commit 4/4) משווה ל-
+    AI_CLASSIFY_CONFIDENCE_THRESHOLD (0.7) להחליט אם ליצור ליד רגיל
+    או עם דגל low_confidence_classification.
+
+    fallback_on_error=False — classifier חייב להישאר עקבי (גם consistency
+    מודלית; אם FAST נכשל ב-network, FAST שוב לא יעזור — Anthropic side issue).
+
+    שגיאות:
+    - AIRateLimitError: caller שומר email_messages, cron retry.
+    - AIError (כולל JSON parsing): caller שומר עם retry_count++. אחרי
+      AI_MAX_CLASSIFICATION_RETRIES → ליד עם manual_review_needed=True.
+    """
+    client = get_ai_client()
+    text, usage = await client._complete(
+        model=resolve_model("classifier"),
+        system=classify_prompts.SYSTEM_PROMPT,
+        user=classify_prompts.USER_TEMPLATE.format(
+            subject=subject, body=cleaned_body
+        ),
+        max_tokens=200,
+        fallback_on_error=False,
+    )
+    logger.info(
+        "classify_email usage: input=%d output=%d cache_read=%d",
+        usage["input_tokens"],
+        usage["output_tokens"],
+        usage.get("cache_read_input_tokens", 0),
+    )
+    return _parse_json_response(text, ClassificationResult)
+
+
+async def extract_lead_from_email(
+    *, subject: str, cleaned_body: str
+) -> LeadDraft:
+    """
+    חולץ פרטי ליד ממייל שכבר סווג כעסקי. שדות חסרים → None.
+    service_subtype לא validated מול SERVICE_SUBTYPES של הקטגוריה —
+    caller (commit 4/4) יסנן אם לא תקף.
+
+    fallback_on_error=False — extract רץ על FAST, אין tier נמוך יותר.
+    """
+    client = get_ai_client()
+    text, usage = await client._complete(
+        model=resolve_model("classifier"),  # extract לא חלק מ-_Purpose; משתמש בquick tier
+        system=extract_prompts.SYSTEM_PROMPT,
+        user=extract_prompts.USER_TEMPLATE.format(
+            subject=subject, body=cleaned_body
+        ),
+        max_tokens=400,
+        fallback_on_error=False,
+    )
+    logger.info(
+        "extract_lead usage: input=%d output=%d cache_read=%d",
+        usage["input_tokens"],
+        usage["output_tokens"],
+        usage.get("cache_read_input_tokens", 0),
+    )
+    return _parse_json_response(text, LeadDraft)
