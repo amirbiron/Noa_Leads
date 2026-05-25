@@ -20,6 +20,11 @@ export function LeadCardRow({ lead }: { lead: LeadCard }) {
   // (ברירת מחדל) = אין סימון, כי רוב הלידים בכל מקרה אצל נועה.
   // האייקון מופיע אחרי הלייבל ("הלקוח ⏳") — סדר קריאה טבעי ב-RTL.
   const waitingOnClient = lead.waiting_on === "CLIENT";
+  // has_recent_reply נדלק גם על create_booking_request (booking.py קובע
+  // reply_boost_until). ל-BOOKING_PENDING הלייבל הנכון הוא "בקשת תור
+  // חדשה" — אין באמת inbound message, יש בקשת תור חדשה שדורשת אישור.
+  const recentReplyLabel =
+    lead.status === "BOOKING_PENDING" ? "בקשת תור חדשה" : "תגובה חדשה";
   return (
     <Link
       href={`/leads/${lead.id}`}
@@ -45,7 +50,7 @@ export function LeadCardRow({ lead }: { lead: LeadCard }) {
             )}
             {lead.has_recent_reply && (
               <span className="text-[10px] font-semibold text-state-orange bg-state-orange/15 px-1.5 py-0.5 rounded">
-                תגובה חדשה
+                {recentReplyLabel}
               </span>
             )}
           </div>
