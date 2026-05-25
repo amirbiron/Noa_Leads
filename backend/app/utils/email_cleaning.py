@@ -46,8 +46,10 @@ _NOISE_PATTERNS = (
 # שמלאים ב-UTM tags ו-tracking IDs.
 _LONG_URL_RE = re.compile(r"https?://[^\s]{100,}")
 
-# רצף whitespace → רווח יחיד.
-_WS_RE = re.compile(r"\s+")
+# רצף horizontal whitespace בלבד → רווח יחיד (שומר \n כדי שline filter
+# בשלב 6 יעבוד). \s+ היה collapse-ל גם newlines וגורם ל-split('\n')
+# להחזיר list של איבר אחד.
+_HORIZ_WS_RE = re.compile(r"[ 	]+")
 
 # שורה ריקה / רק רווחים / רק תווי בקרה.
 _EMPTY_LINE_RE = re.compile(r"^[\s​-‏]*$")
@@ -92,20 +94,24 @@ def clean_email_body_for_ai(
         for el in soup.find_all(id=re.compile(noise, re.IGNORECASE)):
             el.decompose()
 
-    # 4. חילוץ טקסט.
-    text = soup.get_text(separator=" ", strip=True)
+    # 4. חילוץ טקסט. separator="\n" כדי לשמור על מבנה שורות — קריטי
+    #    לשלב 7 (filter noise lines). אם separator=" ", הכל הופך לשורה
+    #    אחת ו-_is_noise_line לא יכול לתפוס שורות בודדות.
+    text = soup.get_text(separator="\n", strip=True)
 
-    # 5. URLs ארוכים → [link].
+    # 5. URLs ארוכים → [link]. רץ לפני filter כי URL ארוך תופס שורה
+    #    שלמה בכמה תבניות HTML, והפילטר עלול להוריד אותה לפני שנחליף.
     text = _LONG_URL_RE.sub("[link]", text)
 
-    # 6. קריסת whitespace.
-    text = _WS_RE.sub(" ", text)
-
-    # 7. הסרת שורות שהן רק רעש (תווי בקרה / זנב URL / encoding מוזר).
-    #    אחרי קריסת ה-whitespace כל הטקסט בשורה אחת, אז זה גם מסנן
-    #    sequences כמו "?utm_source=&utm_medium=" שנשארו תלושים.
+    # 6. סינון שורות רעש (תווי בקרה ריקים / זנב URL / encoding מוזר).
+    #    חשוב לעשות לפני קריסת ה-whitespace הסופית — אחרת לא נשארים
+    #    newlines ל-split.
     lines = [ln for ln in text.split("\n") if not _is_noise_line(ln)]
-    text = "\n".join(lines).strip()
+
+    # 7. קריסת horizontal whitespace בתוך כל שורה + ניקוי שורות ריקות
+    #    שנשארו אחרי decompose/strip.
+    lines = [_HORIZ_WS_RE.sub(" ", ln).strip() for ln in lines]
+    text = "\n".join(ln for ln in lines if ln).strip()
 
     # 8. truncation בטיחותי.
     truncated = False

@@ -180,4 +180,11 @@ class Lead(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             "next_action_due_at",
             postgresql_where="status NOT IN ('WON', 'LOST', 'ARCHIVED')",
         ),
+        # Phase 3 Stage 16 — partial index לcron retry_pending_classification.
+        # רוב הזמן 0 שורות, scan O(1). מוצהר ב-model + ב-migration 0017.
+        Index(
+            "idx_leads_pending_classification",
+            "pending_classification",
+            postgresql_where="pending_classification = TRUE",
+        ),
     )
