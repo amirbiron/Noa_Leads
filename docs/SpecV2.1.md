@@ -1009,10 +1009,10 @@ ACTIVITY_TYPES = [
 |---|---|---|
 | אין מענה | IN_PROGRESS, waiting_on=NOAH | retry_call תוך 24 שעות |
 | רוצה פרטים | IN_PROGRESS, waiting_on=NOAH | followup תוך 24 שעות |
-| מעוניין בשיחה | IN_PROGRESS, waiting_on=CLIENT | followup תוך 48 שעות |
+| מעוניין בשיחה | IN_PROGRESS, waiting_on=NOAH | followup תוך 48 שעות |
 | רוצה הצעה | IN_PROGRESS, waiting_on=NOAH | send_proposal תוך 24 שעות |
 | לא רלוונטי כרגע | IN_PROGRESS, waiting_on=CLIENT | dormant_check תוך 60 יום |
-| לחזור בעוד חודש | IN_PROGRESS, waiting_on=CLIENT | followup תוך 30 יום |
+| לחזור בעוד חודש | IN_PROGRESS, waiting_on=NOAH | followup תוך 30 יום |
 
 המערכת מעדכנת סטטוס אוטומטית, קובעת פולואפ מתאים, ומתעדת בהיסטוריה.
 
@@ -1556,6 +1556,7 @@ PATCH  /settings/service-rates
 - הוספת סעיף 27 - Acceptance Criteria
 - הוספת סעיף 28 - הבחנה בין פאזות
 - הסרת `release_stale_locks` מטבלת ה-cron jobs (§23): מערכת חד-משתמש עם cron jobs פנימיים — אין race ראלי שמצדיק את המנגנון. תועדה בהחלטה ב-`docs/spec-deviations.md` F-14 + F-22.
+- תיקון §16.4: waiting_on של "מעוניין בשיחה" ו"לחזור בעוד חודש" שונה מ-CLIENT ל-NOAH. הכדור אצל נועה (לתאם / לחזור), לא אצל הלקוח. תועד ב-F-24.
 
 **v2.0 (מאי 2026):**
 - איחוד כל המסמכים (product-spec, tech-spec, templates-seed, ai-token-management) למסמך אחד
