@@ -17,10 +17,16 @@ import type { LeadListItem } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { STATE_COLORS } from "@/lib/colors";
 
-// אומדן צבע בצד הלקוח עבור list view (אין state_color מהשרת ב-LeadListItem)
+// צבע מצב לliקd ברשימה (Spec §12.9 — 3 צבעים בשימוש, אדום שמור לעתיד).
+// real-time check על next_action_due_at, לא תלוי ב-needs_attention שcron
+// מעדכן כל 15 דק'. חייב להישאר עקבי עם derive_state_color (backend) +
+// inferStateColor (lead detail page).
 function inferColor(lead: LeadListItem): "red" | "orange" | "green" | "gray" {
   if (["WON", "LOST", "ARCHIVED"].includes(lead.status)) return "gray";
-  if (lead.needs_attention) return "red";
+  if (lead.next_action_due_at) {
+    const due = new Date(lead.next_action_due_at).getTime();
+    if (due <= Date.now()) return "orange";
+  }
   return "green";
 }
 

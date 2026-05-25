@@ -83,6 +83,8 @@ export interface LeadListItem {
   priority_level: string;
   preferred_contact: string;
   needs_attention: boolean;
+  // לחישוב צבע real-time ב-list (Spec §12.9 — overdue → orange).
+  next_action_due_at: string | null;
   last_inbound_at: string | null;
   last_outbound_at: string | null;
   updated_at: string;

@@ -37,9 +37,13 @@ export const STATE_COLORS: Record<StateColor, ColorClasses> = {
   },
 };
 
+// תוויות מילוליות לצבעי מצב (Spec §12.9).
+// `red` שמור לתרחישים קריטיים עתידיים — אין branch בקוד שמייצר אותו כעת
+// (ראה derive_state_color ב-backend ו-inferStateColor ב-frontend).
+// אם הוא מופיע בUI = באג, לא תרחיש לגיטימי.
 export const STATE_LABELS: Record<StateColor, string> = {
-  red: "דחוף",
-  orange: "בקרוב",
+  red: "דחוף", // reserved — לא בשימוש כעת
+  orange: "לא טופל בזמן",
   green: "תקין",
   gray: "סגור",
 };

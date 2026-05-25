@@ -25,8 +25,6 @@ from app.schemas.dashboard import (
 from app.utils.work_hours import ISRAEL_TZ, to_israel_tz
 
 # ===== קבועי תצוגה =====
-# כמה ימים קדימה נחשב "פולואפ קרוב" — מצביע על כתום
-ORANGE_LOOKAHEAD = timedelta(hours=48)
 # 5-7 פעולות היום לפי האפיון. נשמור up to 20 כדי לא לחתוך אם יש עומס
 TODAY_ACTIONS_LIMIT = 20
 DEFAULT_DASHBOARD_LIMIT = 50
@@ -48,24 +46,30 @@ DEFAULT_DASHBOARD_LIMIT = 50
 
 def derive_state_color(lead: Lead, now_utc: datetime) -> str:
     """
-    מחשב את צבע המצב של ליד לפי 4 קטגוריות מהאפיון:
-    - gray: סגור / בארכיב
-    - red: דורש טיפול היום (needs_attention או פולואפ שעבר)
-    - orange: פולואפ קרוב (בתוך ORANGE_LOOKAHEAD)
-    - green: בתהליך תקין
+    מחשב את צבע המצב של ליד — לוגיקה פשוטה (Spec §12.9):
+
+    - gray: סטטוס סופי (WON/LOST/ARCHIVED).
+    - orange: יש task שעבר את ה-due_at שלו
+      (lead.next_action_due_at <= now).
+    - green: ברירת מחדל — אין task overdue, או אין task בכלל.
+
+    אדום שמור לתרחישים קריטיים עתידיים (פגישה מאושרת תוך שעה ולא
+    אושרה וכו'). שום branch כאן לא מחזיר "red" כעת. ה-StateColor type
+    מאפשר את הערך לתאימות עתידית — כשהתרחיש יוגדר, יתווסף branch.
+
+    real-time check על due_at (לא מסתמך על lead.needs_attention שמתעדכן
+    ע"י cron mark_overdue כל 15 דק' — היה latency של עד 15 דק' מהפיכה
+    ל-overdue ועד הצבעה). הטור `needs_attention` נשאר ב-DB למקרים אחרים
+    (filters עתידיים), אבל הצבע לא תלוי בו.
+
+    הוסר ORANGE_LOOKAHEAD (48h "פולואפ קרוב") — יצר false-positives
+    (ליד עם 7 שעות עד due_at הופיע כתום ללא טעם). פולואפ הוא תזכורת,
+    לא דדליין — סימן ויזואלי רק כשעבר.
     """
     if lead.status in CLOSED_LEAD_STATUSES:
         return "gray"
-
-    if lead.needs_attention:
-        return "red"
-
-    if lead.next_action_due_at is not None:
-        if lead.next_action_due_at <= now_utc:
-            return "red"  # פולואפ עבר את מועדו
-        if lead.next_action_due_at <= now_utc + ORANGE_LOOKAHEAD:
-            return "orange"
-
+    if lead.next_action_due_at is not None and lead.next_action_due_at <= now_utc:
+        return "orange"
     return "green"
 
 
