@@ -63,21 +63,23 @@ export function TemplatePickerSheet({
       return;
     }
 
-    // manual picker — רשימה מסוננת ל-WA. כשנכנס מ-DynamicActionButton עם
-    // forceChannel='email' בלי preset (fallback אחרי 404), עדיין נראה את
-    // רשימת ה-WA — זה ה-default. נועה תוכל לבחור ידנית. בעתיד אפשר
-    // להרחיב סינון לפי forceChannel.
+    // manual picker — מסונן לפי forceChannel. כשfallback מ-DynamicActionButton
+    // מגיע עם forceChannel='email' (preferred_contact='email' + 404 על
+    // הקנונית), הרשימה צריכה להציג תבניות email — אחרת נועה רואה רק
+    // תבניות WA וה-flow נחסם. ברירת מחדל 'whatsapp' שומרת על ההתנהגות של
+    // הכפתור המשני "בחירת תבנית" (תיקון bugbot).
+    const listChannel: EffectiveChannel = forceChannel ?? "whatsapp";
     api
       .listTemplates(true)
       .then((items) =>
-        setTemplates(items.filter((t) => t.channel === "whatsapp")),
+        setTemplates(items.filter((t) => t.channel === listChannel)),
       )
       .catch((err) =>
         setError(err instanceof ApiError ? err.message : "שגיאה בטעינה"),
       )
       .finally(() => setLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, presetTemplateId]);
+  }, [open, presetTemplateId, forceChannel]);
 
   async function pickTemplate(t: Template) {
     setSelected(t);
@@ -111,8 +113,6 @@ export function TemplatePickerSheet({
     setSending(true);
     setError(null);
     try {
-      let href: string | null = null;
-
       if (effectiveChannel === "email") {
         if (!lead.email) {
           setError("אין מייל לליד.");
@@ -122,7 +122,18 @@ export function TemplatePickerSheet({
         // ב-DB. נועה תוכל לערוך לפני שליחה בלקוח המייל.
         const subject = encodeURIComponent(selected.name);
         const body = encodeURIComponent(rendered.rendered_body);
-        href = `mailto:${lead.email}?subject=${subject}&body=${body}`;
+        const href = `mailto:${lead.email}?subject=${subject}&body=${body}`;
+
+        // mailto לא פותח חלון של דפדפן — הוא הופנה ל-mail client של המערכת.
+        // window.open(mailto:, "_blank") מחזיר null בהרבה דפדפנים (Chrome
+        // במיוחד) — זה לא popup blocker אלא תוצר טבעי של handoff ל-system
+        // protocol. תיקון bugbot: anchor.click() אמין לכל הדפדפנים, לא
+        // false-positive של popup guard. אין דרך לאמת שה-mail client אכן
+        // נפתח (limit של mailto:); סומכים על handoff וקוראים ל-mark מיד.
+        const anchor = document.createElement("a");
+        anchor.href = href;
+        anchor.rel = "noopener noreferrer";
+        anchor.click();
       } else {
         if (!lead.phone) {
           setError("אין טלפון לליד.");
@@ -134,24 +145,19 @@ export function TemplatePickerSheet({
           return;
         }
         const text = encodeURIComponent(rendered.rendered_body);
-        href = `https://wa.me/${digits}?text=${text}`;
+        const href = `https://wa.me/${digits}?text=${text}`;
+        // WA web פותח באמת tab חדש — popup guard רלוונטי כאן. אם null
+        // → blocker חסם → אסור לסמן כנשלח (הלקוחה לא ראתה כלום).
+        const win = window.open(href, "_blank");
+        if (!win) {
+          setError('פתיחת וואטסאפ נחסמה ע"י הדפדפן. אפשרי חוסם פופ-אפים?');
+          return;
+        }
       }
 
-      // window.open יכול להחזיר null אם popup blocker חסם — במקרה כזה אסור
-      // לסמן את התבנית כנשלחה (הלקוחה לא קיבלה כלום).
-      const win = window.open(href, "_blank");
-      if (!win) {
-        setError(
-          effectiveChannel === "email"
-            ? 'פתיחת המייל נחסמה ע"י הדפדפן.'
-            : 'פתיחת וואטסאפ נחסמה ע"י הדפדפן. אפשרי חוסם פופ-אפים?',
-        );
-        return;
-      }
-
-      // רק אחרי שהפתיחה הצליחה — סימון במערכת. ה-action (mark_template_sent
-      // או mark_proposal_sent) מעדכן סטטוס + activity + סוגר tasks
-      // (AUTO_CLOSE_TASK_TYPES). פירוט ב-state_machine.py.
+      // רק אחרי שהפתיחה הצליחה (WA) / handoff בוצע (mailto) — סימון במערכת.
+      // ה-action (mark_template_sent או mark_proposal_sent) מעדכן סטטוס +
+      // activity + סוגר tasks (AUTO_CLOSE_TASK_TYPES). פירוט ב-state_machine.py.
       await api.performAction(lead.id, actionType, {
         metadata: { template_id: selected.id },
       });
