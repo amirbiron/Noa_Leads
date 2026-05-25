@@ -32,7 +32,12 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
-from app.constants import SERVICE_SUBTYPES, ServiceCategory, SourceChannel
+from app.constants import (
+    SERVICE_SUBTYPES,
+    PreferredContact,
+    ServiceCategory,
+    SourceChannel,
+)
 from app.db.session import AsyncSessionLocal
 from app.models.email_message import (
     PROCESSING_STATUS_HEURISTIC_SPAM,
@@ -389,6 +394,11 @@ async def _create_lead_from_draft(
 
     # email: אם AI החזיר string שלא תקין כ-EmailStr, LeadCreate ייכשל.
     # נסה ליצור LeadCreate; אם email שובר ולידציה, חזור בלי email.
+    #
+    # preferred_contact=EMAIL: לקוח שפנה דרך Gmail רוצה תגובה בערוץ שלו.
+    # ה-default של LeadCreate הוא WHATSAPP — בלי הקביעה המפורשת כאן, ליד
+    # ממייל היה מקבל preferred=WHATSAPP וה-DynamicActionButton היה מציע
+    # "שלחי תבנית פתיחה" (WA) במקום "השב במייל".
     try:
         lead_create = LeadCreate(
             full_name=draft.full_name or "ללא שם",
@@ -398,6 +408,7 @@ async def _create_lead_from_draft(
             service_subtype=subtype,
             source_channel=SourceChannel.EMAIL,
             source_detail=draft.subject_summary,
+            preferred_contact=PreferredContact.EMAIL,
         )
     except ValidationError:
         logger.info(
@@ -412,6 +423,7 @@ async def _create_lead_from_draft(
             service_subtype=subtype,
             source_channel=SourceChannel.EMAIL,
             source_detail=draft.subject_summary,
+            preferred_contact=PreferredContact.EMAIL,
         )
 
     # commit=False כדי שנוסיף activity + נעדכן email_msg.lead_id באטומיות
@@ -445,8 +457,12 @@ async def _create_lead_from_draft(
         .values(lead_id=lead.id, processing_status=final_status)
     )
 
-    # activity record — מציג את הסיבה של AI ב-timeline (UX)
-    if ai_reason:
+    # activity record — מציג subject + תחילת body של המייל ב-timeline.
+    # *לא* את ה-classifier reason ("פנייה ישירה...") — טאוטולוגי לליד
+    # שכבר נוצר (היו עוברים את ה-classifier ולא היו ליד). נועה צריכה
+    # תוכן ספציפי, לא תיוג AI שמשוכפל את הקטגוריה שכבר בכרטיס.
+    # ai_reason/ai_confidence נשארים ב-metadata ל-debug.
+    if email_msg.subject or email_msg.cleaned_text:
         from app.constants import ActivityType
         from app.services.activities import log_activity
         await log_activity(
@@ -454,9 +470,10 @@ async def _create_lead_from_draft(
             lead_id=lead.id,
             activity_type=ActivityType.LEAD_CREATED,
             performed_by=None,
-            content=f"AI: {ai_reason}",
+            content=_build_email_activity_content(email_msg),
             metadata={
                 "source": "gmail_intake",
+                "ai_reason": ai_reason,
                 "ai_confidence": ai_confidence,
                 "low_confidence": low_confidence,
                 "manual_review_needed": manual_review,
@@ -724,3 +741,29 @@ def _ms_to_datetime(epoch_ms: int):
     """epoch milliseconds → tz-aware UTC datetime."""
     from datetime import datetime, timezone
     return datetime.fromtimestamp(epoch_ms / 1000, tz=timezone.utc)
+
+
+# כמה תווים מגוף המייל להציג ב-activity content. 80 = מספיק להבין על מה
+# מדובר, לא יותר מדי לרשומה ב-timeline. ניתן לעדכן לפי משוב.
+_BODY_PREVIEW_CHARS = 80
+
+
+def _build_email_activity_content(email_msg: EmailMessage) -> str:
+    """בונה content ל-activity של ליד שהגיע ממייל.
+
+    פורמט: subject\nbody_preview (~80 תווים).
+    הסיבה לבחור את התוכן הזה במקום ai_reason: ai_reason של ה-classifier
+    תמיד אומר "פנייה עסקית..." — טאוטולוגי לליד שכבר נוצר. נועה צריכה
+    תוכן ספציפי שעוזר לה להחליט.
+
+    קריסת רווחים מרובים: cleaned_text כבר עבר ניקוי HTML אבל יכול
+    לכלול \\n\\n / רווחים שמכוערים בשורה אחת ב-timeline.
+    """
+    subject = (email_msg.subject or "").strip() or "(ללא נושא)"
+    body = (email_msg.cleaned_text or "").strip()
+    if not body:
+        return subject
+    body_flat = " ".join(body.split())
+    if len(body_flat) > _BODY_PREVIEW_CHARS:
+        body_flat = body_flat[:_BODY_PREVIEW_CHARS] + "…"
+    return f"{subject}\n{body_flat}"
