@@ -69,6 +69,11 @@ class Lead(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     needs_attention: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false"
     )
+    # Phase 3 Stage 16: True כשclassifier כשל ב-RateLimitError וצריך retry.
+    # retry_pending_classification cron (Stage 18) יסרוק WHERE pending=true.
+    pending_classification: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
 
     # ===== מקור =====
     # form / email / manual / referral / facebook / וכו'

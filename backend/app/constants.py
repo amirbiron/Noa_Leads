@@ -237,3 +237,50 @@ from datetime import timedelta as _timedelta
 
 FOLLOWUP_GRACE_FIRST_RESPONSE = _timedelta(hours=24)
 FOLLOWUP_GRACE_PROPOSAL_ORG = _timedelta(days=4)  # 3-5 ימי עסקים
+
+
+# ===== Phase 3: AI email filtering (Stage 16) =====
+# heuristics שחוסכים קריאות AI מיותרות לפני classifier. ראה
+# docs/phase-3-ai-token-management.md §"סינון לפני AI".
+#
+# הסינון אגרסיבי בכוונה — false positive (לסנן ליד אמיתי) זול
+# יותר מ-false negative (לטעון על AI ספאם). יש override של
+# PERSONAL_INQUIRY_KEYWORDS שמבטל את הסינון אם בגוף המייל יש מילים
+# שמעידות על פנייה אישית (לקוח שמשתמש במערכת אוטומטית לעסק שלו).
+
+SPAM_FROM_PATTERNS = frozenset(
+    {
+        "noreply",
+        "no-reply",
+        "notifications@",
+        "newsletter@",
+        "donotreply",
+    }
+)
+
+SPAM_DOMAINS = frozenset(
+    {
+        "mailchimp.com",
+        "smoove.io",
+        "sendgrid.net",
+        "constantcontact.com",
+        "hubspot.com",
+        "mandrillapp.com",
+    }
+)
+
+# מילים שמעידות על פנייה אישית — override על כל ה-heuristics לעיל.
+# tuple כדי לשמור על סדר ויציבות (לא frozenset — לא צריך membership).
+PERSONAL_INQUIRY_KEYWORDS = (
+    "פנייה",
+    "מעוניין",
+    "מעוניינת",
+    "אשמח לקבוע",
+    "אשמח לתאם",
+    "אשמח להבין",
+    "יש לי שאלה",
+    "אני מחפש",
+    "אני מחפשת",
+    "רוצה לדעת",
+    "רוצה להתייעץ",
+)

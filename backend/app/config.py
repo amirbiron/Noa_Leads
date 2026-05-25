@@ -39,6 +39,15 @@ class Settings(BaseSettings):
 
     # ===== Anthropic =====
     anthropic_api_key: str | None = None
+    # Phase 3 Stage 16: model resolution. defaults לפי spec §19.1.
+    # ה-overrides per use case nullable — אם None יורש מ-FAST/QUALITY.
+    # שינוי מודל בעתיד = env var ב-Render, בלי deploy.
+    ai_model_fast: str = "claude-haiku-4-5"
+    ai_model_quality: str = "claude-sonnet-4-6"
+    ai_model_email_classifier: str | None = None
+    ai_model_daily_summary: str | None = None
+    ai_model_proposal_draft: str | None = None
+    ai_model_dormant_detection: str | None = None
 
     # ===== Google =====
     google_client_id: str | None = None
