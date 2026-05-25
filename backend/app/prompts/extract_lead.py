@@ -14,7 +14,7 @@ SYSTEM_PROMPT = """\
 
 החזר JSON בלבד בפורמט הבא:
 {
-  "full_name": "שם מלא של הפונה",
+  "full_name": "שם מלא של הפונה אם נמצא, אחרת null",
   "phone": "טלפון בפורמט ישראלי אם נמצא, אחרת null",
   "email": "המייל של השולח (תמצא בכותרת From)",
   "service_category": "אחד מ: clinic / workshops / production / digital_course / null",
@@ -37,7 +37,9 @@ SYSTEM_PROMPT = """\
 אם מהמייל לא ברור — service_category=null וזה בסדר. נועה תסווג ידנית.
 
 לגבי full_name: אם לא מפורש בגוף, נסה לחלץ מ-display name של הכתובת \
-("John Doe <jd@x.com>" → "John Doe"). אם גם לא — מהemail prefix.
+("John Doe <jd@x.com>" → "John Doe"). אם גם לא נמצא ו-email prefix לא \
+נראה כשם אדם (למשל "info" / "contact" / "noreply") — null. עדיף null \
+מ-שם פיקטיבי; נועה תשלים ידנית.
 
 לגבי phone: תומך בפורמטים ישראליים — "050-1234567", "+972521234567", \
 "02-1234567". אם אין טלפון תקין — null.

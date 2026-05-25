@@ -330,9 +330,14 @@ class LeadDraft(BaseModel):
 
     הפלוסופיה: עדיף ליד עם שדות ריקים שנועה תשלים, מאשר ליד שלא נוצר
     בכלל בגלל subfield אחד מנוח.
+
+    `full_name` גם nullable — מייל ללא חתימה / "From: name@domain" בלי
+    display name → AI מחזיר null. ה-caller מטפל ב-fallback ל-"ללא שם".
+    אילו השדה היה required, Pydantic היה מכשיל את כל ה-extract רק בגלל
+    שאין שם → cron retry לעד MAX → manual_review_needed lead מיותר.
     """
 
-    full_name: str
+    full_name: str | None = None
     phone: str | None = None
     email: str | None = None
     service_category: str | None = None
