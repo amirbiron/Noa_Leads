@@ -40,7 +40,6 @@ from anthropic import (
 from pydantic import BaseModel, Field, ValidationError
 
 from app.config import get_settings
-from app.constants import ServiceCategory
 from app.prompts import classify_email as classify_prompts
 from app.prompts import extract_lead as extract_prompts
 
@@ -318,18 +317,25 @@ class ClassificationResult(BaseModel):
 
 class LeadDraft(BaseModel):
     """
-    תוצאת extract_lead_from_email. שדות nullable כדי לסבול נתונים חסרים —
-    Pydantic לא יפיל את ה-extract אם AI החזיר phone ריק או category לא ידוע.
+    תוצאת extract_lead_from_email. שדות nullable + service_category/
+    subtype כ-str פתוח (לא ServiceCategory enum) — כדי לסבול נתונים
+    חסרים או category לא צפויה: Pydantic לא יפיל את כל ה-extract רק
+    כי AI החזיר "voice_training" במקום "voice_development" (השמות
+    קרובים — AI עלול להחליף).
 
-    service_subtype נשאר str פתוח: ה-Pydantic לא valid אותו מול
-    SERVICE_SUBTYPES (הקטגוריה תלוית-תוכן). ה-caller (commit 4/4) יסנן —
-    אם subtype לא תקף → null.
+    ה-caller (commit 4/4) אחראי על validation:
+    - אם service_category לא ב-ServiceCategory enum → מנקה ל-None,
+      נועה תסווג ידנית.
+    - אם service_subtype לא ב-SERVICE_SUBTYPES של הקטגוריה → גם null.
+
+    הפלוסופיה: עדיף ליד עם שדות ריקים שנועה תשלים, מאשר ליד שלא נוצר
+    בכלל בגלל subfield אחד מנוח.
     """
 
     full_name: str
     phone: str | None = None
     email: str | None = None
-    service_category: ServiceCategory | None = None
+    service_category: str | None = None
     service_subtype: str | None = None
     subject_summary: str = Field(max_length=200)
 
