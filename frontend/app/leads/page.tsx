@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Search } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
+import { useDashboardPollContext } from "@/components/DashboardPollProvider";
 import { EmptyState } from "@/components/EmptyState";
 import { StateDot } from "@/components/StateBadge";
 import { api, ApiError } from "@/lib/api";
@@ -45,6 +46,9 @@ export default function LeadsPage() {
     return () => clearTimeout(t);
   }, [searchInput]);
 
+  // pollVersion ב-deps → רענון אוטומטי כשפולינג זיהה ליד חדש / תגובה.
+  // (העלות זהה ל-refetch רגיל; הרשימה היא list view ולא מאבדת focus.)
+  const { pollVersion } = useDashboardPollContext();
   useEffect(() => {
     setLoading(true);
     setError(null);
@@ -61,7 +65,7 @@ export default function LeadsPage() {
         setError(err instanceof ApiError ? err.message : "שגיאה בטעינה"),
       )
       .finally(() => setLoading(false));
-  }, [statusFilter, search]);
+  }, [statusFilter, search, pollVersion]);
 
   return (
     <AppShell title={`לידים${total ? ` (${total})` : ""}`}>

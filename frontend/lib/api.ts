@@ -8,6 +8,7 @@ import type {
   BookingPageInfo,
   BookingRead,
   CreateBookingResponse,
+  DashboardPollResponse,
   EmailMessage,
   PendingBookingsResponse,
   HomeDashboard,
@@ -158,6 +159,13 @@ export const api = {
     fetcher<{ items: ProposalCard[] }>("/dashboard/proposals"),
 
   getWeekly: () => fetcher<WeeklyInsights>("/dashboard/weekly"),
+
+  // polling delta — לidim חדשים + תגובות לקוחות מאז `since`.
+  // ה-hook useDashboardPoll קורא כל 60s (משתמש ב-server_time כanchor).
+  pollDashboard: (since: string) =>
+    fetcher<DashboardPollResponse>(
+      `/dashboard/poll?since=${encodeURIComponent(since)}`,
+    ),
 
   // ----- Leads -----
   listLeads: (params: Record<string, string | number | boolean> = {}) => {

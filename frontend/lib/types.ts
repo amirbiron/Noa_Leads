@@ -389,6 +389,14 @@ export interface HomeDashboard {
   daily_summary: DailySummary | null;
 }
 
+// תוצאת GET /dashboard/poll — delta מאז ה-poll הקודם.
+// server_time = anchor ל-poll הבא (מבדיל clock skew של ה-client).
+export interface DashboardPollResponse {
+  new_leads: LeadCard[];
+  leads_with_inbound_replies: LeadCard[];
+  server_time: string;
+}
+
 // ===== Tasks =====
 
 export interface Task {

@@ -278,6 +278,60 @@ async def get_new_leads(
     return [_lead_to_card(lead, now_utc) for lead in result.scalars().all()]
 
 
+# ===================== Polling (auto-refresh) =====================
+
+# cap על תוצאות poll להגנה מ-spike נדיר (Bulk import וכו'). לרוב 0-3
+# שינויים ב-poll, ה-limit לא מופעל בפועל.
+_POLL_DELTA_LIMIT = 20
+
+
+async def poll_dashboard_delta(
+    db: AsyncSession, *, since: datetime
+) -> tuple[list[LeadCard], list[LeadCard]]:
+    """Delta מאז `since`: לידים חדשים + לידים שקיבלו תגובה.
+
+    שני queries נפרדים:
+    - new_leads: `created_at > since`.
+    - replies: `last_inbound_at > since` AND `last_inbound_at > created_at`
+      (התנאי השני מונע כפילות — ליד שהומר ממייל נכנס יופיע ב-new,
+      לא ב-replies). סינון לסגורים — אין טעם להציג toast על תגובה
+      לליד WON/LOST/ARCHIVED.
+
+    מחזיר LeadCards (ולא Lead ORMs) — _lead_to_card מחשב state_color
+    דרך derive_state_color, שצריך now_utc תואם לקריאת ה-route.
+    """
+    now_utc = datetime.now(timezone.utc)
+
+    new_q = (
+        select(Lead)
+        .where(Lead.created_at > since)
+        .order_by(Lead.created_at.desc())
+        .limit(_POLL_DELTA_LIMIT)
+    )
+    replies_q = (
+        select(Lead)
+        .where(
+            Lead.last_inbound_at > since,
+            Lead.last_inbound_at > Lead.created_at,
+            ~Lead.status.in_(CLOSED_LEAD_STATUSES),
+        )
+        .order_by(Lead.last_inbound_at.desc())
+        .limit(_POLL_DELTA_LIMIT)
+    )
+    # asyncio.gather במקום sequential — חוסך ~50ms per poll, גם אם כל
+    # query יחיד מהיר. ב-PG WAL replication latency זה משמעותי לחווית
+    # ה-UI.
+    import asyncio
+    new_res, replies_res = await asyncio.gather(
+        db.execute(new_q), db.execute(replies_q)
+    )
+    new_cards = [_lead_to_card(l, now_utc) for l in new_res.scalars().all()]
+    reply_cards = [
+        _lead_to_card(l, now_utc) for l in replies_res.scalars().all()
+    ]
+    return new_cards, reply_cards
+
+
 # ===================== ממתין לטיפול =====================
 
 async def get_pending(

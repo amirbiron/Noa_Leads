@@ -104,6 +104,12 @@ async def create_lead(
         await db.refresh(lead)
         # פוש לטלגרם — לכל מקור חוץ מהזנה ידנית (נועה עצמה הזינה,
         # אין צורך להתריע לעצמה). שגיאות telegram נבלעות בתוך השירות.
+        # **חשוב לסדר:** notify_new_lead חייב להיקרא *אחרי* db.commit().
+        # אם נעביר אותו לפני, race עם ה-/dashboard/poll: ה-client עוקב
+        # אחרי התראת הטלגרם → polling → ה-row עדיין לא ב-DB → ה-lead
+        # לא יופיע. נכון לרגע כתיבה — call site יחיד וכל ה-callers
+        # האחרים (intake_after_hours, gmail_intake._create_lead_from_draft)
+        # קוראים ל-create_lead → commit ואז שולחים טלגרם בסוף ה-flow.
         if lead.source_channel != "manual":
             from app.services import telegram as telegram_service
             await telegram_service.notify_new_lead(lead)

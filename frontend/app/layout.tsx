@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Heebo } from "next/font/google";
+import { DashboardPollProvider } from "@/components/DashboardPollProvider";
 import "./globals.css";
 
 // פונט עברי מ-Google Fonts
@@ -21,7 +22,11 @@ export default function RootLayout({
 }) {
   return (
     <html lang="he" dir="rtl" className={heebo.variable}>
-      <body>{children}</body>
+      <body>
+        {/* polling אוטומטי לדשבורד — ה-hook בפנים גוארד ב-isLoggedIn()
+            כך שלא רץ ב-/login, /booking/*, או לפני התחברות. */}
+        <DashboardPollProvider>{children}</DashboardPollProvider>
+      </body>
     </html>
   );
 }
