@@ -59,8 +59,11 @@ export function EditLeadModal({ lead, open, onClose, onSaved }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // איפוס לערכי הליד הנוכחיים בכל פתיחה. במידה ונועה פותחת/סוגרת/פותחת,
-  // הטופס משקף תמיד את הקיים — לא נשאר state ישן.
+  // איפוס לערכי הליד הנוכחיים רק כשהמודאל נפתח או כשמדובר בליד אחר
+  // (lead.id משתנה). ה-deps *לא* כוללים את `lead` כאובייקט — load()
+  // של ה-parent (במיוחד window-focus refetch) יוצר אובייקט חדש בכל
+  // קריאה, ואם useEffect היה רץ אז — קלט שנועה כתבה היה נמחק באמצע.
+  // אם נועה מעוניינת לראות שינויים שקרו ב-DB בינתיים, היא תסגור ותפתח.
   useEffect(() => {
     if (!open) return;
     setFullName(lead.full_name);
@@ -76,7 +79,8 @@ export function EditLeadModal({ lead, open, onClose, onSaved }: Props) {
     setPersonalNote(lead.personal_note ?? "");
     setBusy(false);
     setError(null);
-  }, [open, lead]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, lead.id]);
 
   // שינוי קטגוריה מאפס subtype אם הוא לא תואם — חסכון מהמשתמש שגיאת
   // backend (subtype לא תואם לקטגוריה).
