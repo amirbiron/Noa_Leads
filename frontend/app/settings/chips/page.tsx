@@ -29,8 +29,8 @@ import type {
 // אופציות לעריכה: רק IN_PROGRESS. ה-backend חוסם את כל השאר
 // (_CHIP_FORBIDDEN_TARGETS ב-schemas/quick_action_chip.py):
 // - NEW: chip click מרמז על אינטראקציה.
-// - PROPOSAL_SENT: ProposalSentConfirmModal הוא ה-flow הייעודי
-//   (שולח WhatsApp ואז מסמן).
+// - PROPOSAL_SENT: הכפתור הראשי בכרטיס (DynamicActionButton + TemplatePickerSheet)
+//   הוא ה-flow הייעודי לפולואף אחרי הצעה — שולח WA/email ואז מסמן.
 // - BOOKING_PENDING / BOOKED: booking flow ייעודי.
 // - WON / LOST / ARCHIVED: close_lead flow ייעודי.
 // 6 הצ'יפים מ-§16.4 כולם target IN_PROGRESS — מתואם.

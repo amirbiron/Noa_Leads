@@ -274,6 +274,18 @@ export const api = {
       { method: "POST" },
     ),
 
+  // בחירה אוטומטית של תבנית קנונית לכפתור הראשי בכרטיס ליד.
+  // role=opening (NEW) / proposal (IN_PROGRESS) / proposal_followup (PROPOSAL_SENT).
+  // ApiError(404) = הקנונית בוטלה/נמחקה → ה-caller פותח TemplatePickerSheet
+  // הרגיל (בחירה ידנית).
+  getTemplateAuto: (
+    leadId: string,
+    role: "opening" | "proposal" | "proposal_followup",
+  ) =>
+    fetcher<Template>(
+      `/templates/auto?lead_id=${leadId}&role=${role}`,
+    ),
+
   // ----- Programs -----
   listActivePrograms: () =>
     fetcher<ProgramWithLead[]>("/programs/active"),

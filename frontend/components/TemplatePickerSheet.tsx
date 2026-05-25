@@ -1,22 +1,40 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Copy, MessageCircle, X } from "lucide-react";
+import { Copy, Mail, MessageCircle, X } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import { toWhatsAppDigits } from "@/lib/phone";
 import type { Lead, Template, TemplateRenderResponse } from "@/lib/types";
+
+type EffectiveChannel = "whatsapp" | "email";
 
 interface Props {
   lead: Lead;
   open: boolean;
   onClose: () => void;
   onSent: () => void;
+  // הרחבות לכפתורים הראשיים של DynamicActionButton (Spec §9.3/§12.2):
+  // - presetTemplateId: דילוג על list view ישר ל-preview של תבנית קנונית.
+  // - forceChannel: override של template.channel (preferred_contact מנצח).
+  //   ה-channel ב-DB נשמר לתצוגה ולסיווג, אבל מי שמחליט אם פותחים WA או
+  //   mailto הוא ה-preferred_contact של הליד.
+  // - actionType: ברירת מחדל mark_template_sent. הצעות יקראו ל-
+  //   mark_proposal_sent (אותו פורמט payload, ה-state machine מטפל
+  //   בטרנזישן השונה).
+  presetTemplateId?: string;
+  forceChannel?: EffectiveChannel;
+  actionType?: "mark_template_sent" | "mark_proposal_sent";
 }
 
-// בורר תבניות + רנדור + פתיחת וואטסאפ עם הטקסט המוכן.
-// לפי האפיון: "X רק לוחצת שלח" — אנחנו פותחים את WA עם prefill,
-// והליד מסומן template_sent מיד (אחרי הקליק).
-export function TemplatePickerSheet({ lead, open, onClose, onSent }: Props) {
+export function TemplatePickerSheet({
+  lead,
+  open,
+  onClose,
+  onSent,
+  presetTemplateId,
+  forceChannel,
+  actionType = "mark_template_sent",
+}: Props) {
   const [templates, setTemplates] = useState<Template[]>([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<Template | null>(null);
@@ -31,7 +49,24 @@ export function TemplatePickerSheet({ lead, open, onClose, onSent }: Props) {
     setSelected(null);
     setRendered(null);
     setError(null);
-    setTemplates([]); // ניקוי תוצאה ישנה כדי שלא יראו רגעית רשימה אחרת
+    setTemplates([]);
+
+    // preset mode — מדלגים על רשימה, טוענים את הקנונית ומקדמים ישר ל-preview.
+    if (presetTemplateId) {
+      api
+        .getTemplate(presetTemplateId)
+        .then((t) => pickTemplate(t))
+        .catch((err) =>
+          setError(err instanceof ApiError ? err.message : "שגיאה בטעינה"),
+        )
+        .finally(() => setLoading(false));
+      return;
+    }
+
+    // manual picker — רשימה מסוננת ל-WA. כשנכנס מ-DynamicActionButton עם
+    // forceChannel='email' בלי preset (fallback אחרי 404), עדיין נראה את
+    // רשימת ה-WA — זה ה-default. נועה תוכל לבחור ידנית. בעתיד אפשר
+    // להרחיב סינון לפי forceChannel.
     api
       .listTemplates(true)
       .then((items) =>
@@ -41,7 +76,8 @@ export function TemplatePickerSheet({ lead, open, onClose, onSent }: Props) {
         setError(err instanceof ApiError ? err.message : "שגיאה בטעינה"),
       )
       .finally(() => setLoading(false));
-  }, [open]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, presetTemplateId]);
 
   async function pickTemplate(t: Template) {
     setSelected(t);
@@ -61,32 +97,63 @@ export function TemplatePickerSheet({ lead, open, onClose, onSent }: Props) {
     setTimeout(() => setCopied(false), 1500);
   }
 
-  async function openWhatsAppAndMark() {
-    if (!rendered || !lead.phone) return;
+  // ה-channel האפקטיבי: preferred_contact של הליד (דרך forceChannel) מנצח
+  // את template.channel. אם לא הועבר forceChannel — נופלים ל-template.channel
+  // (התנהגות ה-manual picker הקיימת, שמראש מסונן ל-WA).
+  const effectiveChannel: EffectiveChannel =
+    forceChannel ?? (selected?.channel === "email" ? "email" : "whatsapp");
+
+  const hasContact =
+    effectiveChannel === "whatsapp" ? Boolean(lead.phone) : Boolean(lead.email);
+
+  async function openLinkAndMark() {
+    if (!rendered || !selected) return;
     setSending(true);
     setError(null);
     try {
-      const digits = toWhatsAppDigits(lead.phone);
-      if (!digits) {
-        setError("מספר הטלפון לא מתאים לחיוג בוואטסאפ.");
-        return;
+      let href: string | null = null;
+
+      if (effectiveChannel === "email") {
+        if (!lead.email) {
+          setError("אין מייל לליד.");
+          return;
+        }
+        // subject = שם התבנית (למשל "פתיחה - ארגון"). פשטות > עמודה חדשה
+        // ב-DB. נועה תוכל לערוך לפני שליחה בלקוח המייל.
+        const subject = encodeURIComponent(selected.name);
+        const body = encodeURIComponent(rendered.rendered_body);
+        href = `mailto:${lead.email}?subject=${subject}&body=${body}`;
+      } else {
+        if (!lead.phone) {
+          setError("אין טלפון לליד.");
+          return;
+        }
+        const digits = toWhatsAppDigits(lead.phone);
+        if (!digits) {
+          setError("מספר הטלפון לא מתאים לחיוג בוואטסאפ.");
+          return;
+        }
+        const text = encodeURIComponent(rendered.rendered_body);
+        href = `https://wa.me/${digits}?text=${text}`;
       }
-      const text = encodeURIComponent(rendered.rendered_body);
+
       // window.open יכול להחזיר null אם popup blocker חסם — במקרה כזה אסור
-      // לסמן את התבנית כנשלחה (כי הלקוחה לא קיבלה כלום).
-      const win = window.open(
-        `https://wa.me/${digits}?text=${text}`,
-        "_blank",
-      );
+      // לסמן את התבנית כנשלחה (הלקוחה לא קיבלה כלום).
+      const win = window.open(href, "_blank");
       if (!win) {
         setError(
-          "פתיחת וואטסאפ נחסמה ע\"י הדפדפן. אפשרי חוסם פופ-אפים?",
+          effectiveChannel === "email"
+            ? 'פתיחת המייל נחסמה ע"י הדפדפן.'
+            : 'פתיחת וואטסאפ נחסמה ע"י הדפדפן. אפשרי חוסם פופ-אפים?',
         );
         return;
       }
-      // רק אחרי שהפתיחה הצליחה — סימון במערכת
-      await api.performAction(lead.id, "mark_template_sent", {
-        metadata: { template_id: selected?.id },
+
+      // רק אחרי שהפתיחה הצליחה — סימון במערכת. ה-action (mark_template_sent
+      // או mark_proposal_sent) מעדכן סטטוס + activity + סוגר tasks
+      // (AUTO_CLOSE_TASK_TYPES). פירוט ב-state_machine.py.
+      await api.performAction(lead.id, actionType, {
+        metadata: { template_id: selected.id },
       });
       onSent();
       onClose();
@@ -99,11 +166,22 @@ export function TemplatePickerSheet({ lead, open, onClose, onSent }: Props) {
 
   if (!open) return null;
 
+  const sheetTitle = presetTemplateId ? "שליחה" : "בחרי תבנית";
+  const ctaIcon =
+    effectiveChannel === "email" ? <Mail size={18} aria-hidden /> : <MessageCircle size={18} aria-hidden />;
+  const ctaLabel = (() => {
+    if (sending) return "פותחת…";
+    if (!hasContact) {
+      return effectiveChannel === "email" ? "אין מייל לליד" : "אין טלפון לליד";
+    }
+    return effectiveChannel === "email" ? "פתיחת מייל" : "פתיחת וואטסאפ";
+  })();
+
   return (
     <div className="fixed inset-0 z-50 bg-black/40 flex items-end sm:items-center justify-center">
       <div className="bg-white w-full sm:max-w-md sm:rounded-2xl rounded-t-2xl shadow-xl max-h-[90vh] flex flex-col">
         <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 shrink-0">
-          <h2 className="font-semibold">בחרי תבנית</h2>
+          <h2 className="font-semibold">{sheetTitle}</h2>
           <button
             onClick={onClose}
             className="text-gray-400 hover:text-gray-600"
@@ -118,13 +196,14 @@ export function TemplatePickerSheet({ lead, open, onClose, onSent }: Props) {
             <div className="text-sm text-gray-400 text-center py-4">טוען…</div>
           )}
 
-          {!loading && templates.length === 0 && (
+          {!loading && !presetTemplateId && templates.length === 0 && (
             <div className="text-sm text-gray-500 text-center py-4">
               אין תבניות פעילות. צרי תבנית מ-/templates.
             </div>
           )}
 
           {!rendered &&
+            !presetTemplateId &&
             templates.map((t) => (
               <button
                 key={t.id}
@@ -156,15 +235,18 @@ export function TemplatePickerSheet({ lead, open, onClose, onSent }: Props) {
                 </div>
               )}
 
-              <button
-                onClick={() => {
-                  setSelected(null);
-                  setRendered(null);
-                }}
-                className="text-sm text-gray-500 underline"
-              >
-                בחירת תבנית אחרת
-              </button>
+              {/* "בחירת תבנית אחרת" מוסתר במצב preset — אין list לחזור אליה */}
+              {!presetTemplateId && (
+                <button
+                  onClick={() => {
+                    setSelected(null);
+                    setRendered(null);
+                  }}
+                  className="text-sm text-gray-500 underline"
+                >
+                  בחירת תבנית אחרת
+                </button>
+              )}
             </div>
           )}
 
@@ -178,16 +260,12 @@ export function TemplatePickerSheet({ lead, open, onClose, onSent }: Props) {
         {rendered && (
           <div className="border-t border-gray-100 p-3 space-y-2 shrink-0">
             <button
-              onClick={openWhatsAppAndMark}
-              disabled={sending || !lead.phone}
+              onClick={openLinkAndMark}
+              disabled={sending || !hasContact}
               className="w-full rounded-lg bg-gray-900 text-white py-3 font-medium flex items-center justify-center gap-2 disabled:opacity-50"
             >
-              <MessageCircle size={18} aria-hidden />
-              {sending
-                ? "פותחת…"
-                : lead.phone
-                ? "פתיחת וואטסאפ"
-                : "אין טלפון לליד"}
+              {ctaIcon}
+              {ctaLabel}
             </button>
             <button
               onClick={copyToClipboard}
