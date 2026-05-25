@@ -58,7 +58,9 @@ _DEFAULT_CHIPS_V21 = [
         "id": "00000000-0000-0013-0000-000000000003",
         "label": "מעוניין בשיחה",
         "target_status": "IN_PROGRESS",
-        "waiting_on": "CLIENT",
+        # NOAH לפי Spec §16.4 (תוקן ב-migration 0016 / F-24). הכדור אצל
+        # נועה לתאם — לא ממתינים שהלקוח ייצור קשר נוסף.
+        "waiting_on": "NOAH",
         "followup_task_type": "followup",
         "auto_followup_days": 2,
         "sort_order": 2,
@@ -85,7 +87,9 @@ _DEFAULT_CHIPS_V21 = [
         "id": "00000000-0000-0013-0000-000000000006",
         "label": "לחזור בעוד חודש",
         "target_status": "IN_PROGRESS",
-        "waiting_on": "CLIENT",
+        # NOAH לפי Spec §16.4 (תוקן ב-migration 0016 / F-24). הכדור אצל
+        # נועה לחזור — לא ממתינים שהלקוח יזכור לבד.
+        "waiting_on": "NOAH",
         "followup_task_type": "followup",
         "auto_followup_days": 30,
         "sort_order": 5,

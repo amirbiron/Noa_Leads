@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { api, ApiError } from "@/lib/api";
+import { labelTaskType } from "@/lib/hebrew";
 import type { Lead, QuickActionChip } from "@/lib/types";
 
 // צ'יפים לסיכום שיחה — Spec v2.1 §16.4.
@@ -10,6 +11,26 @@ import type { Lead, QuickActionChip } from "@/lib/types";
 // (textarea / mark_proposal_sent modal) — הצ'יפ הוא declarative.
 //
 // מציגים רק chips ש-target_status מאוכלס (אחרת אי אפשר לקרוא ל-apply).
+// אחרי הצלחה — toast קצר עם המשמעות של הפולואפ שנוצר (UX educator).
+
+const TOAST_DURATION_MS = 4500;
+
+function pluralizeDays(days: number): string {
+  if (days === 1) return "מחר";
+  if (days === 2) return "מחרתיים";
+  if (days === 30) return "בעוד חודש";
+  if (days === 60) return "בעוד 60 יום";
+  return `בעוד ${days} ימים`;
+}
+
+function toastMessage(chip: QuickActionChip): string {
+  // chip.followup_task_type ו-auto_followup_days מובטחים non-null אחרי
+  // הפילטר ב-useEffect.
+  const when = pluralizeDays(chip.auto_followup_days!);
+  const action = labelTaskType(chip.followup_task_type!);
+  return `${action} — תזכורת תיווצר ${when}`;
+}
+
 export function QuickActions({
   lead,
   onActionDone,
@@ -20,6 +41,7 @@ export function QuickActions({
   const [chips, setChips] = useState<QuickActionChip[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
 
   useEffect(() => {
     api
@@ -43,11 +65,20 @@ export function QuickActions({
       );
   }, []);
 
+  // ה-toast נעלם אוטומטית אחרי TOAST_DURATION_MS. ה-cleanup חיוני —
+  // אחרת לחיצה חוזרת תרשום setTimeout כפול.
+  useEffect(() => {
+    if (toast === null) return;
+    const t = setTimeout(() => setToast(null), TOAST_DURATION_MS);
+    return () => clearTimeout(t);
+  }, [toast]);
+
   async function applyChip(chip: QuickActionChip) {
     setBusy(chip.id);
     setError(null);
     try {
       await api.applyChip(lead.id, chip.id);
+      setToast(toastMessage(chip));
       onActionDone();
     } catch (err) {
       setError(
@@ -80,6 +111,20 @@ export function QuickActions({
       {error && (
         <div className="text-sm text-state-red bg-state-red/10 rounded-lg px-3 py-2">
           {error}
+        </div>
+      )}
+
+      {/* Toast: לתחתית המסך, מעל ה-BottomNav (z-30 שלו). aria-live כדי
+          שקוראי מסך יקראו את ההודעה. role=status — לא מפריע. */}
+      {toast && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="fixed inset-x-0 bottom-20 z-40 flex justify-center pointer-events-none"
+        >
+          <div className="bg-gray-900 text-white text-sm rounded-full px-4 py-2 shadow-lg max-w-[90vw] text-center pointer-events-auto">
+            {toast}
+          </div>
         </div>
       )}
     </div>

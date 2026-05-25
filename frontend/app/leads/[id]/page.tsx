@@ -8,6 +8,7 @@ import {
   FileText,
   Mail,
   MessageCircle,
+  Pencil,
   Phone,
   Plus,
   Send,
@@ -17,6 +18,7 @@ import { AddProgramModal } from "@/components/AddProgramModal";
 import { AppShell } from "@/components/AppShell";
 import { CloseLeadModal } from "@/components/CloseLeadModal";
 import { DynamicActionButton } from "@/components/DynamicActionButton";
+import { EditLeadModal } from "@/components/EditLeadModal";
 import { PendingBookingCard } from "@/components/PendingBookingCard";
 import { ProgramCard } from "@/components/ProgramCard";
 import { QuickActions } from "@/components/QuickActions";
@@ -68,6 +70,7 @@ export default function LeadDetailPage() {
   const [closeOpen, setCloseOpen] = useState(false);
   const [transferOpen, setTransferOpen] = useState(false);
   const [programOpen, setProgramOpen] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
   const [reopening, setReopening] = useState(false);
 
   async function load() {
@@ -112,6 +115,19 @@ export default function LeadDetailPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
+  // Refetch בחזרה מטאב/אפליקציה אחרת — קריטי לתרחיש פגישה: נועה
+  // עזבה את הדף לטלפון, הפגישה הסתיימה, חוזרת — צריכה לראות את
+  // כפתור "סמני שהפגישה התקיימה" שמופיע אחרי slot_end.
+  useEffect(() => {
+    if (!id) return;
+    function onFocus() {
+      void load();
+    }
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
+
   return (
     <AppShell>
       {loading && (
@@ -152,11 +168,21 @@ export default function LeadDetailPage() {
                     ` · ${labelSubtype(lead.service_subtype)}`}
                 </div>
               </div>
-              {/* תיוג "תקין" (ירוק) מיותר — מצב ירוק הוא ברירת המחדל ואין
-                  צורך לסמן. רק red/orange/gray (אדום/בקרוב/סגור) ראויים badge. */}
-              {inferStateColor(lead) !== "green" && (
-                <StateBadge color={inferStateColor(lead)} />
-              )}
+              <div className="flex items-center gap-2 shrink-0">
+                {/* תיוג "תקין" (ירוק) מיותר — מצב ירוק הוא ברירת המחדל ואין
+                    צורך לסמן. רק red/orange/gray (אדום/בקרוב/סגור) ראויים badge. */}
+                {inferStateColor(lead) !== "green" && (
+                  <StateBadge color={inferStateColor(lead)} />
+                )}
+                <button
+                  onClick={() => setEditOpen(true)}
+                  className="p-1.5 text-gray-400 hover:text-gray-700 active:bg-gray-100 rounded"
+                  aria-label="עריכת פרטי ליד"
+                  title="ערוך"
+                >
+                  <Pencil size={16} aria-hidden />
+                </button>
+              </div>
             </div>
 
             <div className="grid grid-cols-2 gap-2 mt-3 text-xs">
@@ -215,7 +241,11 @@ export default function LeadDetailPage() {
 
           {/* כפתור "מה עכשיו?" — רק לליד פתוח */}
           {!["WON", "LOST", "ARCHIVED"].includes(lead.status) && (
-            <DynamicActionButton lead={lead} onActionDone={load} />
+            <DynamicActionButton
+              lead={lead}
+              activeBooking={activeBooking}
+              onActionDone={load}
+            />
           )}
 
           {/* כפתורי תבנית + העברה — רק לליד פתוח */}
@@ -286,7 +316,7 @@ export default function LeadDetailPage() {
 
           {/* צ'יפים לסיכום שיחה */}
           <div>
-            <SectionHeader title="פעולות מהירות" />
+            <SectionHeader title="סיכומי שיחה" />
             <QuickActions lead={lead} onActionDone={load} />
           </div>
 
@@ -342,6 +372,12 @@ export default function LeadDetailPage() {
             open={programOpen}
             onClose={() => setProgramOpen(false)}
             onCreated={load}
+          />
+          <EditLeadModal
+            lead={lead}
+            open={editOpen}
+            onClose={() => setEditOpen(false)}
+            onSaved={load}
           />
         </>
       )}

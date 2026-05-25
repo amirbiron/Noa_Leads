@@ -167,10 +167,13 @@ async def apply_chip(
     - chip חסר שדות סמנטיים (target_status/waiting_on/followup_task_type/days) → 400.
     - lead לא נמצא → 404.
     - lead סגור → 400 (F-23 guard ברמת ה-API).
-    - ליד ב-BOOKING_PENDING/BOOKED עם בקשת תור פעילה + הצ'יפ משנה את
-      הסטטוס → 400. אחרת הליד היה מאבד סינכרון עם היומן: BOOKING_PENDING
-      היה נושר מ-/dashboard/pending (F-06); BOOKED היה משאיר Google
-      Calendar event פעיל בלי context ב-CRM.
+
+    הערה: ליד BOOKING_PENDING/BOOKED עם booking פעיל *לא* חסום ל-chip
+    apply (החלטת UX — נועה צריכה להיות חופשית לסכם שיחה גם כשיש פגישה
+    תלויה ביומן, למשל "אין מענה" / "לא רלוונטי כרגע" אחרי שהלקוח התקשר
+    לבטל). כש-status נופל מ-BOOKING_PENDING: cascade מסמן את הבקשה
+    הממתינה כ-REJECTED אוטומטית (אחרת היא נשכחת). BOOKED+APPROVED: אין
+    cascade — Google Calendar event אמיתי, נועה תראה ותחליט ידנית.
     """
     chip = await _get_chip_or_404(db, chip_id)
     if not chip.is_active:
@@ -218,40 +221,6 @@ async def apply_chip(
             "לא ניתן להפעיל צ'יפ על ליד סגור. פתחי אותו מחדש קודם."
         )
 
-    # ליד ב-BOOKING_PENDING / BOOKED עם בקשת תור פעילה — chip apply חסום
-    # *תמיד*, גם אם target_status שווה לסטטוס הנוכחי. למה: chip עדיין מעדכן
-    # waiting_on, יוצר followup task, ומגדיר touchpoint — בזמן שיש בקשה
-    # פעילה ביומן שדורשת טיפול ראשון (אישור/דחייה/ביטול). שינוי jbeg על
-    # ליד כזה דורש קודם לסגור את הbooking דרך ה-UI הייעודי.
-    #   - BOOKING_PENDING + pending_approval: הליד נושר מ-/dashboard/pending
-    #     (F-06), הבקשה נשכחת.
-    #   - BOOKED + approved: ה-Google Calendar event נשאר פעיל בלי context.
-    blocking_booking_status: str | None = None
-    if lead.status == LeadStatus.BOOKING_PENDING.value:
-        blocking_booking_status = BookingStatus.PENDING_APPROVAL.value
-    elif lead.status == LeadStatus.BOOKED.value:
-        blocking_booking_status = BookingStatus.APPROVED.value
-
-    if blocking_booking_status is not None:
-        active_booking = (
-            await db.execute(
-                select(Booking.id)
-                .where(
-                    Booking.lead_id == lead_id,
-                    Booking.status == blocking_booking_status,
-                )
-                .limit(1)
-            )
-        ).scalar_one_or_none()
-        if active_booking is not None:
-            if lead.status == LeadStatus.BOOKING_PENDING.value:
-                raise ValidationError(
-                    "יש בקשת תור הממתינה לאישור. אישרי או דחי אותה לפני הפעלת הצ'יפ."
-                )
-            raise ValidationError(
-                "יש פגישה מאושרת בלוח. בטלי או דחי את הפגישה לפני הפעלת הצ'יפ."
-            )
-
     now_utc = datetime.now(timezone.utc)
     due_at = _calc_followup_due_at(now_utc, chip.auto_followup_days)
 
@@ -280,6 +249,44 @@ async def apply_chip(
         raise ValidationError(
             "מצב הליד השתנה תוך כדי הפעולה. רעני את הכרטיס ונסי שוב."
         )
+
+    # Cascade: אם chip הוציא ליד מ-BOOKING_PENDING, יש לדחות את הבקשה
+    # הממתינה. אחרת היא נעלמת מ-/dashboard/pending (sf F-06) למרות שהיא
+    # עדיין PENDING_APPROVAL ב-DB — נשכחת. סמנטית: chip = "סיכמתי, מה
+    # שקרה זה X" — אם X משנה את הסטטוס מבקשה ממתינה, הבקשה עצמה כבר לא
+    # רלוונטית.
+    # לא עושים cascade ל-BOOKED+APPROVED: זה ירצח Google Calendar event
+    # אמיתי. נועה תראה את ה-event ביומן ותחליט אם לבטל ב-UI הייעודי.
+    if (
+        lead.status == LeadStatus.BOOKING_PENDING.value
+        and chip.target_status != LeadStatus.BOOKING_PENDING.value
+    ):
+        rejected_result = await db.execute(
+            update(Booking)
+            .where(
+                Booking.lead_id == lead_id,
+                Booking.status == BookingStatus.PENDING_APPROVAL.value,
+            )
+            .values(
+                status=BookingStatus.REJECTED.value,
+                rejected_at=now_utc,
+            )
+            .returning(Booking.id)
+        )
+        for booking_id in rejected_result.scalars().all():
+            await log_activity(
+                db,
+                lead_id=lead_id,
+                activity_type=ActivityType.MEETING_REJECTED,
+                performed_by=performed_by,
+                content="בקשת תור נדחתה אוטומטית — סיכום שיחה דרך chip",
+                metadata={
+                    "booking_id": str(booking_id),
+                    "chip_id": str(chip.id),
+                    "chip_label": chip.label,
+                    "auto_rejected_by": "chip_apply",
+                },
+            )
 
     # 2a. De-dup: לחיצה חוזרת על אותו צ'יפ (או על צ'יפ אחר עם אותו
     #     followup_task_type) לא צריכה לערום משימות. ה-task הישן superseded

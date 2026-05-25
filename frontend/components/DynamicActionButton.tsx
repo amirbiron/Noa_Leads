@@ -1,14 +1,17 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ArrowLeft } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
-import type { Lead } from "@/lib/types";
+import type { BookingRead, Lead } from "@/lib/types";
 import { ProposalSentConfirmModal } from "./ProposalSentConfirmModal";
 
 // כפתור "מה עכשיו?" — דינמי לפי סטטוס הליד.
 // פעולה אחת ראשית גדולה, מובילה לפעולה הטבעית הבאה.
-function nextAction(lead: Lead): {
+function nextAction(
+  lead: Lead,
+  activeBooking: BookingRead | null,
+): {
   label: string;
   action: string;
   description?: string;
@@ -31,8 +34,15 @@ function nextAction(lead: Lead): {
       return { label: "פולואפ על ההצעה", action: "mark_template_sent" };
     case "BOOKING_PENDING":
       return { label: "אשרי פגישה", action: "approve_meeting" };
-    case "BOOKED":
+    case "BOOKED": {
+      // מציע "סמני שהפגישה התקיימה" רק אחרי שהפגישה הסתיימה (slot_end).
+      // ה-backend ממשיך להחזיר APPROVED past-end booking כל עוד הליד
+      // עדיין BOOKED — פגישות קצרות (<30 דק') ופגישות שעבר זמנן עובדות.
+      if (!activeBooking) return null;
+      const end = new Date(activeBooking.requested_slot_end).getTime();
+      if (Date.now() < end) return null;
       return { label: "סמני שהפגישה התקיימה", action: "log_call_completed" };
+    }
     default:
       return null;
   }
@@ -40,15 +50,34 @@ function nextAction(lead: Lead): {
 
 export function DynamicActionButton({
   lead,
+  activeBooking,
   onActionDone,
 }: {
   lead: Lead;
+  activeBooking: BookingRead | null;
   onActionDone: () => void;
 }) {
+  // Tick לרענון UI כשעובר ה-slot_end בזמן שהמסך פתוח. ה-tick מחושב
+  // ל-זמן המדויק של slot_end (לא polling) — שינוי מצב יחיד ברגע הנכון.
+  const [, forceRender] = useState(0);
+  useEffect(() => {
+    if (
+      lead.status !== "BOOKED" ||
+      !activeBooking ||
+      activeBooking.status !== "approved"
+    ) {
+      return;
+    }
+    const end = new Date(activeBooking.requested_slot_end).getTime();
+    const msUntilEnd = end - Date.now();
+    if (msUntilEnd <= 0) return;  // כבר עבר — אין צורך ב-timer
+    const t = setTimeout(() => forceRender((n) => n + 1), msUntilEnd + 1000);
+    return () => clearTimeout(t);
+  }, [lead.status, activeBooking]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [proposalOpen, setProposalOpen] = useState(false);
-  const next = nextAction(lead);
+  const next = nextAction(lead, activeBooking);
   if (!next) return null;
 
   async function run() {

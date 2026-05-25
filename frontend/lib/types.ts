@@ -242,6 +242,7 @@ export interface LeadCard {
   last_outbound_at: string | null;
   next_action_due_at: string | null;
   has_recent_reply: boolean;
+  last_activity_type: string | null;
 }
 
 export interface ProposalCard extends LeadCard {

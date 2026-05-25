@@ -33,6 +33,9 @@ class LeadCard(BaseModel):
     next_action_due_at: datetime | None
     # האם נכנסה תגובה חדשה לאחרונה (reply boost עדיין פעיל)
     has_recent_reply: bool
+    # המקור של ה-boost — מאפשר ל-frontend להבחין בין "בקשת תור חדשה"
+    # (meeting_requested) לבין "תגובה חדשה" (inbound_message_logged וכו').
+    last_activity_type: str | None
 
 
 # ===== Item ב-"פעולות היום" =====

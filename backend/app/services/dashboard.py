@@ -90,6 +90,7 @@ def _lead_to_card(lead: Lead, now_utc: datetime) -> LeadCard:
         last_outbound_at=lead.last_outbound_at,
         next_action_due_at=lead.next_action_due_at,
         has_recent_reply=_has_recent_reply(lead, now_utc),
+        last_activity_type=lead.last_activity_type,
     )
 
 
