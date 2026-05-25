@@ -31,6 +31,7 @@ from typing import Literal, TypeVar
 
 from anthropic import (
     APIConnectionError,
+    APIError as AnthropicAPIError,
     APITimeoutError,
     AsyncAnthropic,
     InternalServerError,
@@ -180,6 +181,26 @@ class AIClient:
                 # sleep רק כשיש attempt נוסף. backoffs index = attempt-1.
                 if attempt < _MAX_ATTEMPTS:
                     await asyncio.sleep(_BACKOFF_SECONDS[attempt - 1])
+            except AnthropicAPIError as e:
+                # שגיאות Anthropic שאינן retryable: AuthenticationError (bad
+                # API key), BadRequestError / NotFoundError (model לא קיים,
+                # malformed request), PermissionDeniedError, ConflictError,
+                # APIResponseValidationError. כולן מצביעות על bug של
+                # config/code — retry לא יעזור, fallback לאותו מפתח/SDK
+                # ישחזר את אותה שגיאה. ממיר ל-AIError עם type ב-message
+                # כדי שcaller (commit 4/4) ידע מה לסמן ב-log.
+                #
+                # סדר ה-except חשוב: _RETRYABLE לפני AnthropicAPIError, כי
+                # InternalServerError יורש מ-APIError (ויש לעשות retry עליו).
+                logger.error(
+                    "AI non-retryable error on model=%s: %s: %s",
+                    model,
+                    type(e).__name__,
+                    e,
+                )
+                raise AIError(
+                    f"Anthropic {type(e).__name__}: {e}"
+                ) from e
 
         # כל ה-retries נכשלו. fallback ל-FAST אם מותר.
         if fallback_on_error:
@@ -196,7 +217,14 @@ class AIClient:
                         "AI rate limit on fallback model=%s: %s", fast, e
                     )
                     raise AIRateLimitError(str(e)) from e
+                except AnthropicAPIError as e:
+                    # שגיאות SDK שאינן rate-limit — auth/bad-request/וכו'.
+                    # ממיר ל-AIError במפורש (לא להעביר Anthropic exception
+                    # לcaller — חוזה ה-API שלנו הוא AIError/AIRateLimitError בלבד).
+                    last_error = e
                 except Exception as e:
+                    # safety net לכל שגיאה אחרת (timeout במהלך הfallback,
+                    # network שחזר, וכו'). caller יקבל AIError.
                     last_error = e
 
         raise AIError(
