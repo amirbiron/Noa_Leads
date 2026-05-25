@@ -121,6 +121,11 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # סדר: indexes לפני columns/tables. דפוס עקבי בכל ה-repo (ראה
+    # 0001, 0012 וכו'). drop_index לפני drop_table הוא redundant
+    # ב-PostgreSQL (DROP TABLE מסיר אינדקסים אוטומטית) — נשמר לסימטריה
+    # עם create_index ב-upgrade, ולשקיפות במעקב מיגרציות. לא יכשל גם
+    # אם האינדקס כבר נמחק (alembic מטפל ב-IF EXISTS).
     op.drop_index("idx_leads_manual_review", table_name="leads")
     op.drop_index("idx_leads_low_confidence", table_name="leads")
     op.drop_column("leads", "manual_review_needed")
