@@ -13,10 +13,24 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
+
+# OAuth2 scope-drift tolerance. נדרש כי `authorization_url(
+# include_granted_scopes="true")` (הן ב-Calendar והן ב-Gmail) מבקש מ-Google
+# לכלול scopes שהמשתמש כבר אישר. כשמתחברים ל-Gmail אחרי Calendar (או
+# להפך), Google מחזיר ב-token response את *כל* ה-scopes שאי-פעם אישרו,
+# לא רק את אלה של ה-flow הנוכחי. oauthlib מתייחס לכל drift כ-security
+# warning ומכשיל את החילוף עם `Warning: Scope has changed from ... to ...`.
+# הדגל מתועד ב-oauthlib (https://oauthlib.readthedocs.io/) ובמובן הזה הוא
+# אופציה רשמית — לא hack. ערך 'setdefault' כדי לא לדרוס override בסביבה.
+# חייב לקרות לפני שה-Flow נוצר (קוראים ל-`Flow.from_client_config` בעת
+# `_new_flow`), ולכן ב-module-import-time. gmail.py מייבא מהמודול הזה,
+# אז גם ה-flow של Gmail מקבל את הדגל לפני הקריאה.
+os.environ.setdefault("OAUTHLIB_RELAX_TOKEN_SCOPE", "1")
 
 from google.auth.exceptions import RefreshError
 from google.auth.transport.requests import Request
