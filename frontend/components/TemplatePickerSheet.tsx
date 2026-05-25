@@ -42,6 +42,15 @@ export function TemplatePickerSheet({
   const [error, setError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const [copied, setCopied] = useState(false);
+  // נדלק כשנכשלה טעינת תבנית הקנונית (preset mode) — נופלים למסך
+  // manual list עם רשימה מלאה. בלי זה ה-flow נחסם על error בלי דרך
+  // המשתמש להמשיך פרט לסגירה (תיקון bugbot).
+  const [presetFailed, setPresetFailed] = useState(false);
+
+  // האם להציג את ה-manual list view (בחירה מרשימה).
+  // - אם אין presetTemplateId → תמיד manual.
+  // - אם יש presetTemplateId אבל ה-getTemplate/renderTemplate נכשלו → fallback ל-manual.
+  const inManualMode = !presetTemplateId || presetFailed;
 
   useEffect(() => {
     if (!open) return;
@@ -50,36 +59,47 @@ export function TemplatePickerSheet({
     setRendered(null);
     setError(null);
     setTemplates([]);
+    setPresetFailed(false);
 
-    // preset mode — מדלגים על רשימה, טוענים את הקנונית ומקדמים ישר ל-preview.
+    // תמיד טוענים את כל הרשימה הפעילה — בלי סינון channel/audience.
+    // 1. מסנן channel היה גורם ל-email-pref + 404 → רשימה ריקה (תבניות
+    //    email מוסתרות).
+    // 2. גם pick ידני של תבנית "WA" עבור ליד email-pref עובד (forceChannel
+    //    מנצח את template.channel לבניית הקישור).
+    // 3. preload הרשימה גם ב-preset mode הופך fallback ל-instant כש-
+    //    getTemplate/renderTemplate נכשלים — אין refetch.
+    // הרשימה ~10 שורות, זול.
+    const listPromise = api
+      .listTemplates(true)
+      .then((items) => setTemplates(items))
+      .catch((err) => {
+        // נדאג שיהיה error אם הרשימה נכשלת אבל לא נדרוס error קיים מ-
+        // preset שכבר נכשל.
+        setError((prev) =>
+          prev || (err instanceof ApiError ? err.message : "שגיאה בטעינה"),
+        );
+      });
+
     if (presetTemplateId) {
+      // preset path: מנסים לטעון + לרנדר את הקנונית. אם נכשל — fallback
+      // ל-manual list (presetFailed=true). הרשימה ממילא נטענת במקביל.
       api
         .getTemplate(presetTemplateId)
         .then((t) => pickTemplate(t))
-        .catch((err) =>
-          setError(err instanceof ApiError ? err.message : "שגיאה בטעינה"),
-        )
-        .finally(() => setLoading(false));
+        .catch((err) => {
+          setError(err instanceof ApiError ? err.message : "שגיאה בטעינה");
+          setPresetFailed(true);
+        })
+        .finally(() => {
+          // חכים גם לרשימה כדי שכשנעבור ל-fallback היא תהיה מוכנה.
+          void listPromise.finally(() => setLoading(false));
+        });
       return;
     }
 
-    // manual picker — מסונן לפי forceChannel. כשfallback מ-DynamicActionButton
-    // מגיע עם forceChannel='email' (preferred_contact='email' + 404 על
-    // הקנונית), הרשימה צריכה להציג תבניות email — אחרת נועה רואה רק
-    // תבניות WA וה-flow נחסם. ברירת מחדל 'whatsapp' שומרת על ההתנהגות של
-    // הכפתור המשני "בחירת תבנית" (תיקון bugbot).
-    const listChannel: EffectiveChannel = forceChannel ?? "whatsapp";
-    api
-      .listTemplates(true)
-      .then((items) =>
-        setTemplates(items.filter((t) => t.channel === listChannel)),
-      )
-      .catch((err) =>
-        setError(err instanceof ApiError ? err.message : "שגיאה בטעינה"),
-      )
-      .finally(() => setLoading(false));
+    void listPromise.finally(() => setLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, presetTemplateId, forceChannel]);
+  }, [open, presetTemplateId]);
 
   async function pickTemplate(t: Template) {
     setSelected(t);
@@ -89,6 +109,13 @@ export function TemplatePickerSheet({
       setRendered(r);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "שגיאה ברנדור");
+      // אם אנחנו ב-preset path וה-renderTemplate נכשל — נופלים ל-manual,
+      // כדי שהמשתמש יוכל לבחור תבנית אחרת. הרשימה כבר נטענה במקביל
+      // ב-useEffect.
+      if (presetTemplateId && !presetFailed) {
+        setPresetFailed(true);
+        setSelected(null);
+      }
     }
   }
 
@@ -172,7 +199,9 @@ export function TemplatePickerSheet({
 
   if (!open) return null;
 
-  const sheetTitle = presetTemplateId ? "שליחה" : "בחרי תבנית";
+  // inManualMode = אין preset, או שה-preset נכשל ונפלנו ל-fallback.
+  // משפיע על: כותרת ה-sheet, הצגת הרשימה, "בחירת תבנית אחרת".
+  const sheetTitle = inManualMode ? "בחרי תבנית" : "שליחה";
   const ctaIcon =
     effectiveChannel === "email" ? <Mail size={18} aria-hidden /> : <MessageCircle size={18} aria-hidden />;
   const ctaLabel = (() => {
@@ -202,14 +231,14 @@ export function TemplatePickerSheet({
             <div className="text-sm text-gray-400 text-center py-4">טוען…</div>
           )}
 
-          {!loading && !presetTemplateId && templates.length === 0 && (
+          {!loading && inManualMode && templates.length === 0 && (
             <div className="text-sm text-gray-500 text-center py-4">
               אין תבניות פעילות. צרי תבנית מ-/templates.
             </div>
           )}
 
           {!rendered &&
-            !presetTemplateId &&
+            inManualMode &&
             templates.map((t) => (
               <button
                 key={t.id}
@@ -241,8 +270,8 @@ export function TemplatePickerSheet({
                 </div>
               )}
 
-              {/* "בחירת תבנית אחרת" מוסתר במצב preset — אין list לחזור אליה */}
-              {!presetTemplateId && (
+              {/* "בחירת תבנית אחרת" רק במצב manual (כולל אחרי preset fallback) */}
+              {inManualMode && (
                 <button
                   onClick={() => {
                     setSelected(null);

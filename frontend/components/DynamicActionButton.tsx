@@ -76,7 +76,12 @@ function nextAction(
 
 interface SheetState {
   presetId: string | undefined;
-  channel: "whatsapp" | "email";
+  // forceChannel רק כש-preferred_contact='email' — אז נכריח mailto.
+  // ב-WA default: undefined → TemplatePickerSheet יקבע לפי template.channel
+  // (חשוב למשל לתבניות org T2/T8 שהן email מטבען — גם אם ה-preference WA,
+  // הגוף שלהן רשמי ומיועד למייל. שליחת body של email דרך WA תוצאתה
+  // הודעת WA ארוכה ולא מותאמת).
+  forceChannel: "email" | undefined;
   actionType: "mark_template_sent" | "mark_proposal_sent";
 }
 
@@ -121,22 +126,17 @@ export function DynamicActionButton({
     const useEmail = lead.preferred_contact === "email";
     const actionType: SheetState["actionType"] =
       role === "proposal" ? "mark_proposal_sent" : "mark_template_sent";
+    // רק email-pref כופה mailto. אחרת template.channel קובע (T2/T8 = email,
+    // T1/T4/T9 = WA) — מונע שליחת body של email דרך WA או להפך.
+    const forceChannel: SheetState["forceChannel"] = useEmail ? "email" : undefined;
     try {
       const tpl = await api.getTemplateAuto(lead.id, role);
-      setSheet({
-        presetId: tpl.id,
-        channel: useEmail ? "email" : "whatsapp",
-        actionType,
-      });
+      setSheet({ presetId: tpl.id, forceChannel, actionType });
     } catch (err) {
       if (err instanceof ApiError && err.status === 404) {
         // הקנונית בוטלה/נמחקה — fallback ל-manual picker.
         // ה-sheet ייפתח עם רשימה רגילה; נועה תבחר ידנית.
-        setSheet({
-          presetId: undefined,
-          channel: useEmail ? "email" : "whatsapp",
-          actionType,
-        });
+        setSheet({ presetId: undefined, forceChannel, actionType });
       } else {
         setError(err instanceof ApiError ? err.message : "שגיאה בטעינת תבנית");
       }
@@ -201,7 +201,7 @@ export function DynamicActionButton({
             onActionDone();
           }}
           presetTemplateId={sheet.presetId}
-          forceChannel={sheet.channel}
+          forceChannel={sheet.forceChannel}
           actionType={sheet.actionType}
         />
       )}
