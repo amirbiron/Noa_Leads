@@ -70,9 +70,18 @@ async def process_gmail_history(notify_history_id: int) -> None:
             )
             return
 
-        # Start from the LAST history_id we saw. אם אין (חיבור ראשון אחרי
-        # watch), נתחיל מ-notify_history_id-1 כדי לא לפספס את ההווה.
-        start_history_id = row.history_id or str(notify_history_id)
+        # שמירת ה-history_id המקורי (יכול להיות None). expected_old המקורי
+        # נדרש ל-CAS — אסור להחליף ב-str(notify_history_id) כי אז ה-WHERE
+        # היה `history_id = 'X'` ולא יתפוס שורה עם NULL (Postgres NULL != X).
+        # תיקון bugbot: כש-row.history_id=NULL (אחרי _reset_history_id או
+        # לפני watch ראשון), CAS היה rowcount=0 וה-cursor היה נשאר NULL לעד.
+        original_history_id: str | None = row.history_id
+
+        # ל-Gmail API צריך start_history_id non-empty. אם NULL — נתחיל
+        # מ-notify_history_id (לא נפספס שום דבר חדש אבל גם לא נשלוף משהו
+        # ישן יותר; ה-message שגרם ל-webhook עצמו לא מוחזר ע"י history.list
+        # כש-startHistoryId == שלו, אבל webhook הבא יקבל אותו).
+        start_history_id = original_history_id or str(notify_history_id)
 
         try:
             creds = await gmail.get_credentials_or_404(db)
@@ -109,9 +118,12 @@ async def process_gmail_history(notify_history_id: int) -> None:
                 # שגיאה ב-message בודד לא משפיעה על השאר
                 logger.exception("Failed to process Gmail message %s", msg_id)
 
-        # advance history_id (CAS — לא לדרוס webhook מקביל שכבר התקדם)
+        # advance history_id (CAS — לא לדרוס webhook מקביל שכבר התקדם).
+        # מעבירים את original_history_id (יכול להיות None), לא את start_history_id
+        # — כי start עבר fallback ל-notify_history_id וה-CAS חייב לתאר את המצב
+        # האמיתי בDB.
         await _persist_history_id(
-            db, new_id=str(notify_history_id), expected_old=start_history_id
+            db, new_id=str(notify_history_id), expected_old=original_history_id
         )
 
 
@@ -598,12 +610,23 @@ async def _persist_history_id(
     db: AsyncSession, *, new_id: str, expected_old: str | None
 ) -> None:
     """CAS UPDATE — מעדכן history_id רק אם עדיין == expected_old. מונע
-    דריסת cursor חדש יותר ע"י webhook מאוחר."""
+    דריסת cursor חדש יותר ע"י webhook מאוחר.
+
+    כש-expected_old=None (DB מכיל NULL — אחרי reset או לפני watch ראשון),
+    חייבים `IS NULL` ולא `= NULL` — Postgres מחזיר NULL להשוואה עם NULL,
+    ולא TRUE. בלי זה התיקון התופס שאמור להציב cursor ראשון היה rowcount=0,
+    וכל webhook הבא היה ממשיך לפתור מ-NULL בלי לקדם — תיקון bugbot.
+    """
+    if expected_old is None:
+        where_clause = GmailCredentials.history_id.is_(None)
+    else:
+        where_clause = GmailCredentials.history_id == expected_old
+
     result = await db.execute(
         update(GmailCredentials)
         .where(
             GmailCredentials.id == 1,
-            GmailCredentials.history_id == expected_old,
+            where_clause,
         )
         .values(history_id=new_id)
     )
