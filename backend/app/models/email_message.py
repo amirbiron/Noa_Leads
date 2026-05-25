@@ -21,6 +21,18 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.db.base import Base, UUIDPrimaryKeyMixin
 
 
+# ===== processing_status values =====
+# Phase 3 Stage 18 commit 4/4 bugbot fix: בלי הדגל ה-cron לא ידע להבחין
+# בין רשומה שצריכה retry של AI לבין רשומה שכבר במצב סופי (spam/not_business
+# נשארים עם lead_id=NULL לעולם). הקבועים פה ולא ב-app/constants כי שייכים
+# סמנטית רק לטבלה הזו (בניגוד ל-LeadStatus שמשותף ל-API + frontend).
+PROCESSING_STATUS_PENDING = "pending"          # cron יסרוק
+PROCESSING_STATUS_LEAD_CREATED = "lead_created"  # success — ליד תקני
+PROCESSING_STATUS_NOT_BUSINESS = "not_business"  # AI אמר לא-עסקי, יש תווית ב-Gmail
+PROCESSING_STATUS_HEURISTIC_SPAM = "heuristic_spam"  # heuristic דילג לפני AI
+PROCESSING_STATUS_MANUAL_REVIEW = "manual_review"  # MAX retries → ליד עם manual_review_needed
+
+
 class EmailMessage(UUIDPrimaryKeyMixin, Base):
     __tablename__ = "email_messages"
 
@@ -64,6 +76,17 @@ class EmailMessage(UUIDPrimaryKeyMixin, Base):
         Integer, nullable=False, default=0, server_default="0"
     )
 
+    # ראה PROCESSING_STATUS_* למעלה. רק רשומות 'pending' נסרקות ע"י
+    # ה-cron retry_pending_classification. כל מסלול שמסיים עיבוד
+    # (lead_created / not_business / heuristic_spam / manual_review)
+    # חייב לעדכן את השדה — אחרת ה-cron יחזור אליהן עד MAX retries.
+    processing_status: Mapped[str] = mapped_column(
+        String(30),
+        nullable=False,
+        default=PROCESSING_STATUS_PENDING,
+        server_default=PROCESSING_STATUS_PENDING,
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -78,5 +101,12 @@ class EmailMessage(UUIDPrimaryKeyMixin, Base):
             "idx_email_messages_lead",
             "lead_id",
             desc("received_at"),
+        ),
+        # partial index — cron query (`processing_status = 'pending'`).
+        # מקביל למיגרציה 0020, מאפשר ל-alembic autogenerate לא לזהות diff.
+        Index(
+            "idx_email_messages_pending",
+            "classification_retry_count",
+            postgresql_where="processing_status = 'pending'",
         ),
     )

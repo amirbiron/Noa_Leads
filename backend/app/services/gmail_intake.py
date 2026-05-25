@@ -34,7 +34,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.constants import SERVICE_SUBTYPES, ServiceCategory, SourceChannel
 from app.db.session import AsyncSessionLocal
-from app.models.email_message import EmailMessage
+from app.models.email_message import (
+    PROCESSING_STATUS_HEURISTIC_SPAM,
+    PROCESSING_STATUS_LEAD_CREATED,
+    PROCESSING_STATUS_MANUAL_REVIEW,
+    PROCESSING_STATUS_NOT_BUSINESS,
+    PROCESSING_STATUS_PENDING,
+    EmailMessage,
+)
 from app.models.gmail_credentials import GmailCredentials
 from app.schemas.lead import LeadCreate
 from app.services import ai, gmail, leads as leads_service
@@ -154,6 +161,7 @@ async def process_incoming_message(
     if should_skip_ai_classification(from_addr, headers, raw_body):
         logger.info("Skipping AI for spam-heuristic msg %s from=%s", gmail_message_id, from_addr)
         await _apply_filter_label(db, gmail_message_id, creds)
+        # processing_status=heuristic_spam → cron יידלג עליה.
         return await _save_email_message(
             db,
             gmail_message_id=gmail_message_id,
@@ -165,6 +173,7 @@ async def process_incoming_message(
             cleaning_metadata={"skipped_reason": "heuristic_spam"},
             received_at=received_at,
             lead_id=None,
+            processing_status=PROCESSING_STATUS_HEURISTIC_SPAM,
         )
 
     # cleaning + classification
@@ -258,7 +267,14 @@ async def _classify_extract_and_create_lead(
             await _apply_filter_label(db, email_msg.gmail_message_id, creds)
         except Exception:
             logger.exception("Failed to apply filter label to msg %s", email_msg.id)
-        # נסמן את ה-row כ-"מטופל אבל בלי ליד" — lead_id=NULL נשאר.
+        # processing_status=not_business → terminal, cron יידלג. בלי השדה
+        # הזה ה-cron היה סורק אותה לעד (lead_id IS NULL לנצח).
+        await db.execute(
+            update(EmailMessage)
+            .where(EmailMessage.id == email_msg.id)
+            .values(processing_status=PROCESSING_STATUS_NOT_BUSINESS)
+        )
+        await db.commit()
         return
 
     # is_business=True — חולץ פרטים
@@ -378,11 +394,18 @@ async def _create_lead_from_draft(
             update(Lead).where(Lead.id == lead.id).values(**update_values)
         )
 
-    # קשירת email_msg → lead
+    # קשירת email_msg → lead + סימון processing_status סופי. בלי
+    # processing_status המסלול של manual_review (lead_id IS NOT NULL אבל
+    # נוצר אחרי MAX retries) היה זהה ל-lead_created — מקובל מהפרספקטיבה
+    # של ה-cron, אבל מאבד מידע ל-analytics/dashboard בעתיד.
+    final_status = (
+        PROCESSING_STATUS_MANUAL_REVIEW if manual_review
+        else PROCESSING_STATUS_LEAD_CREATED
+    )
     await db.execute(
         update(EmailMessage)
         .where(EmailMessage.id == email_msg.id)
-        .values(lead_id=lead.id)
+        .values(lead_id=lead.id, processing_status=final_status)
     )
 
     # activity record — מציג את הסיבה של AI ב-timeline (UX)
@@ -537,8 +560,14 @@ async def _save_email_message(
     cleaning_metadata: dict | None,
     received_at,
     lead_id,
+    processing_status: str = PROCESSING_STATUS_PENDING,
 ) -> EmailMessage | None:
-    """INSERT email_message. UNIQUE על gmail_message_id → race ייתפס."""
+    """INSERT email_message. UNIQUE על gmail_message_id → race ייתפס.
+
+    processing_status חייב להיות מצוין במפורש בקריאות שמייצגות מצב סופי
+    (heuristic_spam, lead_created, ...) — אחרת ה-cron יסרוק את הרשומה
+    שוב ושוב.
+    """
     msg = EmailMessage(
         lead_id=lead_id,
         gmail_message_id=gmail_message_id,
@@ -550,6 +579,7 @@ async def _save_email_message(
         cleaned_text=cleaned_text,
         cleaning_metadata=cleaning_metadata,
         received_at=received_at,
+        processing_status=processing_status,
     )
     db.add(msg)
     try:

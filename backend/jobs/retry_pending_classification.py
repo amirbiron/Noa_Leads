@@ -19,7 +19,7 @@ from sqlalchemy import select
 
 from app.config import get_settings
 from app.db.session import AsyncSessionLocal
-from app.models.email_message import EmailMessage
+from app.models.email_message import PROCESSING_STATUS_PENDING, EmailMessage
 from app.services import gmail_intake
 from jobs._runner import run_job
 
@@ -35,10 +35,15 @@ async def retry_pending() -> None:
     max_retries = settings.ai_max_classification_retries
 
     async with AsyncSessionLocal() as db:
+        # processing_status='pending' מבדיל בין רשומות שצריכות retry של AI
+        # לבין רשומות סופיות (heuristic_spam, not_business, lead_created,
+        # manual_review). בלי הדגל הזה ה-cron היה סורק גם spam-skip ו-
+        # not_business — כל מייל ניוזלטר היה הופך אחרי 10 דקות לליד עם
+        # manual_review_needed. תיקון bugbot Phase 3 Stage 18 commit 4/4.
         result = await db.execute(
             select(EmailMessage)
             .where(
-                EmailMessage.lead_id.is_(None),
+                EmailMessage.processing_status == PROCESSING_STATUS_PENDING,
                 EmailMessage.classification_retry_count < max_retries,
             )
             .order_by(EmailMessage.created_at.asc())
