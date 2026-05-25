@@ -2,6 +2,7 @@
 שירות templates — CRUD + render לפי ליד.
 """
 
+from typing import Literal
 from uuid import UUID
 
 from sqlalchemy import select
@@ -20,6 +21,29 @@ from app.utils.template_render import (
     extract_placeholders,
     render_template,
 )
+
+
+# ===== Canonical mapping של תפקיד+קהל → seed UUID =====
+# מכווון לכפתורים הראשיים בכרטיס הליד (DynamicActionButton). הלוגיקה
+# בקוד ולא בDB כי spec §9.5 מתיר לנועה למחוק/לערוך תבניות, אבל הזיהוי
+# הקנוני של "תבנית פתיחה לארגון" צריך להישאר יציב. אם UUID זה לא קיים
+# או שהתבנית בוטלה (is_active=False) — הroute מחזיר 404 וה-frontend
+# פותח את TemplatePickerSheet הרגיל (בחירה ידנית).
+#
+# מקור: backend/alembic/versions/2026_05_24_0009-0009_seed_initial_templates.py
+# Roles:
+#   opening           — "פתיחה" (T1 פרטי / T2 ארגון)
+#   proposal          — "הצעה" (T9 פרטי / T8 ארגון)
+#   proposal_followup — "פולואף אחרי הצעה" (T4, audience-agnostic)
+_CANONICAL_TEMPLATES: dict[tuple[str, str | None], UUID] = {
+    ("opening", "organization"): UUID("00000000-0000-0009-0000-000000000002"),
+    ("opening", "private"): UUID("00000000-0000-0009-0000-000000000001"),
+    ("proposal", "organization"): UUID("00000000-0000-0009-0000-000000000008"),
+    ("proposal", "private"): UUID("00000000-0000-0009-0000-000000000009"),
+    ("proposal_followup", None): UUID("00000000-0000-0009-0000-000000000004"),
+}
+
+TemplateRole = Literal["opening", "proposal", "proposal_followup"]
 
 
 # ===================== CRUD =====================
@@ -82,6 +106,47 @@ async def delete_template(db: AsyncSession, template_id: UUID) -> None:
     template = await get_template_or_404(db, template_id)
     template.is_active = False
     await db.commit()
+
+
+# ===================== Auto-select =====================
+
+async def auto_select_template_for_lead(
+    db: AsyncSession, lead_id: UUID, role: TemplateRole
+) -> Template:
+    """
+    מחזיר את התבנית הקנונית לפי תפקיד (opening/proposal/proposal_followup)
+    + audience של הליד (organization אם יש organization_name, אחרת private).
+    proposal_followup audience-agnostic.
+
+    NotFoundError → 404 → frontend נופל ל-TemplatePickerSheet (בחירה ידנית).
+    הסיגנל הזה (404, לא 200+null) מפשט את ה-branching ב-frontend.
+    """
+    lead = await get_lead_or_404(db, lead_id)
+    # organization_name יכול להיות whitespace-only (truthy ב-Python אבל
+    # ה-edit flow מנרמל לעיתים ל-NULL). bool(lead.organization_name) לבד
+    # היה גורם לפיצול בין הסיווג כאן ל-איך הליד באמת מאוחסן/מוצג. strip()
+    # פותר את ה-drift (תיקון bugbot).
+    has_org = bool(lead.organization_name and lead.organization_name.strip())
+    audience = "organization" if has_org else "private"
+    key: tuple[str, str | None] = (
+        (role, None) if role == "proposal_followup" else (role, audience)
+    )
+    canonical_id = _CANONICAL_TEMPLATES.get(key)
+    if canonical_id is None:
+        # שילוב role+audience לא מוגדר. לא צפוי בקריאות מה-frontend (Literal),
+        # אבל אם מישהו יקרא ל-API ישירות עם role לא חוקי — נטפל יפה.
+        raise NotFoundError("אין מיפוי קנוני לתבנית.")
+
+    result = await db.execute(
+        select(Template).where(
+            Template.id == canonical_id,
+            Template.is_active.is_(True),
+        )
+    )
+    template = result.scalar_one_or_none()
+    if template is None:
+        raise NotFoundError("התבנית הקנונית לא קיימת או לא פעילה.")
+    return template
 
 
 # ===================== Render =====================
