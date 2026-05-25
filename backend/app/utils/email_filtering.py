@@ -98,7 +98,11 @@ def should_skip_ai_classification(
     return True
 
 
-_EMAIL_DOMAIN_RE = re.compile(r"@([\w.-]+)$")
+# תומך בשני פורמטים נפוצים של From header:
+# 1. "user@domain.com" — plain
+# 2. "Display Name <user@domain.com>" — RFC 2822, נפוץ ב-Gmail API
+# הregex מחפש @ ואז את ה-domain עד whitespace/>/סוף, בלי anchor $.
+_EMAIL_DOMAIN_RE = re.compile(r"@([\w.-]+?)(?:[>\s]|$)")
 
 
 def _extract_domain(addr: str) -> str | None:

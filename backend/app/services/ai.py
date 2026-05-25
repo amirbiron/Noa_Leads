@@ -12,12 +12,14 @@ summarize_daily) ב-Stage הזה — הן יתווספו ב-Stages 17/18/19 לצ
 - ai_client singleton (lazy).
 
 מדיניות retry — לפי docs/phase-3-ai-token-management.md §retry:
-- שגיאות רשת זמניות → exponential backoff (1s, 2s, 4s), max 3.
+- שגיאות רשת זמניות → 3 attempts עם backoff (1s, 2s) בין הניסיונות.
 - RateLimitError → *לא* retry. raise AIRateLimitError; caller יסמן
   pending_classification=true ו-cron ינסה אחרי דקה. retry על rate
   limit מחמיר את הספירה (כל call מקבל 3× עונשים).
 - אחרי כל ה-retries — אם fallback_on_error=True ולא classifier, ניסיון
   אחד עם FAST model. classifier לא נופל ל-fallback (חייב להישאר עקבי).
+  גם בfallback, RateLimitError מתורגם ל-AIRateLimitError (לא AIError
+  גנרי) כדי שcaller ידע לסמן pending.
 """
 
 from __future__ import annotations
@@ -96,7 +98,12 @@ def resolve_model(purpose: _Purpose) -> str:
 
 # שגיאות שמצדיקות retry. RateLimit *לא* פה — מטופל בנפרד.
 _RETRYABLE = (APIConnectionError, APITimeoutError, InternalServerError)
-_BACKOFF_SECONDS = (1, 2, 4)  # 3 attempts
+
+# 3 ניסיונות, 2 sleep-ים ביניהם. tuple אורך = מספר ה-sleeps
+# (לא מספר הניסיונות). אם נכשל ה-3rd attempt — אין sleep, נופלים
+# ל-fallback או raise.
+_MAX_ATTEMPTS = 3
+_BACKOFF_SECONDS = (1, 2)  # בין attempt 1→2, ובין 2→3
 
 
 class AIClient:
@@ -142,7 +149,7 @@ class AIClient:
         """
         last_error: Exception | None = None
 
-        for attempt, backoff in enumerate(_BACKOFF_SECONDS, start=1):
+        for attempt in range(1, _MAX_ATTEMPTS + 1):
             try:
                 return await self._call_once(model, system, user, max_tokens)
             except RateLimitError as e:
@@ -160,11 +167,12 @@ class AIClient:
                     "AI retryable error on model=%s attempt=%d/%d: %s",
                     model,
                     attempt,
-                    len(_BACKOFF_SECONDS),
+                    _MAX_ATTEMPTS,
                     e,
                 )
-                if attempt < len(_BACKOFF_SECONDS):
-                    await asyncio.sleep(backoff)
+                # sleep רק כשיש attempt נוסף. backoffs index = attempt-1.
+                if attempt < _MAX_ATTEMPTS:
+                    await asyncio.sleep(_BACKOFF_SECONDS[attempt - 1])
 
         # כל ה-retries נכשלו. fallback ל-FAST אם מותר.
         if fallback_on_error:
@@ -173,11 +181,19 @@ class AIClient:
                 logger.info("AI falling back to %s after retries", fast)
                 try:
                     return await self._call_once(fast, system, user, max_tokens)
+                except RateLimitError as e:
+                    # גם ב-fallback — rate limit חייב להיות AIRateLimitError
+                    # כדי שcaller ידע לסמן pending_classification (לא לרצף
+                    # retries שמחמירים את הספירה).
+                    logger.warning(
+                        "AI rate limit on fallback model=%s: %s", fast, e
+                    )
+                    raise AIRateLimitError(str(e)) from e
                 except Exception as e:
                     last_error = e
 
         raise AIError(
-            f"AI call failed after {len(_BACKOFF_SECONDS)} retries: {last_error}"
+            f"AI call failed after {_MAX_ATTEMPTS} attempts: {last_error}"
         ) from last_error
 
     async def _call_once(
