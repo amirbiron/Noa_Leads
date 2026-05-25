@@ -327,8 +327,13 @@ async def _persist_refreshed_token(
 
 async def _mark_auth_invalid(should_alert: bool) -> None:
     """
-    מסמן את ה-credentials כשגויים ושולח התראה חד-פעמית לטלגרם.
-    owner_alert_sent_at מונע ספאם בכל ניסיון refresh עוקב.
+    מסמן את ה-credentials כשגויים. אם should_alert — מנסה לשלוח לטלגרם
+    *לפני* persistence של owner_alert_sent_at — אחרת כשל בטלגרם (network
+    / bot token) משאיר את הflag set והמשתמש לא יקבל התראה לעולם
+    (refresh הבא יראה owner_alert_sent_at!=None ולא ינסה שוב).
+
+    סדר: send → אם הצליח, הוסף לvalues → commit. כשל בtelegram = הflag
+    נשאר None, refresh הבא ינסה שוב.
 
     עובד ב-session נפרד מהקורא — לפני התיקון, הcommit היה מסיים-commit
     transactions של callers (כמו approve_booking) ושובר את הfail-safe.
@@ -337,7 +342,27 @@ async def _mark_auth_invalid(should_alert: bool) -> None:
 
     now = datetime.now(timezone.utc)
     values: dict[str, datetime] = {"auth_invalid_at": now}
+
+    alert_sent_ok = False
     if should_alert:
+        # local import — telegram עשוי לא להיות מוגדר ב-dev
+        from app.services import telegram as telegram_service
+
+        try:
+            alert_sent_ok = bool(
+                await telegram_service.send_message(
+                    "⚠️ <b>חיבור היומן ל-Google פג תוקף</b>\n"
+                    "תורים חדשים לא יסונכרנו ליומן עד שתתחברי מחדש ב-/settings.\n"
+                    "ההודעה הזו תישלח פעם אחת בלבד."
+                )
+            )
+        except Exception:
+            logger.exception(
+                "Failed to send Calendar auth-invalid Telegram alert"
+            )
+            alert_sent_ok = False
+
+    if alert_sent_ok:
         values["owner_alert_sent_at"] = now
 
     async with AsyncSessionLocal() as fresh:
@@ -347,16 +372,6 @@ async def _mark_auth_invalid(should_alert: bool) -> None:
             .values(**values)
         )
         await fresh.commit()
-
-    if should_alert:
-        # local import — telegram עשוי לא להיות מוגדר ב-dev
-        from app.services import telegram as telegram_service
-
-        await telegram_service.send_message(
-            "⚠️ <b>חיבור היומן ל-Google פג תוקף</b>\n"
-            "תורים חדשים לא יסונכרנו ליומן עד שתתחברי מחדש ב-/settings.\n"
-            "ההודעה הזו תישלח פעם אחת בלבד."
-        )
 
 
 # ===================== Status + Disconnect =====================

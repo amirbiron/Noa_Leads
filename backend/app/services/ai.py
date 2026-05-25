@@ -377,8 +377,12 @@ async def extract_lead_from_email(
     fallback_on_error=False — extract רץ על FAST, אין tier נמוך יותר.
     """
     client = get_ai_client()
+    # FAST ישירות (לא resolve_model("classifier")) — extract לא חלק מ-
+    # _Purpose, וב-classifier יש env override (AI_MODEL_EMAIL_CLASSIFIER)
+    # שעלול להעלות את הסיווג ל-quality. extract תמיד נשאר FAST: ניתן
+    # להוסיף override ב-_Purpose בעתיד אם נועה תרצה לכוונן בנפרד.
     text, usage = await client._complete(
-        model=resolve_model("classifier"),  # extract לא חלק מ-_Purpose; משתמש בquick tier
+        model=get_settings().ai_model_fast,
         system=extract_prompts.SYSTEM_PROMPT,
         user=extract_prompts.USER_TEMPLATE.format(
             subject=subject, body=cleaned_body

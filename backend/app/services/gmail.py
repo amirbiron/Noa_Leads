@@ -261,12 +261,43 @@ async def _persist_refreshed_token(
 
 
 async def _mark_auth_invalid(should_alert: bool) -> None:
-    """מסמן ב-DB + שולח התראה חד-פעמית לטלגרם. session נפרד."""
+    """
+    מסמן auth_invalid_at ב-DB. אם should_alert — מנסה לשלוח לטלגרם
+    *לפני* persistence של owner_alert_sent_at — אחרת כשל בטלגרם (network /
+    bot token) משאיר את הflag set והמשתמש לא יקבל התראה לעולם.
+
+    סדר הפעולות:
+    1. שולח טלגרם (אם should_alert).
+    2. אם הצליח — values כולל owner_alert_sent_at; אם נכשל — רק auth_invalid_at.
+    3. commit אטומי ב-session נפרד.
+
+    תוצאה: התראה תשלח שוב בקריאה הבאה ל-_mark_auth_invalid (כשrefresh
+    הבא ייכשל). זה רצוי — owner צריך לדעת.
+    """
     from app.db.session import AsyncSessionLocal
 
     now = datetime.now(timezone.utc)
     values: dict[str, datetime] = {"auth_invalid_at": now}
+
+    alert_sent_ok = False
     if should_alert:
+        from app.services import telegram as telegram_service
+
+        try:
+            alert_sent_ok = bool(
+                await telegram_service.send_message(
+                    "⚠️ <b>חיבור Gmail פג תוקף</b>\n"
+                    "מיילים חדשים לא יסונכרנו עד שתתחברי מחדש ב-/settings.\n"
+                    "ההודעה הזו תישלח פעם אחת בלבד."
+                )
+            )
+        except Exception:
+            logger.exception(
+                "Failed to send Gmail auth-invalid Telegram alert"
+            )
+            alert_sent_ok = False
+
+    if alert_sent_ok:
         values["owner_alert_sent_at"] = now
 
     async with AsyncSessionLocal() as fresh:
@@ -276,15 +307,6 @@ async def _mark_auth_invalid(should_alert: bool) -> None:
             .values(**values)
         )
         await fresh.commit()
-
-    if should_alert:
-        from app.services import telegram as telegram_service
-
-        await telegram_service.send_message(
-            "⚠️ <b>חיבור Gmail פג תוקף</b>\n"
-            "מיילים חדשים לא יסונכרנו עד שתתחברי מחדש ב-/settings.\n"
-            "ההודעה הזו תישלח פעם אחת בלבד."
-        )
 
 
 # ===================== Status + Disconnect =====================
