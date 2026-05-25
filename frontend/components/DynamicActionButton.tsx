@@ -133,13 +133,19 @@ export function DynamicActionButton({
       const tpl = await api.getTemplateAuto(lead.id, role);
       setSheet({ presetId: tpl.id, forceChannel, actionType });
     } catch (err) {
-      if (err instanceof ApiError && err.status === 404) {
-        // הקנונית בוטלה/נמחקה — fallback ל-manual picker.
-        // ה-sheet ייפתח עם רשימה רגילה; נועה תבחר ידנית.
-        setSheet({ presetId: undefined, forceChannel, actionType });
-      } else {
-        setError(err instanceof ApiError ? err.message : "שגיאה בטעינת תבנית");
+      // *כל* כשל ב-getTemplateAuto → fallback ל-manual picker, לא רק 404:
+      // - 404 = הקנונית בוטלה/נמחקה (תרחיש מכוון).
+      // - 500 / network / timeout = transient — manual picker עובד עצמאית
+      //   (api.listTemplates נקרא בתוך ה-sheet, endpoint נפרד; אם הוא
+      //   גם נופל, ה-sheet יציג את ה-error משלו).
+      // לפני התיקון, רק 404 נפל ל-fallback; שאר השגיאות חסמו את ה-flow
+      // הראשי לחלוטין (תיקון bugbot).
+      if (!(err instanceof ApiError && err.status === 404)) {
+        // ב-dev — לסייע ב-debug. ב-prod — לא מציפים את המשתמשת.
+        // eslint-disable-next-line no-console
+        console.warn("getTemplateAuto failed, falling back to manual:", err);
       }
+      setSheet({ presetId: undefined, forceChannel, actionType });
     } finally {
       setBusy(false);
     }
