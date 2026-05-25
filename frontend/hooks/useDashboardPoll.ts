@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiError } from "@/lib/api";
-import { isLoggedIn } from "@/lib/auth";
+import { AUTH_CHANGED_EVENT, isLoggedIn } from "@/lib/auth";
 import type { DashboardPollResponse } from "@/lib/types";
 
 // 60 שניות. לפי spec של אדיר: עד 15 דק' latency מקובל; 60s נותן UX
@@ -33,6 +33,28 @@ export function useDashboardPoll(): PollState & PollControl {
     recentlyUpdatedLeadIds: new Set(),
     toastMessage: null,
   });
+
+  // reactive loggedIn — Provider עולה ב-layout root, *לפני* login,
+  // ב-/login `loggedIn=false`. אחרי setTokens, event "noa:auth-changed"
+  // יורה והhook יעדכן → useEffect הפולינג ירוץ שוב ויפעיל interval.
+  // בלי זה, ה-polling לא היה מתחיל אחרי login עד לreload מלא
+  // (תיקון bugbot).
+  const [loggedIn, setLoggedIn] = useState<boolean>(() =>
+    typeof window !== "undefined" ? isLoggedIn() : false,
+  );
+  useEffect(() => {
+    function recheck() {
+      setLoggedIn(isLoggedIn());
+    }
+    window.addEventListener(AUTH_CHANGED_EVENT, recheck);
+    // storage event — sync בין tabs (logout בtab אחר → polling
+    // יעצור גם בtab הזה).
+    window.addEventListener("storage", recheck);
+    return () => {
+      window.removeEventListener(AUTH_CHANGED_EVENT, recheck);
+      window.removeEventListener("storage", recheck);
+    };
+  }, []);
 
   // ref ולא state — שינוי לא דורש re-render, רק קריאה ב-poll הבא.
   // התחלה: ה-now של ה-mount. ה-poll הראשון יחזיר 0 שינויים כי
@@ -75,9 +97,13 @@ export function useDashboardPoll(): PollState & PollControl {
   }, []);
 
   useEffect(() => {
-    if (!isLoggedIn()) return;
+    if (!loggedIn) return;
 
-    // poll מיידי ב-mount — לא לחכות 60s לסיבוב ראשון.
+    // login רענן — reset ה-since ל-now כדי לא למשוך היסטוריה שקדמה
+    // ל-login (היה גורם ל-toast/refresh על לידים ישנים מהשעה האחרונה).
+    sinceRef.current = new Date().toISOString();
+
+    // poll מיידי ב-mount/לאחר login — לא לחכות 60s לסיבוב ראשון.
     void doPoll();
 
     function startInterval() {
@@ -111,7 +137,7 @@ export function useDashboardPoll(): PollState & PollControl {
       stopInterval();
       document.removeEventListener("visibilitychange", onVisibility);
     };
-  }, [doPoll]);
+  }, [doPoll, loggedIn]);
 
   // auto-dismiss toast אחרי N שניות.
   useEffect(() => {
