@@ -8,6 +8,16 @@ import type { Lead, Template, TemplateRenderResponse } from "@/lib/types";
 
 type EffectiveChannel = "whatsapp" | "email";
 
+// UUIDs קנוניים של תבניות הצעת מחיר (Spec §16.4 + seed 0009). מחובר
+// ל-_CANONICAL_TEMPLATES ב-backend/app/services/templates.py — שינוי
+// שם דורש עדכון בשני המקומות. מוגדר ב-frontend כדי שב-manual mode
+// (כש-/templates/auto החזיר 404 ו-user בוחר חופשי) נדע אם הוא בחר
+// תבנית הצעה אמיתית או רק תבנית פתיחה רגילה. השפעה: actionType.
+const CANONICAL_PROPOSAL_TEMPLATE_IDS: ReadonlySet<string> = new Set([
+  "00000000-0000-0009-0000-000000000008", // T8 "הצעת מחיר - סדנה" (org)
+  "00000000-0000-0009-0000-000000000009", // T9 "הצעת תוכנית - שיקום" (private)
+]);
+
 interface Props {
   lead: Lead;
   open: boolean;
@@ -138,11 +148,22 @@ export function TemplatePickerSheet({
     setTimeout(() => setCopied(false), 1500);
   }
 
-  // ה-channel האפקטיבי: preferred_contact של הליד (דרך forceChannel) מנצח
-  // את template.channel. אם לא הועבר forceChannel — נופלים ל-template.channel
-  // (התנהגות ה-manual picker הקיימת, שמראש מסונן ל-WA).
-  const effectiveChannel: EffectiveChannel =
+  // ה-channel האפקטיבי:
+  // 1. forceChannel (preferred_contact='email') — מנצח תמיד. אם המשתמשת
+  //    קבעה במפורש email על הליד, נכבד את זה גם אם אין email בליד
+  //    (CTA יחסם עם "אין מייל" — היא תעדכן את הליד).
+  // 2. template.channel — ברירת מחדל לפי seed (T2/T8 = email, השאר = WA).
+  // 3. **fallback אוטומטי** (תיקון bugbot): אם ה-template ביקש email אבל
+  //    אין email ויש phone — נשלח ב-WA. רלוונטי לליד org בלי email pref
+  //    (default WA) שהקנונית שלו T2/T8 (email) אבל יש לו רק phone. בלי
+  //    הfallback הזה הכפתור הראשי היה חסום ("אין מייל") למרות שאפשר
+  //    לשלוח. הfallback רץ רק כש-forceChannel לא נכפה — pref מפורש מנצח.
+  const idealChannel: EffectiveChannel =
     forceChannel ?? (selected?.channel === "email" ? "email" : "whatsapp");
+  const effectiveChannel: EffectiveChannel =
+    !forceChannel && idealChannel === "email" && !lead.email && lead.phone
+      ? "whatsapp"
+      : idealChannel;
 
   const hasContact =
     effectiveChannel === "whatsapp" ? Boolean(lead.phone) : Boolean(lead.email);
@@ -194,16 +215,23 @@ export function TemplatePickerSheet({
         }
       }
 
-      // ה-action האפקטיבי: ב-preset mode (קנונית הצליחה לטעון) actionType
-      // מתאים לתבנית — אם role היה 'proposal', הקנונית היא T8/T9. ב-manual
-      // mode (preset failed, או secondary picker) המשתמש בוחר חופשי —
-      // אסור לקדם ל-PROPOSAL_SENT רק כי ה-role המקורי היה 'proposal'.
-      // לכן ב-manual mode כופים mark_template_sent (לא משנה סטטוס מ-
-      // IN_PROGRESS, רק last_outbound + activity + auto-close tasks).
-      // תיקון bugbot.
-      const effectiveActionType =
-        inManualMode && actionType === "mark_proposal_sent"
-          ? "mark_template_sent"
+      // ה-action האפקטיבי: מבוסס על *התבנית הנבחרת*, לא רק על ה-role.
+      // ב-preset mode הקנונית תואמת ל-role — actionType מתאים.
+      // ב-manual mode (preset failed / secondary picker) המשתמשת בוחרת
+      // חופשי:
+      //   - אם בחרה תבנית הצעה קנונית (T8/T9) → mark_proposal_sent
+      //     (מקדם ל-PROPOSAL_SENT, יוצר PROPOSAL_FOLLOWUP task).
+      //   - אחרת → mark_template_sent (לא מקדם סטטוס מ-IN_PROGRESS,
+      //     רק last_outbound + activity + auto-close tasks).
+      // תיקון דו-כיווני של 2 ממצאי bugbot: לא לקדם בטעות ל-PROPOSAL_SENT
+      // עם תבנית פתיחה, אבל גם לא לחסום קידום כשהמשתמשת באמת בוחרת תבנית
+      // הצעה ידנית.
+      const isProposalTemplate = CANONICAL_PROPOSAL_TEMPLATE_IDS.has(selected.id);
+      const effectiveActionType: typeof actionType =
+        inManualMode
+          ? actionType === "mark_proposal_sent" && isProposalTemplate
+            ? "mark_proposal_sent"
+            : "mark_template_sent"
           : actionType;
 
       // רק אחרי שהפתיחה הצליחה (WA) / handoff בוצע (mailto) — סימון במערכת.
