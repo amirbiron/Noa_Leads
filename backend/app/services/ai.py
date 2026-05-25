@@ -91,7 +91,12 @@ def resolve_model(purpose: _Purpose) -> str:
         "proposal_draft": s.ai_model_proposal_draft,
         "dormant_detection": s.ai_model_dormant_detection,
     }
-    if override := override_map.get(purpose):
+    override = override_map.get(purpose)
+    # explicit check: גם None וגם "" מטופלים כ-"לא מוגדר → tier default".
+    # pydantic-settings מפרסר env var ריק (AI_MODEL_X="") כמחרוזת ריקה, לא
+    # None — בלי הצ'ק הזה משתמש שמנסה "לאפס" override היה מקבל ברירה
+    # קבועה של string ריק שפסל הקריאה ל-Anthropic.
+    if override is not None and override.strip():
         return override
 
     # fallback ל-tier
@@ -284,6 +289,15 @@ def get_ai_client() -> AIClient:
     Lazy singleton. נוצר בקריאה ראשונה — אם anthropic_api_key חסר,
     AIClient נוצר אבל יזרוק AIConfigError בקריאה ל-_complete. לא קורס
     ב-startup, וקוד שלא משתמש ב-AI לא מושפע.
+
+    Thread-safety: ה-global לא מוגן בlock. בתרחיש race נדיר (2 קוראים
+    בו-זמנית בpopulate ראשון) יווצרו 2 instances, האחרון "ינצח"
+    וה-stale ייגרר ב-GC. ב-single-user app זה אקדמי בלבד; lock היה
+    דורש get_ai_client async ו-שינוי כל ה-callers. accepted trade-off.
+
+    Settings reload: ה-api_key נלכד בקריאה הראשונה. אם תרגיש need
+    להחליף API key ב-runtime — צריך גם לאפס _ai_client וגם לרענן את
+    get_settings().clear_cache() (התלות הסתויה).
     """
     global _ai_client
     if _ai_client is None:

@@ -113,11 +113,17 @@ def clean_email_body_for_ai(
     lines = [_HORIZ_WS_RE.sub(" ", ln).strip() for ln in lines]
     text = "\n".join(ln for ln in lines if ln).strip()
 
-    # 8. truncation בטיחותי.
+    # 8. truncation בטיחותי. אם max_chars <= len(suffix) (לא במצב הנוכחי
+    # — תקרות 1200+, אבל אם purpose חדש בעתיד יהיה קטן), חיתוך פשוט בלי
+    # suffix כדי לא לייצר slice שלילי שמחזיר טקסט ריק.
     truncated = False
     if len(text) > max_chars:
-        text = text[: max_chars - len(_TRUNCATED_SUFFIX)] + _TRUNCATED_SUFFIX
         truncated = True
+        suffix_len = len(_TRUNCATED_SUFFIX)
+        if max_chars > suffix_len:
+            text = text[: max_chars - suffix_len] + _TRUNCATED_SUFFIX
+        else:
+            text = text[:max_chars]
 
     cleaned_len = len(text)
     metadata = _build_metadata(raw_len, cleaned_len, truncated, purpose)
