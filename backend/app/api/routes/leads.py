@@ -9,6 +9,7 @@ from fastapi import APIRouter, Query
 from app.api.deps import CurrentUser, DbSession
 from app.schemas.activity import ActionRequest, ActivityRead
 from app.schemas.common import PaginatedResponse
+from app.schemas.email_message import EmailMessageRead
 from app.schemas.lead import (
     LeadCloseRequest,
     LeadCreate,
@@ -153,3 +154,12 @@ async def get_timeline(
 ) -> list[ActivityRead]:
     activities = await leads_service.get_timeline(db, lead_id)
     return [ActivityRead.model_validate(a) for a in activities]
+
+
+@router.get("/{lead_id}/emails", response_model=list[EmailMessageRead])
+async def get_lead_emails(
+    lead_id: UUID, db: DbSession, user: CurrentUser
+) -> list[EmailMessageRead]:
+    """מיילים נכנסים שקושרו לליד (Spec §20.10). מהחדש לישן."""
+    emails = await leads_service.get_lead_emails(db, lead_id)
+    return [EmailMessageRead.model_validate(e) for e in emails]
