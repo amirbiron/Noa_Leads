@@ -61,6 +61,9 @@ class Settings(BaseSettings):
     google_client_id: str | None = None
     google_client_secret: str | None = None
     google_redirect_uri: str | None = None
+    # Phase 3 Stage 17: redirect_uri נפרד ל-Gmail OAuth (scope אחר →
+    # callback אחר). נדרש לרשום ב-Google Cloud Console.
+    gmail_redirect_uri: str | None = None
     gmail_pubsub_topic: str | None = None
 
     # מפתח Fernet להצפנת tokens של Google ב-DB. ייצור:
