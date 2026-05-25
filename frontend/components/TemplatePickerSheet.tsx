@@ -100,10 +100,22 @@ export function TemplatePickerSheet({
       try {
         const tpl = await api.getTemplate(presetTemplateId);
         if (cancelled) return;
-        // pickTemplate ב-await — אחרת ה-finally של ה-orchestrator היה
-        // נסגר לפני renderTemplate, ו-loading היה מתפנה כשה-UI עדיין
-        // לא היה ב-preview state. תיקון bugbot.
-        await pickTemplate(tpl);
+        // render inline (לא דרך pickTemplate) — pickTemplate לא יכול
+        // לבדוק את ה-cancelled flag הזה (סקופ של useEffect), ובלי הבדיקה
+        // renderTemplate איטי שמסתיים אחרי close/preset-change היה דורס
+        // את ה-UI עם preview ישן (תיקון bugbot stale race).
+        try {
+          const r = await api.renderTemplate(tpl.id, lead.id);
+          if (cancelled) return;
+          setSelected(tpl);
+          setRendered(r);
+        } catch (err) {
+          if (cancelled) return;
+          setError(err instanceof ApiError ? err.message : "שגיאה ברנדור");
+          // render נכשל אחרי ש-getTemplate הצליח — fallback ל-manual.
+          // הרשימה כבר נטענת במקביל, אז המעבר instant.
+          setPresetFailed(true);
+        }
       } catch (err) {
         if (cancelled) return;
         setError(err instanceof ApiError ? err.message : "שגיאה בטעינה");
@@ -123,6 +135,11 @@ export function TemplatePickerSheet({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, presetTemplateId]);
 
+  // נקראת רק מ-manual list click (לא מ-useEffect ה-preset path).
+  // ה-preset path מבצע render inline עם cancellation. כאן user-initiated,
+  // ה-race דומה אבל פחות שכיח (כל קליק מתחיל render חדש; אם user מקליק
+  // מהר תבניות שונות ויש latency משתנה, ייתכן שתבנית ישנה תדרוס חדשה —
+  // edge case לא מטופל עכשיו, לא הועלה ע"י bugbot).
   async function pickTemplate(t: Template) {
     setSelected(t);
     setError(null);
@@ -131,13 +148,6 @@ export function TemplatePickerSheet({
       setRendered(r);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "שגיאה ברנדור");
-      // אם אנחנו ב-preset path וה-renderTemplate נכשל — נופלים ל-manual,
-      // כדי שהמשתמש יוכל לבחור תבנית אחרת. הרשימה כבר נטענה במקביל
-      // ב-useEffect.
-      if (presetTemplateId && !presetFailed) {
-        setPresetFailed(true);
-        setSelected(null);
-      }
     }
   }
 
