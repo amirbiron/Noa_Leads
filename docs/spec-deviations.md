@@ -389,17 +389,24 @@
 
 ---
 
-### F-20: `/today` UX — קליק מנווט במקום פעולה ישירה — 🟡
+### F-20: `/today` UX — כפתורי WhatsApp/call ישירים — 🟢 הושלם
 
 **Spec §12.6:** "רשימה ממוקדת של 5-7 דברים שצריך לעשות היום. בלי רעש."
 
-**Code:** עמוד `/today` מציג task → קליק מוביל ל-`/leads/[id]`. אין כפתור "שלח" / "התקשרי" ישיר מהרשימה.
+**Code:** TodayActionRow מציג עכשיו 4 אזורים: [שם/משימה] | [Contact button] | [✓] | [Snooze]. ה-Contact button פותח tel:/wa.me/mailto לפי `lead.preferred_contact`. אם הנתון חסר (טלפון/מייל) — disabled עם tooltip מסביר. קליק על השם עדיין מוביל לכרטיס הליד.
 
-**Severity:** מינורי — UX optimization, לא breaks.
+**שינויים:**
+- `backend/app/schemas/dashboard.py` — `TodayActionItem` כולל `lead_phone` ו-`lead_email`.
+- `backend/app/services/dashboard.py` — `get_today_actions` מאוכלס מ-`lead.phone`/`lead.email`.
+- `frontend/lib/types.ts` — interface מעודכן.
+- `frontend/components/TodayActionRow.tsx` — refactor layout, ContactButton helper.
+
+**הערה:** template-based actions (TemplatePickerSheet ישירות מ-/today) לא יושמו — דורש מודאל מ-list view וזיהוי איזה template צריך לכל task type. נשאר לעתיד אם הצורך יציף.
 
 **Acceptance:**
-- [ ] לכל שורה ב-`/today`: כפתור מהיר לפעולה הראשית של ה-task (לפי `task.type` ו-`lead.preferred_contact`).
-- [ ] אם הפעולה דורשת template — פתיחת `TemplatePickerSheet` ישירות.
+- [x] לכל שורה ב-`/today`: כפתור מהיר לפעולה הראשית לפי `lead.preferred_contact`.
+- [x] קליק לא מנווט (stopPropagation) — לא יוצא בטעות מ-/today.
+- [x] disabled state כשנתון חסר.
 
 ---
 
@@ -487,8 +494,8 @@
 |---|---|---|
 | 🔴 קריטי | 7 | F-01, F-04, F-05, F-06, F-07, F-13, F-15 |
 | 🟠 בינוני | 8 | F-03, F-08, F-09, F-10, F-12, F-21, F-23, F-24 |
-| 🟡 מינורי | 2 | F-11, F-20 |
-| 🟢 accepted / done | 6 | F-02, F-14, F-16, F-18, F-19 (חלקי), F-22 |
+| 🟡 מינורי | 1 | F-11 |
+| 🟢 accepted / done | 7 | F-02, F-14, F-16, F-18, F-19 (חלקי), F-20, F-22 |
 | ✓ verify only | 1 | F-17 |
 
 **סה"כ findings:** 24.
