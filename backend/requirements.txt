@@ -25,6 +25,12 @@ bcrypt>=4.1.0,<5.0
 httpx==0.28.1
 anthropic==0.42.0
 
+# ===== Phase 3 Stage 16: ניקוי תוכן מייל לפני AI =====
+# beautifulsoup4 לפרסור HTML. lxml = parser מהיר; fallback ל-html.parser
+# אם lxml לא זמין (נדיר ב-Python 3.12, אבל הקוד מטפל גם בלעדיו).
+beautifulsoup4==4.12.3
+lxml==5.3.0
+
 # ===== Cryptography =====
 # Fernet להצפנת tokens של Google ב-DB. כבר transitively של python-jose,
 # אבל נדרש מפורש כי app/utils/encryption.py מייבא ישירות.

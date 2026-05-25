@@ -29,13 +29,9 @@ async def intake_manual(
     return await intake_service.intake_manual(db, payload, user.id)
 
 
-# ===== Email webhook — skeleton =====
-# חיבור Gmail Pub/Sub יושלם בשלב מאוחר יותר עם OAuth + Pub/Sub setup.
-# נשמר כאן כ-placeholder כדי שה-route יהיה רשום ולא תהיה הפתעה.
-
-@router.post("/email", status_code=202)
-async def intake_email() -> dict[str, str]:
-    return {
-        "status": "accepted",
-        "message": "אינטגרציית Gmail עוד לא פעילה — webhook יישמר ל-debugging.",
-    }
+# הערה: ה-placeholder הקודם של /intake/email הוסר.
+# קליטה מ-Gmail עוברת דרך POST /webhooks/gmail (Pub/Sub Push),
+# עקבי עם /webhooks/google-calendar. ראה:
+# - backend/app/api/routes/gmail_webhook.py
+# - backend/app/services/gmail_intake.py
+# - docs/spec-deviations.md (deviation 22.3 → /webhooks/gmail).

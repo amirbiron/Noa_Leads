@@ -318,6 +318,24 @@ export const api = {
   disconnectGoogle: () =>
     fetcher<void>("/google/disconnect", { method: "POST" }),
 
+  // ----- Gmail (Phase 3 Stage 17) -----
+  getGmailStatus: () =>
+    fetcher<{
+      connected: boolean;
+      google_account_email?: string | null;
+      history_id?: string | null;
+      watch_expiration?: string | null;
+      filter_label_name?: string | null;
+      connected_at?: string | null;
+      auth_invalid: boolean;
+    }>("/google-gmail/status"),
+
+  startGmailAuth: () =>
+    fetcher<{ auth_url: string }>("/google-gmail/auth/start"),
+
+  disconnectGmail: () =>
+    fetcher<void>("/google-gmail/disconnect", { method: "POST" }),
+
   // ----- Booking page (ציבורי, ללא auth) -----
   getBookingPageInfo: (token: string) =>
     fetcher<BookingPageInfo>(`/booking/${token}`, { retryAuth: false }),

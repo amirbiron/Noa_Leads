@@ -12,6 +12,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
+import { GmailConnectionSection } from "@/components/GmailConnectionSection";
 import { GoogleCalendarSection } from "@/components/GoogleCalendarSection";
 import { SectionHeader } from "@/components/SectionHeader";
 import { api, ApiError } from "@/lib/api";
@@ -99,7 +100,10 @@ export default function SettingsPage() {
       {me?.role === "owner" && (
         <>
           <SectionHeader title="אינטגרציות" />
-          <GoogleCalendarSection />
+          <div className="space-y-2">
+            <GoogleCalendarSection />
+            <GmailConnectionSection />
+          </div>
         </>
       )}
 

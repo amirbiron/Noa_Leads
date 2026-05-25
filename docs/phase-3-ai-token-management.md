@@ -116,6 +116,35 @@ email_id=<id>, purpose=<classification|summary|extraction>, raw_len=<תווים 
   3. לשמור את הליד עם דגל `pending_classification=true`
   4. ב-job חוזר אחרי 60 שניות יטופל
 
+### AIError retry — limit + manual review fallback
+
+`AIError` (network/server, *לא* rate-limit) **אסור** לטפל ב-"treat as business" — חצי שעה של שגיאות API יכול להציף את המערכת ב-50+ ניוזלטרים+ספאם כלידים.
+
+ההתנהגות הנכונה (Spec §20.13):
+
+1. **on `AIError`** → לשמור ב-`email_messages` עם `classification_retry_count=0`. *לא ליצור ליד* בשלב הזה.
+2. **cron `retry_pending_classification`** (כל דקה) — מעבד מחדש; כל ניסיון מעלה את ה-count.
+3. **אחרי `AI_MAX_CLASSIFICATION_RETRIES` כישלונות** (default 10):
+   - ליצור ליד עם דגל `manual_review_needed=True`.
+   - לעצור את ה-retry loop.
+   - נועה רואה סימן ויזואלי בכרטיס ועוברת ידנית.
+
+הספי 10 שמרני בכוונה (10 דקות לתקלת API להתאושש). שינוי דרך `AI_MAX_CLASSIFICATION_RETRIES` env var.
+
+### Low-confidence classification — dual path
+
+`is_business=True` עם `confidence` נמוך (Spec §20.12):
+
+- `confidence >= AI_CLASSIFY_CONFIDENCE_THRESHOLD` (default 0.7) → ליד רגיל.
+- `confidence <` threshold → ליד עם דגל `low_confidence_classification=True`. נועה רואה סימן ויזואלי בכרטיס ("AI לא בטוח — בדוק").
+- `is_business=False` → תווית Gmail בלבד, לא יוצרים ליד.
+
+הסיבה: §8.4 — false negative גרוע מ-false positive.
+
+### תווית "סוננו" ב-Gmail
+
+`AI_FILTER_LABEL_NAME` env var, default `"סוננו אוטומטית"`. שינוי השם לא retroactive על מיילים שכבר תוייגו (Spec §20.11).
+
 ---
 
 ## סינון לפני AI — חיסכון של 40%+ מהקריאות

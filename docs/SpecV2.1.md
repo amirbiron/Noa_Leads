@@ -1215,7 +1215,36 @@ email_messages:
   - raw_html (לתצוגה ול-debug)
   - cleaned_text (מה שנשלח ל-AI)
   - cleaning_metadata (purpose, ratio, truncated, timestamp)
+  - classification_retry_count (לעקיבה אחרי retries — §20.13)
 ```
+
+### 20.11 שם תווית "סוננו" ב-Gmail
+
+ה-classifier מוסיף תווית Gmail למיילים שסוננו (`is_business=False`). שם התווית הוא **configurable** דרך env var:
+
+- `AI_FILTER_LABEL_NAME` — default `"סוננו אוטומטית"`
+
+**הערה לאדמין:** שינוי שם התווית לא מתעדכן retroactively על מיילים שכבר תוייגו. חודשי המעבר ידרשו ניקוי ידני (ב-Gmail UI) או script חד-פעמי.
+
+### 20.12 Low-confidence classification — dual path
+
+לפי §8.4: "פנייה עסקית סוננה בטעות → נשארת ב-Gmail עם תווית". false negative גרוע יותר מ-false positive. לכן הclassifier יוצר ליד גם כשהוא לא לגמרי בטוח:
+
+- `confidence >= 0.7` ו-`is_business=True` → ליד רגיל.
+- `confidence < 0.7` ו-`is_business=True` → ליד עם דגל `low_confidence_classification=True`. נועה רואה סימן ויזואלי בכרטיס ("AI לא בטוח — בדוק").
+- `is_business=False` → תווית Gmail בלבד (לא יוצרים ליד). נועה רואה ב-Gmail.
+
+ה-threshold (`0.7`) ניתן לכוונון עתידי דרך `AI_CLASSIFY_CONFIDENCE_THRESHOLD` env var. הדגל ב-DB גם משמש כסיגנל לכיוונון: כמה מהלידים המסומנים `low_confidence` באמת היו עסקיים?
+
+### 20.13 AIError retry — limit + manual review fallback
+
+כש-API חוזר עם שגיאה שאינה rate-limit (timeout, server error), אסור לטפל ב"treat as business" — חצי שעה של שגיאות API יכול להציף את המערכת ב-50+ ניוזלטרים+ספאם כלידים. במקום:
+
+1. `on AIError` → לשמור ב-`email_messages` עם `classification_retry_count=0`. *לא ליצור ליד*.
+2. `retry_pending_classification` cron (כל דקה) מעבד מחדש; כל ניסיון מעלה את ה-count.
+3. אחרי **10 retries כושלים** (`AI_MAX_CLASSIFICATION_RETRIES`) → ליצור ליד עם דגל `manual_review_needed=True`. נועה תקבל סימן ויזואלי לעבור ידנית.
+
+הספי `10` שמרני בכוונה — נותן 10 דקות לתקלת API להתאושש. שינוי דרך env var.
 
 ---
 
@@ -1557,6 +1586,7 @@ PATCH  /settings/service-rates
 - הוספת סעיף 28 - הבחנה בין פאזות
 - הסרת `release_stale_locks` מטבלת ה-cron jobs (§23): מערכת חד-משתמש עם cron jobs פנימיים — אין race ראלי שמצדיק את המנגנון. תועדה בהחלטה ב-`docs/spec-deviations.md` F-14 + F-22.
 - תיקון §16.4: waiting_on של "מעוניין בשיחה" ו"לחזור בעוד חודש" שונה מ-CLIENT ל-NOAH. הכדור אצל נועה (לתאם / לחזור), לא אצל הלקוח. תועד ב-F-24.
+- הוספת §20.11 (תווית "סוננו" configurable דרך `AI_FILTER_LABEL_NAME`), §20.12 (low_confidence_classification dual-path — §8.4 false-negative protection), §20.13 (AIError retry limit עם `manual_review_needed` fallback אחרי 10 כישלונות, מונע שיטפון לידים בזמן שגיאת API).
 
 **v2.0 (מאי 2026):**
 - איחוד כל המסמכים (product-spec, tech-spec, templates-seed, ai-token-management) למסמך אחד

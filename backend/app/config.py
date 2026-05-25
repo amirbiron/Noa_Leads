@@ -39,12 +39,36 @@ class Settings(BaseSettings):
 
     # ===== Anthropic =====
     anthropic_api_key: str | None = None
+    # Phase 3 Stage 16: model resolution. defaults לפי spec §19.1.
+    # ה-overrides per use case nullable — אם None יורש מ-FAST/QUALITY.
+    # שינוי מודל בעתיד = env var ב-Render, בלי deploy.
+    ai_model_fast: str = "claude-haiku-4-5"
+    ai_model_quality: str = "claude-sonnet-4-6"
+    ai_model_email_classifier: str | None = None
+    ai_model_daily_summary: str | None = None
+    ai_model_proposal_draft: str | None = None
+    ai_model_dormant_detection: str | None = None
+    # Spec §20.11: תווית Gmail למיילים שסוננו ע"י AI כספאם.
+    # שינוי אינו retroactive — ראה admin note ב-§20.11.
+    ai_filter_label_name: str = "סוננו אוטומטית"
+    # Spec §20.12: סף בטחון. מתחת לזה — ליד מסומן low_confidence_classification.
+    ai_classify_confidence_threshold: float = 0.7
+    # Spec §20.13: כמה פעמים cron retry_pending_classification ינסה לפני
+    # יצירת ליד עם manual_review_needed=True. שמרני (10 דקות לAPI להתאושש).
+    ai_max_classification_retries: int = 10
 
     # ===== Google =====
     google_client_id: str | None = None
     google_client_secret: str | None = None
     google_redirect_uri: str | None = None
+    # Phase 3 Stage 17: redirect_uri נפרד ל-Gmail OAuth (scope אחר →
+    # callback אחר). נדרש לרשום ב-Google Cloud Console.
+    gmail_redirect_uri: str | None = None
     gmail_pubsub_topic: str | None = None
+    # אופציונלי: service account email שחתום על ה-OIDC token של Pub/Sub
+    # Push (Phase 3 Stage 18 commit 4/4). אם מוגדר, ה-webhook יאמת
+    # שה-token חתום ע"י ה-SA הספציפי. אם None — רק חתימת Google תיאמת.
+    gmail_pubsub_service_account: str | None = None
 
     # מפתח Fernet להצפנת tokens של Google ב-DB. ייצור:
     # `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`
