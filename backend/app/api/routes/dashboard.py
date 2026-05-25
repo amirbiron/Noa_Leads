@@ -2,7 +2,7 @@
 Dashboard routes — מסך הבית, פעולות היום, ממתין, הצעות, תובנות.
 """
 
-from datetime import datetime, timezone
+from datetime import datetime
 
 from fastapi import APIRouter, Query
 
@@ -76,12 +76,15 @@ async def poll(
     אם ה-client שולח naive datetime (ללא tz), Pydantic מקבל; אבל
     ההשוואה ב-DB עם timestamptz columns תכשל. בפועל ה-frontend תמיד
     שולח server_time שחזר עם tz (UTC).
+
+    ה-service מחזיר server_time שלקח *לפני* הqueries — anchor שמונע
+    איבוד rows שcommit במהלך חלון הquery (תיקון bugbot).
     """
-    new_leads, replies = await dashboard_service.poll_dashboard_delta(
+    new_leads, replies, server_time = await dashboard_service.poll_dashboard_delta(
         db, since=since
     )
     return DashboardPollResponse(
         new_leads=new_leads,
         leads_with_inbound_replies=replies,
-        server_time=datetime.now(timezone.utc),
+        server_time=server_time,
     )

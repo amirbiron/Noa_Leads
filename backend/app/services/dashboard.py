@@ -287,8 +287,9 @@ _POLL_DELTA_LIMIT = 20
 
 async def poll_dashboard_delta(
     db: AsyncSession, *, since: datetime
-) -> tuple[list[LeadCard], list[LeadCard]]:
-    """Delta מאז `since`: לידים חדשים + לידים שקיבלו תגובה.
+) -> tuple[list[LeadCard], list[LeadCard], datetime]:
+    """Delta מאז `since`: לידים חדשים + לידים שקיבלו תגובה. מחזיר גם
+    את ה-server_time anchor ל-poll הבא.
 
     שני queries נפרדים:
     - new_leads: `created_at > since`.
@@ -297,10 +298,21 @@ async def poll_dashboard_delta(
       לא ב-replies). סינון לסגורים — אין טעם להציג toast על תגובה
       לליד WON/LOST/ARCHIVED.
 
-    מחזיר LeadCards (ולא Lead ORMs) — _lead_to_card מחשב state_color
-    דרך derive_state_color, שצריך now_utc תואם לקריאת ה-route.
+    **server_time anchor — תיקון bugbot:** captured *לפני* הqueries,
+    לא אחרי. אם נחזיר datetime.now() אחרי הqueries, rows שעמדו ב-commit
+    במהלך חלון הqueries יהיו עם created_at < הערך המוחזר, אבל
+    uncommitted בתחילת הquery → לא ב-result set. ה-client היה משדר
+    since=server_time בפול הבא ומפספס אותם. capture לפני = anchor
+    מוקדם מספיק שכל commit שיקרה במהלך הqueries יקבל created_at >
+    anchor → poll הבא יתפוס. trade-off: edge case של duplicate
+    בpoll הבא (overlap window ~ms), זניח.
+
+    **sequential ולא asyncio.gather — תיקון bugbot:** AsyncSession של
+    SQLAlchemy לא בטוח ל-overlapping operations על אותו connection.
+    asyncio.gather גרם ל-asyncpg "another operation is in progress"
+    אקראית. ההפרש ~10-30ms ל-poll — זניח לחווית UI.
     """
-    now_utc = datetime.now(timezone.utc)
+    server_time = datetime.now(timezone.utc)
 
     new_q = (
         select(Lead)
@@ -318,18 +330,14 @@ async def poll_dashboard_delta(
         .order_by(Lead.last_inbound_at.desc())
         .limit(_POLL_DELTA_LIMIT)
     )
-    # asyncio.gather במקום sequential — חוסך ~50ms per poll, גם אם כל
-    # query יחיד מהיר. ב-PG WAL replication latency זה משמעותי לחווית
-    # ה-UI.
-    import asyncio
-    new_res, replies_res = await asyncio.gather(
-        db.execute(new_q), db.execute(replies_q)
-    )
-    new_cards = [_lead_to_card(l, now_utc) for l in new_res.scalars().all()]
+    new_res = await db.execute(new_q)
+    replies_res = await db.execute(replies_q)
+
+    new_cards = [_lead_to_card(l, server_time) for l in new_res.scalars().all()]
     reply_cards = [
-        _lead_to_card(l, now_utc) for l in replies_res.scalars().all()
+        _lead_to_card(l, server_time) for l in replies_res.scalars().all()
     ]
-    return new_cards, reply_cards
+    return new_cards, reply_cards, server_time
 
 
 # ===================== ממתין לטיפול =====================
