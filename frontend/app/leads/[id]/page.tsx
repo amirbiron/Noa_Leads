@@ -47,14 +47,18 @@ import type {
   StateColor,
 } from "@/lib/types";
 
+// צבע מצב — לוגיקה פשוטה (Spec §12.9):
+// - gray: סטטוס סופי.
+// - orange: יש task שעבר את due_at שלו.
+// - green: ברירת מחדל.
+// אדום שמור לתרחישים קריטיים עתידיים — שום branch לא מחזיר אותו כעת.
+// real-time check על due_at, לא תלוי ב-lead.needs_attention (שcron מעדכן
+// כל 15 דק' — היה latency). חייב להישאר עקבי עם derive_state_color ב-backend.
 function inferStateColor(lead: Lead): StateColor {
   if (["WON", "LOST", "ARCHIVED"].includes(lead.status)) return "gray";
-  if (lead.needs_attention) return "red";
   if (lead.next_action_due_at) {
     const due = new Date(lead.next_action_due_at).getTime();
-    const now = Date.now();
-    if (due <= now) return "red";
-    if (due <= now + 48 * 60 * 60 * 1000) return "orange";
+    if (due <= Date.now()) return "orange";
   }
   return "green";
 }

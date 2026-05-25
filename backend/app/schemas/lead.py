@@ -219,6 +219,10 @@ class LeadListItem(BaseModel):
     priority_level: str
     preferred_contact: str
     needs_attention: bool
+    # נחשף ל-frontend לחישוב צבע real-time (Spec §12.9 — overdue → orange).
+    # ה-list view מסתמך על זה במקום needs_attention (שmark_overdue cron
+    # מעדכן כל 15 דק' — latency שיוצר מצבים סותרים בין list לכרטיס).
+    next_action_due_at: datetime | None
     last_inbound_at: datetime | None
     last_outbound_at: datetime | None
     updated_at: datetime
