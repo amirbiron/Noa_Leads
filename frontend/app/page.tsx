@@ -10,6 +10,7 @@ import { LeadCardRow } from "@/components/LeadCardRow";
 import { SectionHeader } from "@/components/SectionHeader";
 import { TodayActionRow } from "@/components/TodayActionRow";
 import { api, ApiError } from "@/lib/api";
+import { plusOneIsoDate, toIsraelISODate } from "@/lib/date";
 import { labelCategory } from "@/lib/hebrew";
 import type { DailySummary, HomeDashboard } from "@/lib/types";
 
@@ -265,37 +266,16 @@ function DailySummaryBubble({ summary }: { summary: DailySummary }) {
 }
 
 // משווה summary_date (YYYY-MM-DD מ-Israel TZ ב-backend) לתאריך הנוכחי
-// ב-Asia/Jerusalem.
-//
-// תיקון bugbot: הגרסה הקודמת השתמשה ב-`new Date(\`${date}T00:00:00\`)` +
-// `setDate(+1)` שעובדים ב-browser local TZ. למשתמש ב-UTC+9 (Tokyo) זה
-// היה מוסיף 24 שעות מ-midnight-Tokyo, וקריאת IL אחרי המרה היתה נופלת
-// יום אחורה — "yesterday" סומן בטעות כ-"older".
-//
-// תיקון: ארתימטיקת תאריך טהורה דרך `Date.UTC(y, m, d+1)` (timezone-agnostic;
-// מטפל ברולאובר חודש/שנה אוטומטית) + השוואת מחרוזות YYYY-MM-DD. אין
-// המרת TZ באמצע — אין מקום לבאג של DST/local-TZ.
+// ב-Asia/Jerusalem. שני העזר (toIsraelISODate, plusOneIsoDate) ב-
+// `lib/date.ts` — מתועדים שם, כולל ההיגיון מאחורי options מפורשות
+// ו-UTC arithmetic.
 function computeIsStale(
   summaryDate: string,
 ): "today" | "yesterday" | "older" {
-  // היום בישראל כ-YYYY-MM-DD. en-CA מחזיר ISO format קבוע (לא תלוי
-  // locale) — בלי החלפת רכיבים ידנית.
-  const todayIsrael = new Date().toLocaleDateString("en-CA", {
-    timeZone: "Asia/Jerusalem",
-  });
+  const todayIsrael = toIsraelISODate();
   if (summaryDate === todayIsrael) return "today";
   if (plusOneIsoDate(summaryDate) === todayIsrael) return "yesterday";
   return "older";
-}
-
-function plusOneIsoDate(iso: string): string {
-  // "YYYY-MM-DD" → "YYYY-MM-(DD+1)" עם רולאובר חודש/שנה. Date.UTC הוא
-  // calculation ב-UTC טהור — לא מושפע מ-browser local TZ. הפלט גם
-  // מתפרש כ-ISO date — לא מומר ל-IL כי אין צורך (השוואה ל-todayIsrael
-  // שגם הוא מחרוזת YYYY-MM-DD).
-  const [y, m, d] = iso.split("-").map(Number);
-  const next = new Date(Date.UTC(y, m - 1, d + 1));
-  return next.toISOString().slice(0, 10);
 }
 
 function SummaryStat({
