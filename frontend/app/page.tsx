@@ -10,6 +10,7 @@ import { LeadCardRow } from "@/components/LeadCardRow";
 import { SectionHeader } from "@/components/SectionHeader";
 import { TodayActionRow } from "@/components/TodayActionRow";
 import { api, ApiError } from "@/lib/api";
+import { plusOneIsoDate, toIsraelISODate } from "@/lib/date";
 import { labelCategory } from "@/lib/hebrew";
 import type { DailySummary, HomeDashboard } from "@/lib/types";
 
@@ -215,6 +216,18 @@ function DailySummaryBubble({ summary }: { summary: DailySummary }) {
       timeZone: "Asia/Jerusalem",
     },
   );
+
+  // ה-cron של 19:00 IL רץ פעם ביום. בבוקר שאחרי (לפני 19:00 הבא),
+  // get_latest_daily_summary מחזיר את הסיכום של אתמול. בלי label דינמי
+  // המשתמש רואה "סיכום יומי · יום שני 25 במאי" ביום שלישי בבוקר וחושב
+  // שזה היום (בלבול שדווח). מציינים מפורשות "אתמול" / "היום" / תאריך מלא.
+  // השוואת תאריכים ב-Asia/Jerusalem TZ כדי שלא תהיה הזזה בלילה.
+  const isStale = computeIsStale(summary.summary_date);
+  const titlePrefix = isStale === "today"
+    ? "סיכום היום"
+    : isStale === "yesterday"
+      ? "סיכום אתמול"
+      : "סיכום";
   return (
     <div className="bg-gradient-to-bl from-indigo-500/10 to-indigo-500/5 border border-indigo-300/40 rounded-xl p-4">
       <div className="flex items-start gap-3">
@@ -224,11 +237,13 @@ function DailySummaryBubble({ summary }: { summary: DailySummary }) {
           aria-hidden
         />
         <div className="min-w-0 w-full">
-          <div className="text-xs text-gray-600 mb-1">סיכום יומי · {dateLabel}</div>
+          <div className="text-xs text-gray-600 mb-1">
+            {titlePrefix} · {dateLabel}
+          </div>
           <div className="grid grid-cols-2 gap-2 mt-2">
             <SummaryStat
               value={summary.new_leads_today}
-              label="פניות חדשות היום"
+              label="פניות חדשות"
             />
             <SummaryStat
               value={summary.tasks_done_today}
@@ -236,7 +251,7 @@ function DailySummaryBubble({ summary }: { summary: DailySummary }) {
             />
             <SummaryStat
               value={summary.tasks_for_tomorrow}
-              label="משימות למחר"
+              label="משימות ליום שאחרי"
             />
             <SummaryStat
               value={summary.urgent_open}
@@ -248,6 +263,19 @@ function DailySummaryBubble({ summary }: { summary: DailySummary }) {
       </div>
     </div>
   );
+}
+
+// משווה summary_date (YYYY-MM-DD מ-Israel TZ ב-backend) לתאריך הנוכחי
+// ב-Asia/Jerusalem. שני העזר (toIsraelISODate, plusOneIsoDate) ב-
+// `lib/date.ts` — מתועדים שם, כולל ההיגיון מאחורי options מפורשות
+// ו-UTC arithmetic.
+function computeIsStale(
+  summaryDate: string,
+): "today" | "yesterday" | "older" {
+  const todayIsrael = toIsraelISODate();
+  if (summaryDate === todayIsrael) return "today";
+  if (plusOneIsoDate(summaryDate) === todayIsrael) return "yesterday";
+  return "older";
 }
 
 function SummaryStat({

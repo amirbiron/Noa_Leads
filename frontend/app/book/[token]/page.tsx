@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import { AlertCircle, Calendar, CheckCircle2, Clock, Info } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
+import { toIsraelISODate } from "@/lib/date";
 import { labelCategory, labelSubtype, pluralizeMinutes } from "@/lib/hebrew";
 import type {
   AvailabilityResponse,
@@ -18,19 +19,11 @@ import { cn } from "@/lib/utils";
 const ISRAEL_TZ = "Asia/Jerusalem";
 const DAYS_TO_SHOW = 14;
 
-function formatDate(d: Date): string {
-  // YYYY-MM-DD בTZ ישראל. en-CA מפיק נטיב YYYY-MM-DD ועם timeZone
-  // ה-Intl מטפל בהמרה בלי round-trip של string דרך new Date — שזה היה
-  // שביר (toLocaleString("en-US") מחזיר פורמט implementation-defined,
-  // ובדפדפנים מסוימים `new Date("12/25/2026, 15:00:00")` נכשל → NaN,
-  // והמפתחות בlookup נשברו ולא תאמו את ה-days[].date מהAPI).
-  return d.toLocaleDateString("en-CA", {
-    timeZone: ISRAEL_TZ,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  });
-}
+// formatDate היה wrapper מקומי; הוחלף ב-toIsraelISODate המשותף ב-
+// `lib/date.ts`. הוא משתמש באותו `en-CA` עם options מפורשות (year/
+// month/day) — כך שהפלט יציב לפורמט YYYY-MM-DD בכל הדפדפנים, ללא
+// חשש מ-CLDR defaults שעלולים להחזיר M/d/yyyy.
+const formatDate = toIsraelISODate;
 
 function shortDayName(d: Date): string {
   return d.toLocaleDateString("he-IL", {
