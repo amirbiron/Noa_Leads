@@ -215,6 +215,18 @@ function DailySummaryBubble({ summary }: { summary: DailySummary }) {
       timeZone: "Asia/Jerusalem",
     },
   );
+
+  // ה-cron של 19:00 IL רץ פעם ביום. בבוקר שאחרי (לפני 19:00 הבא),
+  // get_latest_daily_summary מחזיר את הסיכום של אתמול. בלי label דינמי
+  // המשתמש רואה "סיכום יומי · יום שני 25 במאי" ביום שלישי בבוקר וחושב
+  // שזה היום (בלבול שדווח). מציינים מפורשות "אתמול" / "היום" / תאריך מלא.
+  // השוואת תאריכים ב-Asia/Jerusalem TZ כדי שלא תהיה הזזה בלילה.
+  const isStale = computeIsStale(summary.summary_date);
+  const titlePrefix = isStale === "today"
+    ? "סיכום היום"
+    : isStale === "yesterday"
+      ? "סיכום אתמול"
+      : "סיכום";
   return (
     <div className="bg-gradient-to-bl from-indigo-500/10 to-indigo-500/5 border border-indigo-300/40 rounded-xl p-4">
       <div className="flex items-start gap-3">
@@ -224,11 +236,13 @@ function DailySummaryBubble({ summary }: { summary: DailySummary }) {
           aria-hidden
         />
         <div className="min-w-0 w-full">
-          <div className="text-xs text-gray-600 mb-1">סיכום יומי · {dateLabel}</div>
+          <div className="text-xs text-gray-600 mb-1">
+            {titlePrefix} · {dateLabel}
+          </div>
           <div className="grid grid-cols-2 gap-2 mt-2">
             <SummaryStat
               value={summary.new_leads_today}
-              label="פניות חדשות היום"
+              label="פניות חדשות"
             />
             <SummaryStat
               value={summary.tasks_done_today}
@@ -236,7 +250,7 @@ function DailySummaryBubble({ summary }: { summary: DailySummary }) {
             />
             <SummaryStat
               value={summary.tasks_for_tomorrow}
-              label="משימות למחר"
+              label="משימות ליום שאחרי"
             />
             <SummaryStat
               value={summary.urgent_open}
@@ -248,6 +262,29 @@ function DailySummaryBubble({ summary }: { summary: DailySummary }) {
       </div>
     </div>
   );
+}
+
+// משווה summary_date (YYYY-MM-DD מ-Israel TZ ב-backend) לתאריך הנוכחי
+// ב-Asia/Jerusalem. בלי הצמדה ל-TZ ספציפי, ההשוואה הייתה תלויה ב-locale
+// של הדפדפן ויכולה ליפול מעבר לחצות בלילה.
+function computeIsStale(
+  summaryDate: string,
+): "today" | "yesterday" | "older" {
+  // היום בישראל כ-YYYY-MM-DD. en-CA מחזיר ISO format קבוע (לא תלוי
+  // locale) — בלי החלפת רכיבים ידנית.
+  const todayIsrael = new Date().toLocaleDateString("en-CA", {
+    timeZone: "Asia/Jerusalem",
+  });
+  if (summaryDate === todayIsrael) return "today";
+  // אתמול = subtract day-of-month, אבל ב-end-of-month זה נשבר. נעשה
+  // דרך Date arithmetic: ניקח את ה-summary date + 1 יום ונשווה.
+  const next = new Date(`${summaryDate}T00:00:00`);
+  next.setDate(next.getDate() + 1);
+  const nextIsrael = next.toLocaleDateString("en-CA", {
+    timeZone: "Asia/Jerusalem",
+  });
+  if (nextIsrael === todayIsrael) return "yesterday";
+  return "older";
 }
 
 function SummaryStat({
