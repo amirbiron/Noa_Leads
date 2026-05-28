@@ -611,7 +611,7 @@ ACTIVITY_TYPES = [
 ```
 היי {customer_name},
 
-מקווה שאת/ה בסדר. רציתי לוודא שההצעה ל{service_subtype} שלחתי לך הגיעה ושהיא ברורה.
+מקווה שאת/ה בסדר. רציתי לוודא שההצעה ל{service_subtype} ששלחתי לך הגיעה ושהיא ברורה.
 
 יש לך שאלות? אשמח לעזור 🌸
 
@@ -1603,6 +1603,7 @@ PATCH  /settings/service-rates
 - הסרת `release_stale_locks` מטבלת ה-cron jobs (§23): מערכת חד-משתמש עם cron jobs פנימיים — אין race ראלי שמצדיק את המנגנון. תועדה בהחלטה ב-`docs/spec-deviations.md` F-14 + F-22.
 - תיקון §16.4: waiting_on של "מעוניין בשיחה" ו"לחזור בעוד חודש" שונה מ-CLIENT ל-NOAH. הכדור אצל נועה (לתאם / לחזור), לא אצל הלקוח. תועד ב-F-24.
 - הוספת §20.11 (תווית "סוננו" configurable דרך `AI_FILTER_LABEL_NAME`), §20.12 (low_confidence_classification dual-path — §8.4 false-negative protection), §20.13 (AIError retry limit עם `manual_review_needed` fallback אחרי 10 כישלונות, מונע שיטפון לידים בזמן שגיאת API).
+- תיקון §9.5 תבנית 4 - "שלחתי" → "ששלחתי" (תיקון דקדוקי, סנכרון עם ה-seed הקיים)
 
 **v2.0 (מאי 2026):**
 - איחוד כל המסמכים (product-spec, tech-spec, templates-seed, ai-token-management) למסמך אחד
