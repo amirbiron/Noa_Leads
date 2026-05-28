@@ -381,6 +381,34 @@ ACTIVITY_TYPES = [
 ]
 ```
 
+### 5.12 טבלת `daily_summaries`
+
+```sql
+CREATE TABLE daily_summaries (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    summary_date DATE NOT NULL UNIQUE,        -- תאריך ישראלי; row אחד ליום
+    new_leads_today INTEGER NOT NULL DEFAULT 0,    -- לידים חדשים ב-24h שלפני הריצה
+    tasks_done_today INTEGER NOT NULL DEFAULT 0,   -- משימות שהושלמו ב-24h שלפני הריצה
+    tasks_for_tomorrow INTEGER NOT NULL DEFAULT 0, -- משימות שמועד יעדן יום-הלוח של מחר
+    urgent_open INTEGER NOT NULL DEFAULT 0,        -- לידים פתוחים עם needs_attention (נקודת-זמן)
+    generated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+```
+
+singleton (אין `user_id` — נועה היחידה). מאוכלסת ע"י cron יומי ב-19:00 ישראל
+שכותב **snapshot קבוע** של היום, והדשבורד שולף את ה-row האחרון (ראה §12.4, §19,
+ו-F-07 ב-`spec-deviations.md`). הטבלה נוספה במימוש ולא הופיעה ב-§5 עד גרסה זו.
+
+**מודל החלון:**
+- המטריקות הרטרוספקטיביות (`new_leads_today`, `tasks_done_today`) נספרות בחלון
+  של **24 שעות אחורה מרגע הריצה** (`now-24h → now`), לא לפי גבולות חצות. כך ליד
+  שנכנס אחרי שעת הריצה (למשל 20:00) נכנס לסיכום של *מחר*, ואין פער שבו ליד נופל
+  בין הכיסאות.
+- `tasks_for_tomorrow` (צופה קדימה) נספרת לפי **יום-לוח מלא של מחר**
+  (`[מחר 00:00, מחרתיים 00:00)` בשעון ישראל).
+- **first-write-wins** (`ON CONFLICT (summary_date) DO NOTHING`): ה-snapshot של
+  היום נכתב פעם אחת בלבד; re-run באותו תאריך לא משכתב אותו — הסיכום קבוע.
+
 ---
 
 ## 6. סטטוסים ומעברי סטטוס
