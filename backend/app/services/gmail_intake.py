@@ -401,7 +401,11 @@ async def _create_lead_from_draft(
     # "שלחי תבנית פתיחה" (WA) במקום "השב במייל".
     try:
         lead_create = LeadCreate(
-            full_name=draft.full_name or "ללא שם",
+            full_name=(
+                draft.full_name
+                or _resolve_name_from_address(email_msg.from_address)
+                or "ללא שם"
+            ),
             phone=phone,
             email=draft.email,
             service_category=category_enum,
@@ -416,7 +420,11 @@ async def _create_lead_from_draft(
             draft.email,
         )
         lead_create = LeadCreate(
-            full_name=draft.full_name or "ללא שם",
+            full_name=(
+                draft.full_name
+                or _resolve_name_from_address(email_msg.from_address)
+                or "ללא שם"
+            ),
             phone=phone,
             email=None,
             service_category=category_enum,
@@ -493,7 +501,7 @@ async def _create_manual_review_lead(
     manual_review_needed=True, full_name מ-From header.
     נועה תשלים פרטים.
     """
-    full_name = _name_from_address(email_msg.from_address) or "לבדיקה ידנית"
+    full_name = _resolve_name_from_address(email_msg.from_address) or "לבדיקה ידנית"
     draft = ai.LeadDraft(
         full_name=full_name,
         email=email_msg.from_address,
@@ -720,21 +728,78 @@ def _modify_labels_blocking(creds, msg_id: str, add_label_ids: list[str]) -> Non
 
 _DISPLAY_NAME_RE = re.compile(r"^\s*(?:\"?([^\"<]+?)\"?\s*)?<([^>]+)>\s*$")
 
+# prefixes גנריים של תיבות שירות — אינם מייצגים שם אדם. אם זה ה-local-part,
+# מדלגים ממקור 3 (From) למקור 4 (domain). ראה SpecV2.1 §19.2.
+_GENERIC_LOCAL_PARTS = {
+    "noreply", "no-reply", "donotreply", "info", "contact",
+    "sales", "office", "admin", "mail", "hello", "support",
+}
 
-def _name_from_address(addr: str | None) -> str | None:
-    """'John Doe <jd@x.com>' → 'John Doe'. 'jd@x.com' → 'jd' (best-effort)."""
+# domains עם TLD בן שני רכיבים. משמש כדי לחלץ את label הארגון:
+# ב-"xyz.co.il" הארגון הוא "xyz" (parts[-3]) ולא "co" (parts[-2]).
+# דגש ישראלי + כמה נפוצים. ניתן להרחבה.
+_TWO_PART_TLDS = {
+    "co.il", "org.il", "net.il", "ac.il", "gov.il", "muni.il", "k12.il",
+    "co.uk", "org.uk", "com.au", "co.nz",
+}
+
+
+def _email_from_address(addr: str) -> str | None:
+    """מחלץ את כתובת האימייל מתוך 'Name <a@b>' או 'a@b'."""
+    m = _DISPLAY_NAME_RE.match(addr)
+    if m and m.group(2):
+        return m.group(2).strip()
+    return addr.strip() if "@" in addr else None
+
+
+def _second_level_domain(addr: str | None) -> str | None:
+    """מקור 4 — label הארגון מתוך ה-domain.
+
+    'merav@xyz.co.il' → 'xyz', 'a@gmail.com' → 'gmail',
+    'a@mail.xyz.co.il' → 'xyz'. אם הזנב הוא TLD דו-חלקי → parts[-3],
+    אחרת parts[-2].
+    """
     if not addr:
         return None
+    email = _email_from_address(addr)
+    if not email or "@" not in email:
+        return None
+    domain = email.split("@", 1)[1].lower().strip().strip(".")
+    parts = [p for p in domain.split(".") if p]
+    if len(parts) < 2:
+        return None
+    tail2 = ".".join(parts[-2:])
+    if tail2 in _TWO_PART_TLDS:
+        return parts[-3] if len(parts) >= 3 else None
+    return parts[-2]
+
+
+def _resolve_name_from_address(addr: str | None) -> str | None:
+    """מקורות 3→4 לחילוץ שם מכתובת השולח (ראה SpecV2.1 §19.2).
+
+    3. display name מתוך 'Name <a@b>'.
+       אחרת local-part (נקודות/קווים תחתונים → רווחים) — אלא אם הוא גנרי
+       (info/contact/noreply וכו').
+    4. אחרת second-level domain ('xyz.co.il' → 'xyz').
+    """
+    if not addr:
+        return None
+    # מקור 3א: display name
     m = _DISPLAY_NAME_RE.match(addr)
     if m and m.group(1):
-        return m.group(1).strip()
-    # email בלבד — לקחת את ה-local-part
-    if "@" in addr:
-        local = addr.split("@", 1)[0]
-        # אם יש נקודה/קו תחתון — להחליף ברווחים
-        local = local.replace(".", " ").replace("_", " ")
-        return local or None
-    return None
+        name = m.group(1).strip()
+        if name:
+            return name
+    # מקור 3ב: local-part — אם אינו תיבת שירות גנרית
+    email = _email_from_address(addr)
+    if email and "@" in email:
+        local = email.split("@", 1)[0]
+        if local.lower() not in _GENERIC_LOCAL_PARTS:
+            cleaned = local.replace(".", " ").replace("_", " ").strip()
+            if cleaned:
+                return cleaned
+    # מקור 4: second-level domain
+    return _second_level_domain(addr)
 
 
 def _ms_to_datetime(epoch_ms: int):
