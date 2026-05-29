@@ -18,6 +18,9 @@ export default function HomePage() {
   const [data, setData] = useState<HomeDashboard | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  // הערך לא בשימוש — רק מאלץ re-render דקתי כדי שבועת הסיכום תיעלם
+  // אוטומטית ב-07:00 (§12.4), ראה ה-useEffect של הטיימר למטה.
+  const [, setMinuteTick] = useState(0);
 
   async function load() {
     setError(null);
@@ -42,6 +45,15 @@ export default function HomePage() {
     if (pollVersion === 0) return; // השינוי הראשוני (mount) כבר טוען
     void load();
   }, [pollVersion]);
+
+  // טיימר דקתי — מאלץ re-render כדי שבועת הסיכום היומי תיעלם אוטומטית
+  // ב-07:00 (§12.4) גם אם העמוד נשאר פתוח בלי רענון. לא משתמשים ב-pollVersion
+  // כי הוא עולה רק על delta מהשרת (לידים חדשים) — בלילה שקט הוא לא יזוז.
+  // העלות זניחה (setState ריק כל דקה); אין fetch.
+  useEffect(() => {
+    const id = setInterval(() => setMinuteTick((t) => t + 1), 60_000);
+    return () => clearInterval(id);
+  }, []);
 
   return (
     <AppShell title="בית">
