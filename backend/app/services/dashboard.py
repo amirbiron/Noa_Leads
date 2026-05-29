@@ -540,6 +540,9 @@ async def get_weekly_insights(db: AsyncSession) -> WeeklyInsights:
                 [TaskStatus.OPEN.value, TaskStatus.SNOOZED.value]
             ),
             Task.due_at <= now_utc,
+            # §19 D.1: dormant_suggestion פסיבי (archive/no_action) לא נספר
+            # כ"לא טופל בזמן" — הוא המלצה מכוונת, לא עבודה שנדחתה.
+            surfaceable_task_condition(),
         )
         .correlate(Lead)
         .exists()

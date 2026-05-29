@@ -418,6 +418,10 @@ async def list_stuck_tasks(db: AsyncSession) -> list[tuple[Task, Lead]]:
             ),
             Task.due_at <= stuck_threshold,
             Lead.status.notin_([s.value for s in CLOSED_LEAD_STATUSES]),
+            # §19 D.1: dormant_suggestion פסיבי (archive/no_action) לא נחשב
+            # "תקוע" — נוצר עם due_at=now ולכן הופך 7+ ימים תוך שבוע, אבל
+            # "תמיד להציג לא תמיד להקפיץ" חל גם כאן (מסלול push רביעי).
+            surfaceable_task_condition(),
         )
         .order_by(Task.due_at.asc())
     )
