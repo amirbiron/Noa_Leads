@@ -412,6 +412,7 @@ async def _create_lead_from_draft(
             service_subtype=subtype,
             source_channel=SourceChannel.EMAIL,
             source_detail=draft.subject_summary,
+            lead_message=draft.subject_summary,  # תוכן הפנייה — תקציר ה-AI
             preferred_contact=PreferredContact.EMAIL,
         )
     except ValidationError:
@@ -431,6 +432,7 @@ async def _create_lead_from_draft(
             service_subtype=subtype,
             source_channel=SourceChannel.EMAIL,
             source_detail=draft.subject_summary,
+            lead_message=draft.subject_summary,  # תוכן הפנייה — תקציר ה-AI
             preferred_contact=PreferredContact.EMAIL,
         )
 

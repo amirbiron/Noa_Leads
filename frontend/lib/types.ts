@@ -124,6 +124,7 @@ export interface Lead {
   closed_value: string | null;
   actual_hours: string | null;
   personal_note: string | null;
+  lead_message: string | null;  // תוכן הפנייה
   booking_token: string;
   created_at: string;
   updated_at: string;
@@ -213,6 +214,7 @@ export interface LeadCreate {
   preferred_contact?: PreferredContact;
   priority_level?: PriorityLevel;
   personal_note?: string | null;
+  lead_message: string;  // תוכן הפנייה — חובה בטופס הידני
 }
 
 // ===== Activity =====

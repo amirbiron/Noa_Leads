@@ -80,6 +80,7 @@ async def create_lead(
         priority_level=str(payload.priority_level),
         owner_id=owner_id,
         personal_note=payload.personal_note,
+        lead_message=payload.lead_message,
         status=LeadStatus.NEW.value,
         waiting_on="NOAH",
     )
