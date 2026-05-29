@@ -68,6 +68,10 @@ export default function LeadsPage() {
       .finally(() => setLoading(false));
   }, [statusFilter, search, pollVersion]);
 
+  // סינון פעיל = יש חיפוש או סטטוס נבחר. מבדיל בין "אין לידים בכלל" (מערכת ריקה)
+  // ל"הסינון לא החזיר תוצאות" — שני מצבי empty-state שונים.
+  const hasActiveFilter = Boolean(search) || Boolean(statusFilter);
+
   return (
     <AppShell title={`לידים${total ? ` (${total})` : ""}`}>
       {/* פילטרים */}
@@ -109,12 +113,18 @@ export default function LeadsPage() {
           {error}
         </div>
       )}
-      {!loading && !error && items.length === 0 && (
-        <EmptyState
-          title={search ? "לא נמצאו התאמות" : "אין לידים עדיין"}
-          hint="לחיצה על הכפתור הכחול בפינה לפתיחת ליד חדש."
-        />
-      )}
+      {!loading && !error && items.length === 0 &&
+        (hasActiveFilter ? (
+          <EmptyState
+            title="לא נמצאו תוצאות"
+            hint="נסי לשנות את הסינון או לנקות אותו."
+          />
+        ) : (
+          <EmptyState
+            title="אין לידים עדיין"
+            hint="לחיצה על הכפתור הכחול בפינה לפתיחת ליד חדש."
+          />
+        ))}
 
       <ul className="space-y-2">
         {items.map((lead) => {
@@ -139,7 +149,7 @@ export default function LeadsPage() {
                   )}
                   {/* badge "גיל" (§12.1) — דחוף לקצה הפנימי של השורה. */}
                   <span className="ms-auto text-xs text-gray-500 shrink-0">
-                    {formatLeadAge(lead.last_outbound_at, lead.created_at)}
+                    {formatLeadAge(lead.last_activity_at, lead.created_at)}
                   </span>
                 </div>
                 <div className="mt-1 text-sm text-gray-600 truncate">

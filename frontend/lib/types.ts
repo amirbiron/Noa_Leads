@@ -87,8 +87,9 @@ export interface LeadListItem {
   next_action_due_at: string | null;
   last_inbound_at: string | null;
   last_outbound_at: string | null;
+  last_activity_at: string | null;  // מקור ל-badge "גיל" (§12.1) — מכל מקור
   closed_at: string | null;  // לתצוגת "נסגר ב-" בארכיון
-  created_at: string;  // ל-badge "גיל" (§12.1)
+  created_at: string;  // fallback ל-badge "גיל" אם אין activities
   updated_at: string;
 }
 
@@ -116,6 +117,7 @@ export interface Lead {
   last_inbound_at: string | null;
   last_outbound_at: string | null;
   last_activity_type: string | null;
+  last_activity_at: string | null;  // מקור ל-badge "גיל" (§12.1) — מכל מקור
   reply_boost_until: string | null;
   proposal_sent_at: string | null;
   dormant_flag: boolean;
@@ -262,7 +264,8 @@ export interface LeadCard {
   next_action_due_at: string | null;
   has_recent_reply: boolean;
   last_activity_type: string | null;
-  created_at: string;  // ל-badge "גיל" (§12.1)
+  last_activity_at: string | null;  // מקור ל-badge "גיל" (§12.1) — מכל מקור
+  created_at: string;  // fallback ל-badge "גיל" אם אין activities
 }
 
 export interface ProposalCard extends LeadCard {
@@ -331,8 +334,9 @@ export interface TodayActionItem {
   // F-20: לכפתור פעולה ישיר ב-/today (tel: / wa.me / mailto:).
   lead_phone: string | null;
   lead_email: string | null;
-  // ל-badge "גיל" (§12.1) — מקור: last_outbound_at→created_at של הליד.
   last_outbound_at: string | null;
+  // ל-badge "גיל" (§12.1) — מקור: last_activity_at→created_at של הליד.
+  last_activity_at: string | null;
   created_at: string;
 }
 

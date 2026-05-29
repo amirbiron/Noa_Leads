@@ -104,6 +104,12 @@ class Lead(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         DateTime(timezone=True), nullable=True
     )
     last_activity_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    # זמן הפעולה האחרונה מכל מקור (לקוח/נועה) — מקור ל-badge "גיל" (§12.1).
+    # מתעדכן מרכזית ב-log_activity בכל יצירת activity. בניגוד ל-last_outbound_at
+    # שהוא רק outbound של נועה. nullable: לידים ישנים לפני ה-backfill / edge.
+    last_activity_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     # עד מתי הליד "חם" בעקבות תגובה — קופץ לראש הדשבורד
     reply_boost_until: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True

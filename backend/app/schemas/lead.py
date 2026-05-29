@@ -203,6 +203,7 @@ class LeadRead(BaseModel):
     last_inbound_at: datetime | None
     last_outbound_at: datetime | None
     last_activity_type: str | None
+    last_activity_at: datetime | None  # מקור ל-badge "גיל" (§12.1) — מכל מקור
     reply_boost_until: datetime | None
     proposal_sent_at: datetime | None
 
@@ -243,6 +244,7 @@ class LeadListItem(BaseModel):
     next_action_due_at: datetime | None
     last_inbound_at: datetime | None
     last_outbound_at: datetime | None
+    last_activity_at: datetime | None  # מקור ל-badge "גיל" (§12.1) — מכל מקור
     closed_at: datetime | None  # לתצוגת "נסגר ב-" + מיון בארכיון
-    created_at: datetime  # ל-badge "גיל" (§12.1)
+    created_at: datetime  # fallback ל-badge "גיל" אם אין activities
     updated_at: datetime

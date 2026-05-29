@@ -5,10 +5,12 @@
 from typing import Any
 from uuid import UUID
 
+from sqlalchemy import func, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.constants import ActivityType
 from app.models.activity import Activity
+from app.models.lead import Lead
 
 
 async def log_activity(
@@ -32,4 +34,12 @@ async def log_activity(
     )
     db.add(activity)
     await db.flush()
+
+    # עדכון מרכזי של ה-badge "גיל" (§12.1) — כאן כי זו הנקודה היחידה שיוצרת
+    # Activity (chokepoint), אז אין drift בין ה-cache ל-MAX(activities.created_at).
+    # func.now() בתוך הטרנזקציה זהה ל-created_at של ה-Activity (שניהם server now()),
+    # כך last_activity_at == זמן הפעולה האחרונה מכל מקור.
+    await db.execute(
+        update(Lead).where(Lead.id == lead_id).values(last_activity_at=func.now())
+    )
     return activity

@@ -95,6 +95,7 @@ def _lead_to_card(lead: Lead, now_utc: datetime) -> LeadCard:
         next_action_due_at=lead.next_action_due_at,
         has_recent_reply=_has_recent_reply(lead, now_utc),
         last_activity_type=lead.last_activity_type,
+        last_activity_at=lead.last_activity_at,
         created_at=lead.created_at,
     )
 
@@ -252,6 +253,7 @@ async def get_today_actions(db: AsyncSession) -> list[TodayActionItem]:
                 lead_phone=lead.phone,
                 lead_email=lead.email,
                 last_outbound_at=lead.last_outbound_at,
+                last_activity_at=lead.last_activity_at,
                 created_at=lead.created_at,
             )
         )
