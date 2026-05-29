@@ -9,6 +9,7 @@ import { EmptyState } from "@/components/EmptyState";
 import { StateDot } from "@/components/StateBadge";
 import { api, ApiError } from "@/lib/api";
 import {
+  formatLeadAge,
   labelCategory,
   labelStatus,
   labelSubtype,
@@ -136,6 +137,10 @@ export default function LeadsPage() {
                       · {lead.organization_name}
                     </span>
                   )}
+                  {/* badge "גיל" (§12.1) — דחוף לקצה הפנימי של השורה. */}
+                  <span className="ms-auto text-xs text-gray-500 shrink-0">
+                    {formatLeadAge(lead.last_outbound_at, lead.created_at)}
+                  </span>
                 </div>
                 <div className="mt-1 text-sm text-gray-600 truncate">
                   {labelCategory(lead.service_category)}
