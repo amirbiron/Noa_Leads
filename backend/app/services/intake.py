@@ -101,6 +101,8 @@ async def intake_after_hours_whatsapp(
     await db.refresh(lead)
 
     # פוש לטלגרם — מסלול ה-commit=False של create_lead לא שולח אוטומטית,
-    # אז מפעילים ידנית אחרי שהליד באמת committed (source=whatsapp ≠ manual).
-    await telegram_service.notify_new_lead(lead)
+    # אז מפעילים ידנית אחרי שהליד באמת committed. הקריטריון לפי §16.3 הוא
+    # קליטה אוטומטית (current_user_id is None) — WhatsApp שנכנס מבחוץ.
+    if current_user_id is None:
+        await telegram_service.notify_new_lead(lead)
     return lead

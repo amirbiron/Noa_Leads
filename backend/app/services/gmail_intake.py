@@ -492,6 +492,14 @@ async def _create_lead_from_draft(
 
     await db.commit()
     await db.refresh(lead)
+
+    # פוש לטלגרם — קליטת Gmail היא תמיד אוטומטית (current_user_id=None),
+    # ונועה צריכה לדעת שהגיע ליד. מסלול זה רץ עם commit=False, אז ענף ה-push
+    # שב-create_lead לא רץ — מתריעים כאן ידנית. חייב להיות *אחרי* commit
+    # (race עם /dashboard/poll, כמו ב-create_lead). מכסה גם manual_review
+    # (מייל שה-AI נכשל עליו — עדיין הגיע אוטומטית). ראה §16.3.
+    from app.services import telegram as telegram_service
+    await telegram_service.notify_new_lead(lead)
     return lead
 
 
