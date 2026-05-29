@@ -68,6 +68,10 @@ export default function LeadsPage() {
       .finally(() => setLoading(false));
   }, [statusFilter, search, pollVersion]);
 
+  // סינון פעיל = יש חיפוש או סטטוס נבחר. מבדיל בין "אין לידים בכלל" (מערכת ריקה)
+  // ל"הסינון לא החזיר תוצאות" — שני מצבי empty-state שונים.
+  const hasActiveFilter = Boolean(search) || Boolean(statusFilter);
+
   return (
     <AppShell title={`לידים${total ? ` (${total})` : ""}`}>
       {/* פילטרים */}
