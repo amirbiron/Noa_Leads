@@ -244,10 +244,13 @@ async def suggest_dormant_actions() -> None:
                 )
 
             # UPSERT — משימה יחידה פר ליד (idempotent).
+
             if existing is not None:
                 existing.task_metadata = metadata
                 existing.due_at = now_utc
-                existing.status = TaskStatus.OPEN.value
+                # Preserve SNOOZED status - only update metadata and due_at
+                # Status remains unchanged (OPEN stays OPEN, SNOOZED stays SNOOZED)
+
             else:
                 db.add(
                     Task(
