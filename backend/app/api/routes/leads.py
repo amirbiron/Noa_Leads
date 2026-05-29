@@ -12,7 +12,7 @@ from app.schemas.common import PaginatedResponse
 from app.schemas.email_message import EmailMessageRead
 from app.schemas.lead import (
     LeadCloseRequest,
-    LeadCreate,
+    LeadCreateManual,
     LeadListItem,
     LeadRead,
     LeadTransferRequest,
@@ -27,8 +27,10 @@ router = APIRouter(prefix="/leads", tags=["leads"])
 
 @router.post("", response_model=LeadRead, status_code=201)
 async def create_lead(
-    payload: LeadCreate, db: DbSession, user: CurrentUser
+    payload: LeadCreateManual, db: DbSession, user: CurrentUser
 ) -> LeadRead:
+    # LeadCreateManual — lead_message חובה בטופס הידני (§7.1). הוא subclass
+    # של LeadCreate, אז create_lead מקבל אותו ללא שינוי.
     lead = await leads_service.create_lead(db, payload, user.id)
     return LeadRead.model_validate(lead)
 
@@ -45,6 +47,7 @@ async def list_leads(
     source_channel: str | None = Query(default=None),
     needs_attention: bool | None = Query(default=None),
     search: str | None = Query(default=None, max_length=200),
+    closed: bool | None = Query(default=None),
 ) -> PaginatedResponse[LeadListItem]:
     items, total = await leads_service.list_leads(
         db,
@@ -56,6 +59,7 @@ async def list_leads(
         source_channel=source_channel,
         needs_attention=needs_attention,
         search=search,
+        closed=closed,
     )
     return PaginatedResponse[LeadListItem](
         items=[LeadListItem.model_validate(x) for x in items],

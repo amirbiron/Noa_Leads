@@ -69,10 +69,26 @@ class LeadCreate(BaseModel):
     owner_id: UUID | None = None
     personal_note: str | None = None
 
+    # תוכן הפנייה — ההודעה שהגיעה בוואטסאפ / תיאור מה הלקוח רצה. אופציונלי
+    # ב-base כדי לא לשבור קליטה אוטומטית (טופס/וואטסאפ/מייל ממלאים מהתוכן
+    # הקיים שלהם). חובה נאכפת רק במסלול הידני דרך LeadCreateManual. §7.1.
+    lead_message: str | None = Field(default=None, max_length=5000)
+
     @field_validator("phone")
     @classmethod
     def validate_phone(cls, v: str | None) -> str | None:
         return _normalize_phone(v)
+
+
+class LeadCreateManual(LeadCreate):
+    """יצירת ליד מהטופס הידני (כפתור +) — `lead_message` חובה.
+
+    Override של השדה מ-LeadCreate ל-required: ליד שנועה מקלידה ידנית חייב
+    הקשר (§7.1). Pydantic מחזיר 422 אוטומטית אם חסר/ריק. subclass של
+    LeadCreate → עובר כמו-שהוא ל-create_lead בלי שינוי בשירות.
+    """
+
+    lead_message: str = Field(min_length=1, max_length=5000)
 
 
 # ===================== עדכון =====================
@@ -94,6 +110,7 @@ class LeadUpdate(BaseModel):
 
     owner_id: UUID | None = None
     personal_note: str | None = None
+    lead_message: str | None = Field(default=None, max_length=5000)
 
     source_detail: str | None = None
     utm_source: str | None = Field(default=None, max_length=100)
@@ -198,6 +215,7 @@ class LeadRead(BaseModel):
     closed_value: Decimal | None
     actual_hours: Decimal | None
     personal_note: str | None
+    lead_message: str | None
     booking_token: UUID
 
     created_at: datetime
@@ -225,4 +243,5 @@ class LeadListItem(BaseModel):
     next_action_due_at: datetime | None
     last_inbound_at: datetime | None
     last_outbound_at: datetime | None
+    closed_at: datetime | None  # לתצוגת "נסגר ב-" + מיון בארכיון
     updated_at: datetime

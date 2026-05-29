@@ -87,6 +87,7 @@ export interface LeadListItem {
   next_action_due_at: string | null;
   last_inbound_at: string | null;
   last_outbound_at: string | null;
+  closed_at: string | null;  // לתצוגת "נסגר ב-" בארכיון
   updated_at: string;
 }
 
@@ -124,6 +125,7 @@ export interface Lead {
   closed_value: string | null;
   actual_hours: string | null;
   personal_note: string | null;
+  lead_message: string | null;  // תוכן הפנייה
   booking_token: string;
   created_at: string;
   updated_at: string;
@@ -213,6 +215,7 @@ export interface LeadCreate {
   preferred_contact?: PreferredContact;
   priority_level?: PriorityLevel;
   personal_note?: string | null;
+  lead_message: string;  // תוכן הפנייה — חובה בטופס הידני
 }
 
 // ===== Activity =====

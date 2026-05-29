@@ -80,6 +80,7 @@ async def create_lead(
         priority_level=str(payload.priority_level),
         owner_id=owner_id,
         personal_note=payload.personal_note,
+        lead_message=payload.lead_message,
         status=LeadStatus.NEW.value,
         waiting_on="NOAH",
     )
@@ -102,15 +103,16 @@ async def create_lead(
     if commit:
         await db.commit()
         await db.refresh(lead)
-        # פוש לטלגרם — לכל מקור חוץ מהזנה ידנית (נועה עצמה הזינה,
-        # אין צורך להתריע לעצמה). שגיאות telegram נבלעות בתוך השירות.
+        # פוש לטלגרם — רק לליד שנקלט אוטומטית (נועה לא יודעת עליו). הקריטריון
+        # הוא היעדר משתמש מחובר (current_user_id is None), *לא* source_channel:
+        # כשנועה יוצרת ליד ידנית היא בוחרת מקור אמיתי (המלצה/וואטסאפ/מייל), אז
+        # גידור לפי source_channel היה שולח push מיותר. ראה §16.3.
         # **חשוב לסדר:** notify_new_lead חייב להיקרא *אחרי* db.commit().
         # אם נעביר אותו לפני, race עם ה-/dashboard/poll: ה-client עוקב
-        # אחרי התראת הטלגרם → polling → ה-row עדיין לא ב-DB → ה-lead
-        # לא יופיע. נכון לרגע כתיבה — call site יחיד וכל ה-callers
-        # האחרים (intake_after_hours, gmail_intake._create_lead_from_draft)
-        # קוראים ל-create_lead → commit ואז שולחים טלגרם בסוף ה-flow.
-        if lead.source_channel != "manual":
+        # אחרי התראת הטלגרם → polling → ה-row עדיין לא ב-DB → ה-lead לא יופיע.
+        # מסלול ה-commit=False (gmail_intake._create_lead_from_draft,
+        # intake_after_hours_whatsapp) שולח טלגרם בעצמו בסוף ה-flow.
+        if current_user_id is None:
             from app.services import telegram as telegram_service
             await telegram_service.notify_new_lead(lead)
     return lead
@@ -144,13 +146,23 @@ async def list_leads(
     source_channel: str | None = None,
     needs_attention: bool | None = None,
     search: str | None = None,
+    closed: bool | None = None,
 ) -> tuple[list[Lead], int]:
-    """מחזיר (items, total)."""
+    """מחזיר (items, total).
+
+    closed=True → רק לידים סגורים (WON/LOST/ARCHIVED) ממוינים לפי closed_at
+    יורד (תצוגת הארכיון). אחרת המיון הרגיל לפי updated_at יורד.
+    """
     from sqlalchemy import or_
 
     base = select(Lead)
     if status:
         base = base.where(Lead.status == status)
+    if closed:
+        # טאב הארכיון — שלושת הסטטוסים הסגורים יחד (status יחיד לא מספיק).
+        base = base.where(
+            Lead.status.in_([s.value for s in CLOSED_LEAD_STATUSES])
+        )
     if waiting_on:
         base = base.where(Lead.waiting_on == waiting_on)
     if owner_id:
@@ -190,9 +202,13 @@ async def list_leads(
     count_stmt = select(func.count()).select_from(base.subquery())
     total = (await db.execute(count_stmt)).scalar_one()
 
-    # מיון: ליד חדש קודם, אחר כך לפי updated_at יורד
+    # מיון: בארכיון לפי תאריך סגירה יורד (החדש למעלה); אחרת לפי updated_at יורד.
+    # nullslast — ליד סגור תמיד עם closed_at, אבל ליתר ביטחון לא לדחוף NULL לראש.
+    order_col = (
+        Lead.closed_at.desc().nullslast() if closed else Lead.updated_at.desc()
+    )
     items_stmt = (
-        base.order_by(Lead.updated_at.desc())
+        base.order_by(order_col)
         .offset((page - 1) * page_size)
         .limit(page_size)
     )

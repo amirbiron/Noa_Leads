@@ -34,6 +34,7 @@ async def intake_from_form(
         service_subtype=payload.service_subtype,
         source_channel=SourceChannel.FORM,
         source_detail=payload.message,
+        lead_message=payload.message,  # תוכן הפנייה מהטופס
         utm_source=payload.utm_source,
         utm_campaign=payload.utm_campaign,
         utm_content=payload.utm_content,
@@ -81,6 +82,7 @@ async def intake_after_hours_whatsapp(
         service_category=ServiceCategory.CLINIC,  # ברירת מחדל — נועה תעדכן ידנית
         source_channel=SourceChannel.WHATSAPP,
         source_detail=message,
+        lead_message=message,  # תוכן הפנייה מהוואטסאפ
     )
     lead = await leads_service.create_lead(
         db, payload, current_user_id, commit=False
@@ -99,6 +101,8 @@ async def intake_after_hours_whatsapp(
     await db.refresh(lead)
 
     # פוש לטלגרם — מסלול ה-commit=False של create_lead לא שולח אוטומטית,
-    # אז מפעילים ידנית אחרי שהליד באמת committed (source=whatsapp ≠ manual).
-    await telegram_service.notify_new_lead(lead)
+    # אז מפעילים ידנית אחרי שהליד באמת committed. הקריטריון לפי §16.3 הוא
+    # קליטה אוטומטית (current_user_id is None) — WhatsApp שנכנס מבחוץ.
+    if current_user_id is None:
+        await telegram_service.notify_new_lead(lead)
     return lead

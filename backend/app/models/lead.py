@@ -89,6 +89,9 @@ class Lead(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # form / email / manual / referral / facebook / וכו'
     source_channel: Mapped[str] = mapped_column(String(50), nullable=False)
     source_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # תוכן הפנייה — הודעת הוואטסאפ / תיאור מה הלקוח רצה. nullable: חובה
+    # נאכפת רק בטופס הידני (§7.1); קליטה אוטומטית ולידים ישנים עשויים להיות null.
+    lead_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     utm_source: Mapped[str | None] = mapped_column(String(100), nullable=True)
     utm_campaign: Mapped[str | None] = mapped_column(String(100), nullable=True)
     utm_content: Mapped[str | None] = mapped_column(String(100), nullable=True)
