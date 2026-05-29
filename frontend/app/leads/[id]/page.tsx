@@ -46,6 +46,7 @@ import type {
   Lead,
   Program,
   StateColor,
+  User,
 } from "@/lib/types";
 
 // צבע מצב — לוגיקה פשוטה (Spec §12.9):
@@ -80,6 +81,8 @@ export default function LeadDetailPage() {
   const [programOpen, setProgramOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [reopening, setReopening] = useState(false);
+  // רשימת משתמשים — כדי לדעת אם קיימת עוזרת (כפתור "העברה" disabled אם אין).
+  const [users, setUsers] = useState<User[]>([]);
 
   async function load() {
     setError(null);
@@ -125,6 +128,14 @@ export default function LeadDetailPage() {
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
+
+  // טעינת משתמשים פעם אחת — לקביעת זמינות כפתור "העברה". כשל זניח (best-effort):
+  // הכפתור פשוט יישאר disabled.
+  useEffect(() => {
+    api.listUsers().then(setUsers).catch(() => {});
+  }, []);
+
+  const hasAssistant = users.some((u) => u.role === "assistant");
 
   // Refetch בחזרה מטאב/אפליקציה אחרת — קריטי לתרחיש פגישה: נועה
   // עזבה את הדף לטלפון, הפגישה הסתיימה, חוזרת — צריכה לראות את
@@ -288,7 +299,9 @@ export default function LeadDetailPage() {
               </button>
               <button
                 onClick={() => setTransferOpen(true)}
-                className="rounded-lg bg-white border border-gray-200 py-2.5 text-sm font-medium flex items-center justify-center gap-1.5"
+                disabled={!hasAssistant}
+                title={hasAssistant ? undefined : "אין עוזרת מוגדרת"}
+                className="rounded-lg bg-white border border-gray-200 py-2.5 text-sm font-medium flex items-center justify-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <ArrowRightLeft size={15} aria-hidden />
                 העברה

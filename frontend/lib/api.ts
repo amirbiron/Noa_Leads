@@ -227,6 +227,9 @@ export const api = {
   // ----- Users -----
   getMe: () => fetcher<User>("/users/me"),
   listUsers: () => fetcher<User[]>("/users"),
+  // יצירת עוזרת — setup חד-פעמי (§13.5). owner-only בשרת; 409 אם כבר קיימת.
+  createAssistant: (payload: { name: string; email: string; password: string }) =>
+    fetcher<User>("/users", { method: "POST", body: payload }),
 
   // ----- Tasks -----
   listOpenTasks: () => fetcher<Task[]>("/tasks/open"),
