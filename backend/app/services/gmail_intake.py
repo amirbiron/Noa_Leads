@@ -730,8 +730,10 @@ _DISPLAY_NAME_RE = re.compile(r"^\s*(?:\"?([^\"<]+?)\"?\s*)?<([^>]+)>\s*$")
 
 # prefixes גנריים של תיבות שירות — אינם מייצגים שם אדם. אם זה ה-local-part,
 # מדלגים ממקור 3 (From) למקור 4 (domain). ראה SpecV2.1 §19.2.
+# הערכים מנורמלים (ללא מפרידים): ההשוואה מסירה . _ - מה-local-part, כך
+# ש-no.reply / no_reply / no-reply / do.not.reply כולם נתפסים.
 _GENERIC_LOCAL_PARTS = {
-    "noreply", "no-reply", "donotreply", "info", "contact",
+    "noreply", "donotreply", "info", "contact",
     "sales", "office", "admin", "mail", "hello", "support",
 }
 
@@ -794,7 +796,10 @@ def _resolve_name_from_address(addr: str | None) -> str | None:
     email = _email_from_address(addr)
     if email and "@" in email:
         local = email.split("@", 1)[0]
-        if local.lower() not in _GENERIC_LOCAL_PARTS:
+        # נורמליזציה להשוואה: הסרת מפרידים (. _ -) כדי ש-no.reply / no_reply
+        # ייתפסו כ-"noreply" ולא יהפכו ל-"no reply" כשם פיקטיבי.
+        normalized = re.sub(r"[._-]+", "", local.lower())
+        if normalized not in _GENERIC_LOCAL_PARTS:
             cleaned = local.replace(".", " ").replace("_", " ").strip()
             if cleaned:
                 return cleaned
