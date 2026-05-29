@@ -99,7 +99,8 @@ export default function HomePage() {
               <ul className="space-y-2">
                 {data.new_leads.map((lead) => (
                   <li key={lead.id}>
-                    <LeadCardRow lead={lead} />
+                    {/* hideStatus: כל הפניות כאן NEW — "חדש" מיותר (§12.1). */}
+                    <LeadCardRow lead={lead} hideStatus />
                   </li>
                 ))}
               </ul>

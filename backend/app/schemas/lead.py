@@ -244,4 +244,5 @@ class LeadListItem(BaseModel):
     last_inbound_at: datetime | None
     last_outbound_at: datetime | None
     closed_at: datetime | None  # לתצוגת "נסגר ב-" + מיון בארכיון
+    created_at: datetime  # ל-badge "גיל" (§12.1)
     updated_at: datetime

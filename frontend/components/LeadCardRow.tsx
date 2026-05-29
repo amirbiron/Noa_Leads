@@ -4,6 +4,7 @@ import Link from "next/link";
 import { ChevronLeft } from "lucide-react";
 import { STATE_COLORS } from "@/lib/colors";
 import {
+  formatLeadAge,
   labelCategory,
   labelStatus,
   labelSubtype,
@@ -14,7 +15,14 @@ import { StateDot } from "./StateBadge";
 
 // כרטיס ליד דחוס לתצוגה ברשימות הדשבורד (פניות חדשות / ממתין / וכו').
 // פס צד שמאלי בצבע מצב (border-inline-start ל-RTL).
-export function LeadCardRow({ lead }: { lead: LeadCard }) {
+// hideStatus: ברשימת "פניות חדשות" כל הלידים NEW — תווית הסטטוס מיותרת (§12.1).
+export function LeadCardRow({
+  lead,
+  hideStatus = false,
+}: {
+  lead: LeadCard;
+  hideStatus?: boolean;
+}) {
   const cls = STATE_COLORS[lead.state_color];
   // אייקון ⏳ ליד שם הליד כשהכדור אצל הלקוח (לפי האפיון יב). מחכה לי
   // (ברירת מחדל) = אין סימון, כי רוב הלידים בכל מקרה אצל נועה.
@@ -57,14 +65,20 @@ export function LeadCardRow({ lead }: { lead: LeadCard }) {
                 {recentReplyLabel}
               </span>
             )}
+            {/* badge "גיל" (§12.1) — דחוף לקצה הפנימי של שורת השם. */}
+            <span className="ms-auto text-xs text-gray-500 shrink-0">
+              {formatLeadAge(lead.last_outbound_at, lead.created_at)}
+            </span>
           </div>
           <div className="mt-1 text-sm text-gray-600 truncate">
             {labelCategory(lead.service_category)}
             {lead.service_subtype && ` · ${labelSubtype(lead.service_subtype)}`}
           </div>
-          <div className="mt-1.5 text-xs text-gray-500">
-            {labelStatus(lead.status)}
-          </div>
+          {!hideStatus && (
+            <div className="mt-1.5 text-xs text-gray-500">
+              {labelStatus(lead.status)}
+            </div>
+          )}
         </div>
         <ChevronLeft className="text-gray-300 shrink-0 mt-1" size={18} aria-hidden />
       </div>

@@ -213,6 +213,37 @@ export function formatRelativeHebrew(iso: string | null): string {
   return diffDays < 0 ? `לפני ${unit}` : `בעוד ${unit}`;
 }
 
+// ===== badge "גיל" לבועת ליד (§12.1) =====
+
+// כמה זמן עבר מאז הפעולה האחרונה על הליד. מקור: last_outbound_at, ובהיעדרו
+// created_at (ליד שעוד לא בוצעה עליו פעולה). רזולוציה ייעודית לפי האפיון —
+// שונה מ-formatRelativeHebrew (שאין לו שבוע/שבועיים/חודש ומטפל גם בעתיד).
+export function formatLeadAge(
+  outboundAt: string | null,
+  createdAt: string,
+): string {
+  const iso = outboundAt ?? createdAt;
+  if (!iso) return "";
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+
+  // gap במילישניות. clamp ל-0 — שעון client שמקדים את השרת לא יחזיר "עתיד".
+  const diffMs = Math.max(0, Date.now() - date.getTime());
+  const minutes = Math.floor(diffMs / 60000);
+  const hours = Math.floor(diffMs / 3_600_000);
+  const days = Math.floor(diffMs / 86_400_000);
+
+  if (minutes < 5) return "עכשיו";
+  if (minutes < 60) return "לפני זמן קצר";
+  if (hours < 24) return `לפני ${pluralizeTimeUnit(hours, "שעה", "שעתיים", "שעות")}`;
+  if (days === 1) return "אתמול";
+  if (days < 7) return `לפני ${pluralizeTimeUnit(days, "יום", "יומיים", "ימים")}`;
+  if (days < 14) return "לפני שבוע";
+  if (days < 21) return "לפני שבועיים";
+  if (days < 30) return "לפני 3 שבועות";
+  return "לפני חודש";
+}
+
 export function formatDateTimeHebrew(iso: string | null): string {
   if (!iso) return "";
   const date = new Date(iso);
