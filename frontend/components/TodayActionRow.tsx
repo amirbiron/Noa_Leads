@@ -76,7 +76,7 @@ export function TodayActionRow({ item, onChanged }: Props) {
             <span className="font-medium truncate">{item.lead_name}</span>
             {/* badge "גיל" (§12.1) — דחוף לקצה הפנימי של שורת השם. */}
             <span className="ms-auto text-xs text-gray-500 shrink-0">
-              {formatLeadAge(item.last_outbound_at, item.created_at)}
+              {formatLeadAge(item.last_activity_at, item.created_at)}
             </span>
           </div>
           <div className="mt-1 text-sm text-gray-600 truncate">

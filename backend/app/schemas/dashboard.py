@@ -36,7 +36,8 @@ class LeadCard(BaseModel):
     # המקור של ה-boost — מאפשר ל-frontend להבחין בין "בקשת תור חדשה"
     # (meeting_requested) לבין "תגובה חדשה" (inbound_message_logged וכו').
     last_activity_type: str | None
-    # ל-badge "גיל" (§12.1) — frontend מחשב last_outbound_at→created_at.
+    # ל-badge "גיל" (§12.1) — frontend מחשב last_activity_at→created_at.
+    last_activity_at: datetime | None
     created_at: datetime
 
 
@@ -62,8 +63,9 @@ class TodayActionItem(BaseModel):
     # לא כל ליד חייב טלפון/מייל (Spec §7.1 — רק שם+מקור+אחד מהשניים חובה).
     lead_phone: str | None
     lead_email: str | None
-    # ל-badge "גיל" (§12.1) — מקור: last_outbound_at→created_at של הליד.
     last_outbound_at: datetime | None
+    # ל-badge "גיל" (§12.1) — מקור: last_activity_at→created_at של הליד.
+    last_activity_at: datetime | None
     created_at: datetime
 
 

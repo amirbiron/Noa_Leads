@@ -108,7 +108,7 @@ export default function ArchivePage() {
                   )}
                   {/* badge "גיל" (§12.1) — דחוף לקצה הפנימי של השורה. */}
                   <span className="ms-auto text-xs text-gray-500 shrink-0">
-                    {formatLeadAge(lead.last_outbound_at, lead.created_at)}
+                    {formatLeadAge(lead.last_activity_at, lead.created_at)}
                   </span>
                 </div>
                 <div className="mt-1 text-sm text-gray-600 truncate">

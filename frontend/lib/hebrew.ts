@@ -215,14 +215,15 @@ export function formatRelativeHebrew(iso: string | null): string {
 
 // ===== badge "גיל" לבועת ליד (§12.1) =====
 
-// כמה זמן עבר מאז הפעולה האחרונה על הליד. מקור: last_outbound_at, ובהיעדרו
-// created_at (ליד שעוד לא בוצעה עליו פעולה). רזולוציה ייעודית לפי האפיון —
-// שונה מ-formatRelativeHebrew (שאין לו שבוע/שבועיים/חודש ומטפל גם בעתיד).
+// כמה זמן עבר מאז הפעולה האחרונה על הליד מכל מקור (לקוח/נועה). מקור:
+// last_activity_at (MAX של ה-activity log), ובהיעדרו created_at (ליד שעוד אין לו
+// activities). רזולוציה ייעודית לפי האפיון — שונה מ-formatRelativeHebrew
+// (שאין לו שבוע/שבועיים/חודש ומטפל גם בעתיד).
 export function formatLeadAge(
-  outboundAt: string | null,
+  primaryAt: string | null,
   createdAt: string,
 ): string {
-  const iso = outboundAt ?? createdAt;
+  const iso = primaryAt ?? createdAt;
   if (!iso) return "";
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return "";
