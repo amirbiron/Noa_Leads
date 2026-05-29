@@ -41,9 +41,10 @@ export default function SettingsPage() {
   const [error, setError] = useState<string | null>(null);
 
   // טוען גם את רשימת המשתמשים — כדי לדעת אם כבר קיימת עוזרת (סקשן ה-setup
-  // מופיע רק כשאין). listUsers דורש auth בלבד, זמין גם לעוזרת (לא owner-only).
+  // מופיע רק כשאין). מעבירה שגיאות הלאה: ב-mount ה-Promise.all תופס ומציג
+  // "שגיאה בטעינה"; ב-form הקורא מטפל בכשל רענון בנפרד מכשל יצירה.
   function loadUsers() {
-    return api.listUsers().then(setUsers).catch(() => {});
+    return api.listUsers().then(setUsers);
   }
 
   useEffect(() => {
@@ -217,19 +218,29 @@ function AssistantSetupForm({ onCreated }: { onCreated: () => Promise<void> }) {
     e.preventDefault();
     setFormError(null);
     setBusy(true);
+    // מבחינים בין כשל *יצירה* (העוזרת לא נוצרה) לכשל *רענון* (נוצרה אך הרשימה
+    // לא התעדכנה) — הודעה שונה לכל מקרה.
+    let created = false;
     try {
       await api.createAssistant({
         name: name.trim(),
         email: email.trim(),
         password,
       });
-      // הצלחה — מרעננים users; הסקשן ייעלם. אין צורך לנקות state (הקומפוננטה
-      // תתפרק).
+      created = true;
+      // רענון users — בהצלחה hasAssistant הופך true והסקשן (כולל הטופס) נעלם.
       await onCreated();
     } catch (err) {
       setFormError(
-        err instanceof ApiError ? err.message : "שגיאה ביצירת העוזרת",
+        created
+          ? "העוזרת נוצרה, אך רענון הרשימה נכשל. רעני את הדף."
+          : err instanceof ApiError
+            ? err.message
+            : "שגיאה ביצירת העוזרת",
       );
+    } finally {
+      // תמיד משחררים — לא מניחים שהקומפוננטה תתפרק (אם הרענון נכשל היא נשארת
+      // mounted, ובלי זה הכפתור היה נתקע disabled לנצח).
       setBusy(false);
     }
   }
