@@ -10,7 +10,7 @@ import { LeadCardRow } from "@/components/LeadCardRow";
 import { SectionHeader } from "@/components/SectionHeader";
 import { TodayActionRow } from "@/components/TodayActionRow";
 import { api, ApiError } from "@/lib/api";
-import { plusOneIsoDate, toIsraelISODate } from "@/lib/date";
+import { israelHour, plusOneIsoDate, toIsraelISODate } from "@/lib/date";
 import { labelCategory } from "@/lib/hebrew";
 import type { DailySummary, HomeDashboard } from "@/lib/types";
 
@@ -58,10 +58,12 @@ export default function HomePage() {
       {data && (
         <>
           {/* F-07: סיכום יומי — bubble. נשמר ב-daily_summaries ע"י cron 19:00.
-              לפי Spec §16.2: לא נשלח לטלגרם — מוצג רק בדשבורד. */}
-          {data.daily_summary && (
-            <DailySummaryBubble summary={data.daily_summary} />
-          )}
+              לפי Spec §16.2: לא נשלח לטלגרם — מוצג רק בדשבורד.
+              חלון תצוגה (§12.4): 19:00 → 07:00 למחרת (ראה shouldShowDailySummary). */}
+          {data.daily_summary &&
+            shouldShowDailySummary(data.daily_summary.summary_date) && (
+              <DailySummaryBubble summary={data.daily_summary} />
+            )}
 
           {/* פעולות היום */}
           <SectionHeader
@@ -276,6 +278,17 @@ function computeIsStale(
   if (summaryDate === todayIsrael) return "today";
   if (plusOneIsoDate(summaryDate) === todayIsrael) return "yesterday";
   return "older";
+}
+
+// חלון תצוגה לסיכום היומי (§12.4): מ-19:00 עד 07:00 למחרת. סיכום של היום
+// מוצג תמיד; סיכום של אתמול מוצג רק לפני 07:00 (חלון סקירה לילי של 12 שעות);
+// מ-07:00 ואילך — מוסתר עד הסיכום הבא ב-19:00. ישן מאתמול — מוסתר תמיד.
+const DAILY_SUMMARY_HIDE_HOUR = 7;
+function shouldShowDailySummary(summaryDate: string): boolean {
+  const staleness = computeIsStale(summaryDate);
+  if (staleness === "today") return true;
+  if (staleness === "yesterday") return israelHour() < DAILY_SUMMARY_HIDE_HOUR;
+  return false;
 }
 
 function SummaryStat({
