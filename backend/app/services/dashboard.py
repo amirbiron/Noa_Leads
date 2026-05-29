@@ -186,11 +186,14 @@ def _current_week_bounds(now_utc: datetime) -> tuple[datetime, datetime]:
 
 async def get_today_actions(db: AsyncSession) -> list[TodayActionItem]:
     """
-    משימות פתוחות + snoozed שעבר מועדן, שה-due_at שלהן <= סוף היום בישראל.
-    כולל overdue (משימות מאתמול שלא הושלמו).
+    משימות פתוחות + snoozed שעבר מועדן, שה-due_at שלהן בחלון (now-7d, סוף-היום
+    בישראל). כולל overdue קצר (משימות מאתמול). משימות תקועות 7+ ימים *מוחרגות*
+    כאן ומוצגות ב"ממתין לטיפול" (get_pending) — אקסקלוסיביות לפי §16.2.
     """
     now_utc = datetime.now(timezone.utc)
     end_today_exclusive = _start_of_tomorrow_israel(now_utc)
+    # אותו סף כמו list_stuck_tasks ו-get_pending — אין drift (כלל 10).
+    stuck_threshold = now_utc - timedelta(days=7)
     closed = [s.value for s in CLOSED_LEAD_STATUSES]
 
     # is_overdue — פשוט: due_at <= now. snooze מעדכן due_at ישירות
@@ -210,6 +213,8 @@ async def get_today_actions(db: AsyncSession) -> list[TodayActionItem]:
                 ),
             ),
             Task.due_at < end_today_exclusive,
+            # guard §16.2: task תקוע 7+ ימים שייך ל"ממתין לטיפול", לא ל"היום".
+            Task.due_at > stuck_threshold,
             # סינון לידים סגורים — defense in depth. close_lead מבטל
             # tasks פתוחים שלהם, אבל אם משהו פספס (race / cron) זה תופס.
             Lead.status.notin_(closed),
@@ -346,24 +351,37 @@ async def get_pending(
     db: AsyncSession, *, limit: int = DEFAULT_DASHBOARD_LIMIT
 ) -> list[LeadCard]:
     """
-    לידים פתוחים שדורשים תשומת לב:
-    - needs_attention=True (התראה שלא טופלה),
-    - או פולואפ שעבר מועדו ועוד לא נסגר,
+    "ממתין לטיפול" — לידים פתוחים שדורשים פעולה (§16.2):
+    - תקועים 7+ ימים (task פתוח/snoozed עם due_at <= now-7d) — לא overdue זמני,
     - או בקשת תור שמחכה לאישור (BOOKING_PENDING — F-06): אחרי שהסרנו את
       ה-Telegram על בקשת תור (לפי Spec §16.3), הדשבורד הוא הערוץ היחיד
       שבו נועה רואה את הבקשה. כל ליד ב-BOOKING_PENDING ממתין לפעולה שלה.
+
+    אקסקלוסיבי מ"משימות היום" (get_today_actions): overdue קצר (<7 ימים) מוצג
+    שם בלבד; 7+ ימים כאן בלבד. needs_attention נשאר דגל תצוגה (צבע כתום §12.9)
+    אבל אינו תנאי סינון כאן — הוא מסומן לכל overdue ולכן היה משחזר את החפיפה.
     """
     now_utc = datetime.now(timezone.utc)
+    # אותו סף כמו list_stuck_tasks ו-get_today_actions — אין drift (כלל 10).
+    stuck_threshold = now_utc - timedelta(days=7)
+    stuck_task_exists = (
+        select(Task.id)
+        .where(
+            Task.lead_id == Lead.id,
+            Task.status.in_(
+                [TaskStatus.OPEN.value, TaskStatus.SNOOZED.value]
+            ),
+            Task.due_at <= stuck_threshold,
+        )
+        .correlate(Lead)
+        .exists()
+    )
     stmt = (
         select(Lead)
         .where(
             Lead.status.notin_([s.value for s in CLOSED_LEAD_STATUSES]),
             or_(
-                Lead.needs_attention.is_(True),
-                and_(
-                    Lead.next_action_due_at.is_not(None),
-                    Lead.next_action_due_at <= now_utc,
-                ),
+                stuck_task_exists,
                 Lead.status == LeadStatus.BOOKING_PENDING.value,
             ),
         )
