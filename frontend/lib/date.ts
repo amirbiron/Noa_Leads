@@ -35,3 +35,17 @@ export function plusOneIsoDate(iso: string): string {
   const next = new Date(Date.UTC(y, m - 1, d + 1));
   return next.toISOString().slice(0, 10);
 }
+
+/**
+ * השעה הנוכחית (0-23) בשעון ישראל. ל-gating של תצוגה תלוית-שעה
+ * (למשל הסתרת בועת הסיכום היומי אחרי 07:00 — §12.4).
+ */
+export function israelHour(d: Date = new Date()): number {
+  const h = d.toLocaleString("en-US", {
+    timeZone: ISRAEL_TZ,
+    hour: "2-digit",
+    hour12: false,
+  });
+  // "24" ב-hour12:false על חצות בחלק מהדפדפנים → נרמול ל-0.
+  return Number(h) % 24;
+}
