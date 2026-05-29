@@ -1,25 +1,27 @@
 """
 detect_dormant_leads — רץ פעם ביום ב-03:00.
 
-מסמן dormant_flag=True לכל ליד פתוח שלא הייתה ממנו אינטראקציה ב-60+ ימים,
-ויוצר אוטומטית משימת dormant_check כדי שהליד יופיע ב-/today (Spec §17.1 +
-F-08).
+מסמן dormant_flag=True לכל ליד פתוח שלא הייתה ממנו אינטראקציה ב-60+ ימים.
 
-idempotent: רק לידים שעוברים *עכשיו* מ-dormant_flag=False ל-True מקבלים
-טיפול. אם chip "לא רלוונטי כרגע" כבר יצר dormant_check task — לא מייצרים
-שני.
+§19 D.1 — החלפה: ה-job *לא* יוצר יותר משימת dormant_check. יצירת המשימה
+(כעת dormant_suggestion עם המלצת AI) עברה ל-cron הייעודי
+suggest_dormant_actions, שרץ אחרי ה-job הזה. כך לידים פסיביים (archive/
+no_action) לא מוקפצים ל-/today. הסימון dormant_flag נשאר כאן כ-signal כללי.
+
+הערה: לידים רדומים מחוץ להגדרה המדויקת של ההמלצות (NEW / בלי outbound)
+כבר מטופלים ע"י first_response תקוע — אינם נופלים בין הכיסאות.
+
+chip "לא רלוונטי כרגע" עדיין יוצר dormant_check בנפרד (§16.4) — לא נגענו.
 """
 
 import logging
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func, or_, select, update
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import func, or_, update
 
-from app.constants import CLOSED_LEAD_STATUSES, TaskStatus, TaskType
+from app.constants import CLOSED_LEAD_STATUSES
 from app.db.session import AsyncSessionLocal
 from app.models.lead import Lead
-from app.models.task import Task
 from jobs._runner import run_job
 
 logger = logging.getLogger("jobs.detect_dormant")
@@ -28,27 +30,8 @@ logger = logging.getLogger("jobs.detect_dormant")
 DORMANT_THRESHOLD_DAYS = 60
 
 
-async def _has_any_open_task(db: AsyncSession, lead_id) -> bool:
-    """
-    True אם יש כבר open/snoozed task כלשהו לליד. בודק כל type, לא רק
-    dormant_check — אחרת ליד עם FIRST_RESPONSE/RETRY_CALL תקוע מ-60+
-    ימים היה מצטבר עם dormant_check חדש = שני reminders למצב אחד.
-    עקבי עם check_warm_followups שמדלג על כל ליד עם task פתוח.
-    """
-    result = await db.execute(
-        select(Task.id).where(
-            Task.lead_id == lead_id,
-            Task.status.in_(
-                [TaskStatus.OPEN.value, TaskStatus.SNOOZED.value]
-            ),
-        ).limit(1)
-    )
-    return result.scalar_one_or_none() is not None
-
-
 async def detect_dormant() -> None:
     threshold = datetime.now(timezone.utc) - timedelta(days=DORMANT_THRESHOLD_DAYS)
-    now_utc = datetime.now(timezone.utc)
     closed = [s.value for s in CLOSED_LEAD_STATUSES]
 
     async with AsyncSessionLocal() as db:
@@ -71,45 +54,13 @@ async def detect_dormant() -> None:
                 ),
             )
             .values(dormant_flag=True, updated_at=func.now())
-            .returning(Lead.id, Lead.owner_id)  # owner_id ל-assigned_to ב-task החדש
+            .returning(Lead.id)
         )
         result = await db.execute(stmt)
-        newly_dormant = list(result.all())  # list of (id, owner_id) tuples
-
-        # יצירת dormant_check task לכל ליד חדש שנדלק, idempotent כנגד
-        # *כל* task פתוח (chip "לא רלוונטי כרגע" שיצר dormant_check, או
-        # FIRST_RESPONSE/RETRY_CALL ישנים שנשארו תקועים). ה-task נוצר עם
-        # due_at=now כי הליד כבר 60 יום רדום. assigned_to=owner_id עקבי עם
-        # check_warm_followups / check_stuck_proposals / apply_chip.
-        from app.services.tasks import sync_lead_next_action_cache
-
-        tasks_created = 0
-        for lead_id, owner_id in newly_dormant:
-            if await _has_any_open_task(db, lead_id):
-                continue
-            task = Task(
-                lead_id=lead_id,
-                type=TaskType.DORMANT_CHECK.value,
-                assigned_to=owner_id,
-                status=TaskStatus.OPEN.value,
-                due_at=now_utc,
-                origin_rule="auto_detect_dormant",
-            )
-            db.add(task)
-            tasks_created += 1
-
-        if tasks_created > 0:
-            await db.flush()  # נדרש כדי שה-sync יראה את ה-tasks החדשים
-            for lead_id, _owner in newly_dormant:
-                await sync_lead_next_action_cache(db, lead_id)
-
+        newly_dormant = list(result.all())
         await db.commit()
 
-    logger.info(
-        "Marked %d leads as dormant, created %d dormant_check tasks",
-        len(newly_dormant),
-        tasks_created,
-    )
+    logger.info("Marked %d leads as dormant", len(newly_dormant))
 
 
 if __name__ == "__main__":

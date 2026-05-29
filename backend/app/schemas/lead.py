@@ -149,6 +149,15 @@ class LeadTransferRequest(BaseModel):
     handoff_note: str | None = Field(default=None, max_length=1000)
 
 
+class DormantSuggestionRead(BaseModel):
+    """המלצת פעולה AI לליד רדום (§19 D.1) — מוצגת בכרטיס. נבנית מ-task_metadata."""
+
+    action: str  # gentle_followup / archive / call / no_action
+    reasoning: str
+    generated_at: str | None = None
+    model_used: str | None = None
+
+
 class LeadCloseRequest(BaseModel):
     """סגירת ליד כ-WON / LOST / ARCHIVED."""
 

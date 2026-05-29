@@ -67,6 +67,10 @@ class TodayActionItem(BaseModel):
     # ל-badge "גיל" (§12.1) — מקור: last_activity_at→created_at של הליד.
     last_activity_at: datetime | None
     created_at: datetime
+    # §19 D.1 — לפריט dormant_suggestion: ההמלצה + הנימוק (ה-UI בוחר כפתור
+    # לפי ai_action). None לכל שאר ה-task types.
+    ai_action: str | None = None
+    ai_reasoning: str | None = None
 
 
 # ===== הצעות פתוחות =====

@@ -502,3 +502,28 @@ async def get_lead_emails(db: AsyncSession, lead_id: UUID):
     )
     result = await db.execute(stmt)
     return list(result.scalars().all())
+
+
+async def get_dormant_suggestion(db: AsyncSession, lead_id: UUID):
+    """ה-dormant_suggestion task הפתוח של הליד (§19 D.1), או None.
+
+    מוחזר לכל המלצה פתוחה — כולל פסיבית (archive/no_action) — כי הכרטיס מציג
+    אותה תמיד. אם touchpoint סגר אותה (AUTO_CLOSE) — לא תוחזר (הליד כבר טופל).
+    """
+    await get_lead_or_404(db, lead_id)
+
+    from app.constants import TaskStatus, TaskType
+    from app.models.task import Task
+
+    stmt = (
+        select(Task)
+        .where(
+            Task.lead_id == lead_id,
+            Task.type == TaskType.DORMANT_SUGGESTION.value,
+            Task.status.in_([TaskStatus.OPEN.value, TaskStatus.SNOOZED.value]),
+        )
+        .order_by(Task.created_at.desc())
+        .limit(1)
+    )
+    result = await db.execute(stmt)
+    return result.scalar_one_or_none()

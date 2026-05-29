@@ -47,7 +47,9 @@ class Settings(BaseSettings):
     ai_model_email_classifier: str | None = None
     ai_model_daily_summary: str | None = None
     ai_model_proposal_draft: str | None = None
-    ai_model_dormant_detection: str | None = None
+    # הצעת פעולה לליד רדום (§19 D.1) — החלטה אסטרטגית, default Opus לאיכות
+    # (לא None: שונה משאר ה-overrides שיורשים מ-FAST/QUALITY).
+    ai_model_dormant_suggestion: str = "claude-opus-4-7"
     # Spec §20.11: תווית Gmail למיילים שסוננו ע"י AI כספאם.
     # שינוי אינו retroactive — ראה admin note ב-§20.11.
     ai_filter_label_name: str = "סוננו אוטומטית"

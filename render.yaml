@@ -172,6 +172,23 @@ services:
       - fromGroup: noa-leads-shared
       - fromGroup: noa-leads-python
 
+  # הצעת פעולה AI ללידים רדומים (§19 D.1) — אחרי detect-dormant. 00:15 UTC.
+  - type: cron
+    name: noa-suggest-dormant
+    runtime: python
+    plan: starter
+    rootDir: backend
+    schedule: "15 0 * * *"
+    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
+    startCommand: python -m jobs.suggest_dormant_actions
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: noa-leads-db
+          property: connectionString
+      - fromGroup: noa-leads-shared
+      - fromGroup: noa-leads-python
+
   # סיכום יומי לטלגרם — 19:00 ישראל (16:00 UTC, IDT קיץ)
   - type: cron
     name: noa-daily-summary

@@ -3,10 +3,11 @@ Task — משימה/פולואפ. מהווה גם תזכורות שמופיעו�
 """
 
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from sqlalchemy import DateTime, ForeignKey, Index, String, func
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -50,6 +51,13 @@ class Task(UUIDPrimaryKeyMixin, Base):
     )
     # תיוג מקור הכלל שיצר את המשימה (followup rule)
     origin_rule: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    # metadata מובנית — למשל המלצת AI ב-dormant_suggestion (§19 D.1):
+    # {ai_action, ai_reasoning, ai_generated_at, model_used}. שם attribute
+    # task_metadata (לא metadata) כדי לא להתנגש ב-MetaData של SQLAlchemy;
+    # עמודת DB בשם "metadata", עקבי עם activities.metadata.
+    task_metadata: Mapped[dict[str, Any] | None] = mapped_column(
+        "metadata", JSONB, nullable=True
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

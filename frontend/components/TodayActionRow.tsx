@@ -84,6 +84,13 @@ export function TodayActionRow({ item, onChanged }: Props) {
             {" · "}
             {labelCategory(item.service_category)}
           </div>
+          {/* §19 D.1 — נימוק ההמלצה לליד רדום (רק dormant_suggestion אקטיבי
+              מגיע ל-/today). 2 שורות לכל היותר. */}
+          {item.task_type === "dormant_suggestion" && item.ai_reasoning && (
+            <div className="mt-1 text-xs text-purple-800 line-clamp-2">
+              {item.ai_reasoning}
+            </div>
+          )}
         </Link>
 
         {/* אזור פעולות — Contact + Complete + Snooze. min-w-[44px] לכל אחד

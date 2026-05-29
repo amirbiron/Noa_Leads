@@ -9,6 +9,7 @@ import type {
   BookingRead,
   CreateBookingResponse,
   DashboardPollResponse,
+  DormantSuggestion,
   EmailMessage,
   PendingBookingsResponse,
   HomeDashboard,
@@ -189,6 +190,10 @@ export const api = {
   // מיילים נכנסים שקושרו לליד (Spec §20.10). מסודר מהחדש לישן.
   getLeadEmails: (id: string) =>
     fetcher<EmailMessage[]>(`/leads/${id}/emails`),
+
+  // המלצת פעולה AI לליד רדום (§19 D.1), או null אם אין.
+  getDormantSuggestion: (id: string) =>
+    fetcher<DormantSuggestion | null>(`/leads/${id}/dormant-suggestion`),
 
   performAction: (
     leadId: string,
