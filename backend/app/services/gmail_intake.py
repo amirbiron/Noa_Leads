@@ -392,13 +392,23 @@ async def _create_lead_from_draft(
         except ValueError:
             logger.info("Ignoring invalid phone from AI draft: %r", draft.phone)
 
-    # email: אם AI החזיר string שלא תקין כ-EmailStr, LeadCreate ייכשל.
-    # נסה ליצור LeadCreate; אם email שובר ולידציה, חזור בלי email.
-    #
+    # email: עדיף את כתובת ה-From האותנטית (header) על חילוץ ה-AI. draft.email
+    # עלול להיות None או פורמט לא-תקין (במיוחד manual_review, שבו draft.email =
+    # from_address גולמי "Name <a@b>" שנכשל ב-EmailStr). זה ה-fix ל"אין מייל
+    # לליד": הליד נקלט ממייל אבל lead.email היה ריק. reply-by-email מכוון לשולח.
+    from_addr_email = (
+        _email_from_address(email_msg.from_address)
+        if email_msg.from_address else None
+    )
+    lead_email = from_addr_email or draft.email
+
     # preferred_contact=EMAIL: לקוח שפנה דרך Gmail רוצה תגובה בערוץ שלו.
     # ה-default של LeadCreate הוא WHATSAPP — בלי הקביעה המפורשת כאן, ליד
     # ממייל היה מקבל preferred=WHATSAPP וה-DynamicActionButton היה מציע
     # "שלחי תבנית פתיחה" (WA) במקום "השב במייל".
+    #
+    # אם email שובר ולידציה כ-EmailStr — נסה ליצור LeadCreate; אם נכשל,
+    # חזור בלי email (רשת ביטחון אחרונה — עדיף ליד בלי email מאשר אובדן ליד).
     try:
         lead_create = LeadCreate(
             full_name=(
@@ -407,7 +417,7 @@ async def _create_lead_from_draft(
                 or "ללא שם"
             ),
             phone=phone,
-            email=draft.email,
+            email=lead_email,
             service_category=category_enum,
             service_subtype=subtype,
             source_channel=SourceChannel.EMAIL,
