@@ -10,6 +10,7 @@ import {
   LogOut,
   Send,
   Sparkles,
+  UserPlus,
 } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
 import { GmailConnectionSection } from "@/components/GmailConnectionSection";
@@ -35,18 +36,28 @@ const ROLE_LABEL: Record<string, string> = {
 export default function SettingsPage() {
   const router = useRouter();
   const [me, setMe] = useState<User | null>(null);
+  const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // טוען גם את רשימת המשתמשים — כדי לדעת אם כבר קיימת עוזרת (סקשן ה-setup
+  // מופיע רק כשאין). listUsers דורש auth בלבד, זמין גם לעוזרת (לא owner-only).
+  function loadUsers() {
+    return api.listUsers().then(setUsers).catch(() => {});
+  }
+
   useEffect(() => {
-    api
-      .getMe()
-      .then(setMe)
+    Promise.all([
+      api.getMe().then(setMe),
+      loadUsers(),
+    ])
       .catch((err) =>
         setError(err instanceof ApiError ? err.message : "שגיאה בטעינה"),
       )
       .finally(() => setLoading(false));
   }, []);
+
+  const hasAssistant = users.some((u) => u.role === "assistant");
 
   function handleLogout() {
     if (!confirm("להתנתק מהמערכת?")) return;
@@ -104,6 +115,18 @@ export default function SettingsPage() {
             <GoogleCalendarSection />
             <GmailConnectionSection />
           </div>
+        </>
+      )}
+
+      {/* הגדרת עוזרת ראשונית (§13.5) — setup חד-פעמי. מופיע רק ל-owner וכל עוד
+          אין עוזרת במערכת; נעלם לצמיתות אחרי שנוצרה. לא חלק מהזרימה היומיומית. */}
+      {me?.role === "owner" && !hasAssistant && (
+        <>
+          <SectionHeader
+            title="הגדרת עוזרת ראשונית"
+            hint="חד-פעמי — נעלם אחרי יצירת העוזרת"
+          />
+          <AssistantSetupForm onCreated={loadUsers} />
         </>
       )}
 
@@ -178,5 +201,86 @@ function NavRow({
         <ChevronLeft size={18} className="text-gray-300" aria-hidden />
       </Link>
     </li>
+  );
+}
+
+// טופס יצירת עוזרת — setup חד-פעמי. onCreated מרענן את רשימת המשתמשים, מה
+// שגורם לסקשן כולו להיעלם (כי hasAssistant הופך true).
+function AssistantSetupForm({ onCreated }: { onCreated: () => Promise<void> }) {
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setFormError(null);
+    setBusy(true);
+    try {
+      await api.createAssistant({
+        name: name.trim(),
+        email: email.trim(),
+        password,
+      });
+      // הצלחה — מרעננים users; הסקשן ייעלם. אין צורך לנקות state (הקומפוננטה
+      // תתפרק).
+      await onCreated();
+    } catch (err) {
+      setFormError(
+        err instanceof ApiError ? err.message : "שגיאה ביצירת העוזרת",
+      );
+      setBusy(false);
+    }
+  }
+
+  const inputClass =
+    "w-full bg-white border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:border-gray-900";
+
+  return (
+    <form
+      onSubmit={handleSubmit}
+      className="bg-white rounded-xl border border-gray-200 p-4 space-y-3"
+    >
+      {formError && (
+        <div className="text-sm text-state-red bg-state-red/10 rounded-lg px-3 py-2">
+          {formError}
+        </div>
+      )}
+      <input
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        placeholder="שם העוזרת"
+        required
+        className={inputClass}
+      />
+      <input
+        value={email}
+        onChange={(e) => setEmail(e.target.value)}
+        type="email"
+        placeholder="מייל"
+        required
+        dir="ltr"
+        className={inputClass}
+      />
+      <input
+        value={password}
+        onChange={(e) => setPassword(e.target.value)}
+        type="password"
+        placeholder="סיסמה ראשונית (8 תווים לפחות)"
+        required
+        minLength={8}
+        dir="ltr"
+        className={inputClass}
+      />
+      <button
+        type="submit"
+        disabled={busy}
+        className="w-full inline-flex items-center justify-center gap-2 bg-gray-900 text-white rounded-lg py-2.5 text-sm font-medium disabled:opacity-50"
+      >
+        <UserPlus size={16} aria-hidden />
+        {busy ? "יוצר…" : "צור עוזרת"}
+      </button>
+    </form>
   );
 }
