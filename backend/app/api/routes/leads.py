@@ -47,6 +47,7 @@ async def list_leads(
     source_channel: str | None = Query(default=None),
     needs_attention: bool | None = Query(default=None),
     search: str | None = Query(default=None, max_length=200),
+    closed: bool | None = Query(default=None),
 ) -> PaginatedResponse[LeadListItem]:
     items, total = await leads_service.list_leads(
         db,
@@ -58,6 +59,7 @@ async def list_leads(
         source_channel=source_channel,
         needs_attention=needs_attention,
         search=search,
+        closed=closed,
     )
     return PaginatedResponse[LeadListItem](
         items=[LeadListItem.model_validate(x) for x in items],

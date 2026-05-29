@@ -243,4 +243,5 @@ class LeadListItem(BaseModel):
     next_action_due_at: datetime | None
     last_inbound_at: datetime | None
     last_outbound_at: datetime | None
+    closed_at: datetime | None  # לתצוגת "נסגר ב-" + מיון בארכיון
     updated_at: datetime

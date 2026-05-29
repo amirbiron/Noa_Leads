@@ -146,13 +146,23 @@ async def list_leads(
     source_channel: str | None = None,
     needs_attention: bool | None = None,
     search: str | None = None,
+    closed: bool | None = None,
 ) -> tuple[list[Lead], int]:
-    """מחזיר (items, total)."""
+    """מחזיר (items, total).
+
+    closed=True → רק לידים סגורים (WON/LOST/ARCHIVED) ממוינים לפי closed_at
+    יורד (תצוגת הארכיון). אחרת המיון הרגיל לפי updated_at יורד.
+    """
     from sqlalchemy import or_
 
     base = select(Lead)
     if status:
         base = base.where(Lead.status == status)
+    if closed:
+        # טאב הארכיון — שלושת הסטטוסים הסגורים יחד (status יחיד לא מספיק).
+        base = base.where(
+            Lead.status.in_([s.value for s in CLOSED_LEAD_STATUSES])
+        )
     if waiting_on:
         base = base.where(Lead.waiting_on == waiting_on)
     if owner_id:
@@ -192,9 +202,13 @@ async def list_leads(
     count_stmt = select(func.count()).select_from(base.subquery())
     total = (await db.execute(count_stmt)).scalar_one()
 
-    # מיון: ליד חדש קודם, אחר כך לפי updated_at יורד
+    # מיון: בארכיון לפי תאריך סגירה יורד (החדש למעלה); אחרת לפי updated_at יורד.
+    # nullslast — ליד סגור תמיד עם closed_at, אבל ליתר ביטחון לא לדחוף NULL לראש.
+    order_col = (
+        Lead.closed_at.desc().nullslast() if closed else Lead.updated_at.desc()
+    )
     items_stmt = (
-        base.order_by(Lead.updated_at.desc())
+        base.order_by(order_col)
         .offset((page - 1) * page_size)
         .limit(page_size)
     )
