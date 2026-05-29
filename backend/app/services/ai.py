@@ -100,7 +100,12 @@ def resolve_model(purpose: _Purpose) -> str:
         return override
 
     # fallback ל-tier
-    quality_purposes = {"daily_summary", "weekly_summary", "proposal_draft"}
+    quality_purposes = {
+        "daily_summary",
+        "weekly_summary",
+        "proposal_draft",
+        "dormant_suggestion",  # החלטה אסטרטגית — quality tier (§19.3)
+    }
     if purpose in quality_purposes:
         return s.ai_model_quality
     return s.ai_model_fast
