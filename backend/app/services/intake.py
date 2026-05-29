@@ -34,7 +34,6 @@ async def intake_from_form(
         service_subtype=payload.service_subtype,
         source_channel=SourceChannel.FORM,
         source_detail=payload.message,
-        lead_message=payload.message,  # תוכן הפנייה מהטופס
         utm_source=payload.utm_source,
         utm_campaign=payload.utm_campaign,
         utm_content=payload.utm_content,
@@ -82,7 +81,6 @@ async def intake_after_hours_whatsapp(
         service_category=ServiceCategory.CLINIC,  # ברירת מחדל — נועה תעדכן ידנית
         source_channel=SourceChannel.WHATSAPP,
         source_detail=message,
-        lead_message=message,  # תוכן הפנייה מהוואטסאפ
     )
     lead = await leads_service.create_lead(
         db, payload, current_user_id, commit=False

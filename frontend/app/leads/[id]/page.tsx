@@ -301,9 +301,10 @@ export default function LeadDetailPage() {
             <CopyBookingLinkButton token={lead.booking_token} />
           )}
 
-          {/* תוכן הפנייה (§7.1) — ההודעה שהגיעה בוואטסאפ / תיאור מה הלקוח
-              רצה. חל על כל הלידים (נפרד ממיילים נכנסים). whitespace-pre-wrap
-              משמר שורות מהודעה מודבקת. */}
+          {/* תוכן הפנייה (§7.1) — הטקסט שנועה הקלידה בטופס ידני. מאוכלס רק
+              בלידים ידניים; בלידים אוטומטיים (Gmail/טופס/וואטסאפ) lead_message
+              הוא NULL והסקשן לא מוצג — תוכן הפנייה שם מיוצג ב"מיילים נכנסים"
+              או ב-source_detail. whitespace-pre-wrap משמר שורות מהודעה מודבקת. */}
           {lead.lead_message && (
             <div>
               <SectionHeader title="תוכן הפנייה" />
