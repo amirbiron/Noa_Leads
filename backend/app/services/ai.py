@@ -489,9 +489,12 @@ async def suggest_action_for_dormant(
         system=dormant_prompts.SYSTEM_PROMPT,
         user=dormant_prompts.USER_TEMPLATE.format(
             lead_name=lead_name,
+            # null — עקבי עם המוסכמה בפרומפט (שם ארגון יכול להיות null).
             organization_name=organization_name if organization_name else "null",
-            service_subtype=service_subtype or "לא ידוע",
-            service_category=service_category or "לא ידוע",
+            # ה-caller מתרגם לעברית; "null" כ-fallback אם השדה ריק (עקבי עם
+            # הפרומפט, לא תווית גנרית שמבלבלת).
+            service_subtype=service_subtype or "null",
+            service_category=service_category or "null",
             days_since_last_activity=days_since_last_activity,
             activities_bulleted_list=activities_text,
         ),

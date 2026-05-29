@@ -28,6 +28,10 @@ from app.models.lead import Lead
 from app.models.task import Task
 from app.services import ai
 from app.services.ai import AIError, AIRateLimitError
+from app.utils.service_translations import (
+    category_to_hebrew,
+    subtype_to_hebrew,
+)
 from jobs._runner import run_job
 
 logger = logging.getLogger("jobs.suggest_dormant_actions")
@@ -193,8 +197,9 @@ async def suggest_dormant_actions() -> None:
                     result = await ai.suggest_action_for_dormant(
                         lead_name=lead.full_name,
                         organization_name=lead.organization_name,
-                        service_subtype=lead.service_subtype,
-                        service_category=lead.service_category,
+                        # עברית — עקבי עם ה-few-shot בעברית (§19.3).
+                        service_subtype=subtype_to_hebrew(lead.service_subtype),
+                        service_category=category_to_hebrew(lead.service_category),
                         days_since_last_activity=days_since,
                         activities_text=history,
                     )
