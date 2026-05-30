@@ -3,6 +3,7 @@
 """
 
 from app.models.activity import Activity
+from app.models.ai_summary import AiSummary
 from app.models.booking import Booking
 from app.models.daily_summary import DailySummary
 from app.models.email_message import EmailMessage
@@ -18,6 +19,7 @@ from app.models.user import User
 
 __all__ = [
     "Activity",
+    "AiSummary",
     "Booking",
     "DailySummary",
     "EmailMessage",
