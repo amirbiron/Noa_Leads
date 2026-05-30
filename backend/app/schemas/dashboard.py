@@ -129,6 +129,24 @@ class DailySummaryRead(BaseModel):
     generated_at: datetime
 
 
+# ===== סיכומי AI נרטיביים (C.1/C.2 §6.8) =====
+
+class AiSummaryRead(BaseModel):
+    """סיכום AI נרטיבי (יומי/שבועי) לתצוגה בעמוד הבית. חושף רק את התוכן
+    הדרוש ל-UI — לא input_data/tokens/model_used/validation_warning שהם
+    פנימיים (כלל 3: לא לחשוף מידע פנימי ב-API)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    type: str                       # 'daily' / 'weekly' (SummaryType)
+    date_range_start: date
+    date_range_end: date
+    output: dict                    # ה-JSON הנרטיבי (bottom_line/today/...)
+    inaccurate_count: int
+    created_at: datetime
+
+
 # ===== מסך הבית =====
 
 class HomeDashboardResponse(BaseModel):
@@ -139,6 +157,10 @@ class HomeDashboardResponse(BaseModel):
     pending: list[LeadCard]
     weekly_insights: WeeklyInsights
     daily_summary: DailySummaryRead | None = None  # F-07: bubble בדשבורד
+    # סיכומי AI נרטיביים (§6.8). ai_daily_summary נשאר null עד שחיווט ה-cron
+    # היומי יושלם (סבב ז'); ai_weekly_summary כבר מיוצר ע"י jobs/weekly_summary.
+    ai_daily_summary: AiSummaryRead | None = None
+    ai_weekly_summary: AiSummaryRead | None = None
 
 
 class PendingResponse(BaseModel):

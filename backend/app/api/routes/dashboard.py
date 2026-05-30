@@ -3,10 +3,12 @@ Dashboard routes — מסך הבית, פעולות היום, ממתין, הצע�
 """
 
 from datetime import datetime
+from uuid import UUID
 
 from fastapi import APIRouter, Query
 
 from app.api.deps import CurrentUser, DbSession
+from app.constants import SummaryType
 from app.schemas.dashboard import (
     DashboardPollResponse,
     HomeDashboardResponse,
@@ -32,12 +34,20 @@ async def home(db: DbSession, user: CurrentUser) -> HomeDashboardResponse:
     pending = await dashboard_service.get_pending(db)
     weekly_insights = await dashboard_service.get_weekly_insights(db)
     daily_summary = await dashboard_service.get_latest_daily_summary(db)
+    ai_daily_summary = await dashboard_service.get_latest_ai_summary(
+        db, SummaryType.DAILY.value
+    )
+    ai_weekly_summary = await dashboard_service.get_latest_ai_summary(
+        db, SummaryType.WEEKLY.value
+    )
     return HomeDashboardResponse(
         today_actions=today_actions,
         new_leads=new_leads,
         pending=pending,
         weekly_insights=weekly_insights,
         daily_summary=daily_summary,
+        ai_daily_summary=ai_daily_summary,
+        ai_weekly_summary=ai_weekly_summary,
     )
 
 
@@ -62,6 +72,18 @@ async def proposals(db: DbSession, user: CurrentUser) -> ProposalsResponse:
 @router.get("/weekly", response_model=WeeklyInsights)
 async def weekly(db: DbSession, user: CurrentUser) -> WeeklyInsights:
     return await dashboard_service.get_weekly_insights(db)
+
+
+@router.post("/ai-summaries/{summary_id}/inaccurate", status_code=204)
+async def mark_ai_summary_inaccurate(
+    summary_id: UUID, db: DbSession, user: CurrentUser
+) -> None:
+    """כפתור "לא מדויק" (§3.7/§6.8) — מעלה את inaccurate_count ב-1.
+
+    זמין לכל משתמש מאומת (לא OwnerOnly — §3.7 לא מגביל). 404 אם הסיכום
+    לא נמצא. אין body בתשובה (204).
+    """
+    await dashboard_service.increment_inaccurate_count(db, summary_id)
 
 
 @router.get("/poll", response_model=DashboardPollResponse)

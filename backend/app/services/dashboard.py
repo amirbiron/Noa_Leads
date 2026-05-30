@@ -594,3 +594,38 @@ async def get_latest_daily_summary(db: AsyncSession):
         select(DailySummary).order_by(DailySummary.summary_date.desc()).limit(1)
     )
     return result.scalar_one_or_none()
+
+
+async def get_latest_ai_summary(db: AsyncSession, summary_type: str):
+    """
+    מחזיר את סיכום ה-AI הנרטיבי (C.1/C.2 §6.8) הטרי ביותר מסוג נתון
+    ('daily'/'weekly'), או None אם אין. ה-frontend מחליט אם להציג לפי
+    חלון התצוגה (§12.4) ולפי טריות date_range_end.
+    """
+    from app.models.ai_summary import AiSummary
+
+    result = await db.execute(
+        select(AiSummary)
+        .where(AiSummary.type == summary_type)
+        .order_by(AiSummary.date_range_end.desc(), AiSummary.created_at.desc())
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
+
+
+async def increment_inaccurate_count(db: AsyncSession, summary_id: UUID) -> None:
+    """
+    מעלה ב-1 את inaccurate_count של סיכום AI (כפתור "לא מדויק", §3.7/§6.8).
+    אטומי (כלל 2): UPDATE ... SET col = col + 1, בלי SELECT+UPDATE. אם אין
+    שורה תואמת (rowcount=0) → NotFoundError (כלל 3: הודעה גנרית בעברית).
+    """
+    from app.models.ai_summary import AiSummary
+
+    result = await db.execute(
+        update(AiSummary)
+        .where(AiSummary.id == summary_id)
+        .values(inaccurate_count=AiSummary.inaccurate_count + 1)
+    )
+    if result.rowcount == 0:
+        raise NotFoundError("הסיכום לא נמצא.")
+    await db.commit()
