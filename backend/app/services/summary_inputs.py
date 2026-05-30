@@ -23,7 +23,7 @@ summary_inputs — שכבת החישוב לסיכום היומי של C.1 (§6.3
 import logging
 from datetime import date, datetime, timedelta, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -32,10 +32,12 @@ from app.constants import (
     CLOSED_LEAD_STATUSES,
     ActivityType,
     LeadStatus,
+    PriorityLevel,
     SourceChannel,
     TaskStatus,
     TaskType,
     UserRole,
+    WaitingOn,
 )
 from app.models.activity import Activity
 from app.models.lead import Lead
@@ -221,9 +223,9 @@ async def _lead_movement(
         )
     ).all()
 
-    # פילוח לפי שירות. הערה: השדה נקרא "קטגוריה" אך דוגמאות ה-few-shot
-    # ב-§5.4/§5.8 מציגות granularity ברמת ה-*subtype* (שיקום קול, ליווי הפקה),
-    # לכן הפילוח נעשה לפי service_subtype. ראה נקודה לאישור בסיכום הסבב.
+    # פילוח לפי שירות ברמת service_subtype (שיקום קול, ליווי הפקה...) — אושר
+    # מול הדוגמאות ב-§5.4/§5.8 שמציגות granularity ברמת subtype. התווית במסמך
+    # ובפרומפט עודכנה ל"פילוח לפי שירות (subtype)" בהתאם (תיקון #1).
     category_rows = (
         await db.execute(
             select(Lead.service_subtype, func.count())
@@ -251,7 +253,7 @@ async def _lead_movement(
 
     # פעולות נכנסות מלקוחות. הערה: ל"החזרי טלפון" אין ActivityType ייעודי
     # (CALL_NO_ANSWER הוא שיחה *יוצאת* ללא מענה), לכן נספרות רק הודעות
-    # נכנסות שתועדו (INBOUND_MESSAGE_LOGGED). ראה נקודה לאישור בסיכום הסבב.
+    # נכנסות שתועדו (INBOUND_MESSAGE_LOGGED) — אושר (תיקון #2).
     inbound_actions_count = (
         await db.execute(
             select(func.count()).select_from(Activity).where(
@@ -538,17 +540,20 @@ async def compute_highlighted_leads_block(
     return "\n".join(lines) if lines else "(ריק)"
 
 
-async def compute_attention_items_block(db: AsyncSession, now_utc: datetime) -> str:
+async def _collect_attention_items(
+    db: AsyncSession, now_utc: datetime
+) -> tuple[list[str], set]:
     """
-    0-3 פריטים שדורשים תשומת לב (§6.3.2), בסדר עדיפות:
+    אוסף 0-3 פריטים שדורשים תשומת לב (§6.3.2), בסדר עדיפות:
     1. הצעה ללא מענה מעל 4 ימים.
     2. ליד תקוע מעל 7 ימים.
     3. משימה פעילה שעברה את היעד.
-    מחזיר מחרוזת בפורמט §4.1, או "(ריק)" אם אין.
 
     dedup גלובלי לפי lead: ליד שגם הצעתו תקועה וגם יש לו task תקוע יופיע
-    *פעם אחת* בלבד, לפי הקריטריון בעל העדיפות הגבוהה ביותר (לפי סדר הסעיפים).
-    כך לא מבזבזים slots ולא מבלבלים את ה-AI בכפילויות.
+    *פעם אחת* בלבד, לפי הקריטריון בעל העדיפות הגבוהה ביותר (סדר הסעיפים).
+
+    מחזיר (lines, seen_ids) — ה-seen מאפשר ל-tomorrow_focus להוסיף לידים
+    בלי לכפול את מי שכבר כאן.
     """
     lines: list[str] = []
     seen: set = set()
@@ -583,14 +588,14 @@ async def compute_attention_items_block(db: AsyncSession, now_utc: datetime) -> 
             f"- סוג: הצעה ללא מענה | ליד: {_lead_display_name(lead)} | "
             f"ימים מאז שליחה: {days}",
         ):
-            return "\n".join(lines)
+            return lines, seen
 
-    # (2) לידים תקועים — הוותיק ביותר (לפי due_at של ה-task התקוע) ראשון.
-    # "ימים בסטטוס נוכחי" מקורב לימים שעברו מ-due_at של המשימה התקועה,
-    # כי ל-Lead אין status_changed_at. ראה נקודה לאישור בסיכום הסבב.
+    # (2) לידים תקועים — הוותיק ביותר (לפי status_changed_at) ראשון.
+    # "ימים בסטטוס נוכחי" מחושב מ-status_changed_at האמיתי (DB trigger,
+    # migration 0025), fallback ל-created_at אם NULL (לידים לפני ה-backfill).
     stuck = (
         await db.execute(
-            select(Lead, func.min(Task.due_at).label("oldest_due"))
+            select(Lead)
             .join(Task, Task.lead_id == Lead.id)
             .where(
                 Lead.status.notin_([s.value for s in CLOSED_LEAD_STATUSES]),
@@ -599,18 +604,19 @@ async def compute_attention_items_block(db: AsyncSession, now_utc: datetime) -> 
                 surfaceable_task_condition(),
             )
             .group_by(Lead.id)
-            .order_by(func.min(Task.due_at).asc())
+            .order_by(Lead.status_changed_at.asc())
             .limit(_BLOCK_LIMIT)
         )
-    ).all()
-    for lead, oldest_due in stuck:
-        days = max(0, (now_utc - oldest_due).days)
+    ).scalars().all()
+    for lead in stuck:
+        anchor = lead.status_changed_at or lead.created_at
+        days = max(0, (now_utc - anchor).days)
         if _add(
             lead,
             f"- סוג: ליד תקוע | ליד: {_lead_display_name(lead)} | "
             f"ימים בסטטוס נוכחי: {days}",
         ):
-            return "\n".join(lines)
+            return lines, seen
 
     # (3) משימות פעילות שעברו את היעד — הוותיקה ביותר ראשונה. headroom של
     # פי-3 בשליפה כי כמה tasks יכולים להיות לאותו ליד (dedup מסנן אותם).
@@ -635,8 +641,14 @@ async def compute_attention_items_block(db: AsyncSession, now_utc: datetime) -> 
             f"- סוג: משימה שלא בוצעה | ליד: {_lead_display_name(lead)} | "
             f"תיאור: {desc}",
         ):
-            return "\n".join(lines)
+            return lines, seen
 
+    return lines, seen
+
+
+async def compute_attention_items_block(db: AsyncSession, now_utc: datetime) -> str:
+    """0-3 פריטי תשומת-לב (§6.3.2) כמחרוזת §4.1, או '(ריק)'. ראה _collect_attention_items."""
+    lines, _seen = await _collect_attention_items(db, now_utc)
     return "\n".join(lines) if lines else "(ריק)"
 
 
@@ -657,22 +669,57 @@ def _task_type_label(task_type: str) -> str:
     return labels.get(task_type, "משימה פתוחה")
 
 
-def compute_tomorrow_focus_suggestion(open_state: dict, attention_block: str) -> str | None:
+async def compute_tomorrow_focus_block(
+    db: AsyncSession,
+    now_utc: datetime,
+    attention_lines: list[str],
+    attention_seen: set,
+) -> str | None:
     """
-    הצעת פוקוס אחת למחר (§6.3.3), מחושבת מראש — או None.
-    היוריסטיקה (סבב ראשון): אם יש פריט "דורש תשומת לב", מצביעים על הפריט
-    הראשון (הדחוף ביותר). אם אין — None. ראה נקודה לאישור בסיכום הסבב.
+    פוקוס למחר (§6.3.3, מורחב) — מחזיר block או None ("מחר" מושמט אם ריק):
+    א. כל פריטי attention_items (עד 3, אותו סדר דחיפות).
+    ב. בנוסף, לידים שדורשים פוקוס: סטטוס פתוח, הכדור אצלנו
+       (waiting_on ∈ NOAH/ASSISTANT/ASSISTANT_PENDING_NOAH), VIP או ארגוני,
+       ושלא כבר מופיעים ב-attention (dedup לפי lead.id).
     """
-    if attention_block == "(ריק)":
-        return None
-    first = attention_block.splitlines()[0]
-    if "הצעה ללא מענה" in first:
-        return "כדאי לפתוח את היום במעקב אחר ההצעה הוותיקה ביותר שטרם קיבלה מענה."
-    if "ליד תקוע" in first:
-        return "כדאי להתחיל מהליד התקוע הוותיק ביותר ולקבל לגביו החלטה."
-    if "משימה שלא בוצעה" in first:
-        return "כדאי לפתוח את היום בסגירת המשימה הוותיקה ביותר שעברה את היעד."
-    return None
+    lines = list(attention_lines)
+
+    rows = (
+        await db.execute(
+            select(Lead)
+            .where(
+                Lead.status.notin_([s.value for s in CLOSED_LEAD_STATUSES]),
+                Lead.waiting_on.in_(
+                    [
+                        WaitingOn.NOAH.value,
+                        WaitingOn.ASSISTANT.value,
+                        WaitingOn.ASSISTANT_PENDING_NOAH.value,
+                    ]
+                ),
+                or_(
+                    Lead.priority_level == PriorityLevel.VIP.value,
+                    and_(
+                        Lead.organization_name.is_not(None),
+                        func.length(func.trim(Lead.organization_name)) > 0,
+                    ),
+                ),
+            )
+            .order_by(Lead.status_changed_at.asc())
+            .limit(_BLOCK_LIMIT * 3)
+        )
+    ).scalars().all()
+
+    added = 0
+    for lead in rows:
+        if lead.id in attention_seen:
+            continue  # כבר מופיע ב-attention — לא לכפול.
+        kind = "VIP" if lead.priority_level == PriorityLevel.VIP.value else "ארגוני"
+        lines.append(f"- ליד שדורש פוקוס: {_lead_display_name(lead)} ({kind})")
+        added += 1
+        if added >= _BLOCK_LIMIT:
+            break
+
+    return "\n".join(lines) if lines else None
 
 
 # ===== assembly =====
@@ -694,9 +741,14 @@ async def build_daily_user_prompt(
     movement = await _lead_movement(db, window_start, now_utc)
     open_state = await _open_state(db, now_utc)
     highlighted = await compute_highlighted_leads_block(db, window_start, now_utc)
-    attention = await compute_attention_items_block(db, now_utc)
+    # אוספים את פריטי ה-attention פעם אחת — משמשים גם לבלוק "דורש תשומת לב"
+    # וגם כבסיס ל-tomorrow_focus (עם dedup לפי seen-ids).
+    attention_lines, attention_seen = await _collect_attention_items(db, now_utc)
+    attention = "\n".join(attention_lines) if attention_lines else "(ריק)"
     dormant_count = await _dormant_with_recommendation_count(db)
-    tomorrow = compute_tomorrow_focus_suggestion(open_state, attention)
+    tomorrow = await compute_tomorrow_focus_block(
+        db, now_utc, attention_lines, attention_seen
+    )
 
     return USER_TEMPLATE.format(
         date=today.isoformat(),

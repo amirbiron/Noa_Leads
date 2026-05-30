@@ -13,10 +13,12 @@ from datetime import date, datetime, timedelta, timezone
 from app.constants import (
     ActivityType,
     LeadStatus,
+    PriorityLevel,
     SourceChannel,
     TaskStatus,
     TaskType,
     UserRole,
+    WaitingOn,
 )
 from app.models.activity import Activity
 from app.models.lead import Lead
@@ -78,12 +80,8 @@ def test_role_label():
     assert si._role_label(None) == "-"
 
 
-def test_tomorrow_focus_suggestion():
-    assert si.compute_tomorrow_focus_suggestion({}, "(ריק)") is None
-    stale = "- סוג: הצעה ללא מענה | ליד: דניאל | ימים מאז שליחה: 5"
-    assert "הצעה" in si.compute_tomorrow_focus_suggestion({}, stale)
-    stuck = "- סוג: ליד תקוע | ליד: דנה | ימים בסטטוס נוכחי: 9"
-    assert "תקוע" in si.compute_tomorrow_focus_suggestion({}, stuck)
+# הערה: compute_tomorrow_focus_block ו-compute_attention_items_block הם DB-backed
+# (תיקון #6: tomorrow כולל attention + לידי VIP/ארגון) — נבדקים ב-integration למטה.
 
 
 # ===================== בדיקות integration (DB) =====================
@@ -339,6 +337,89 @@ async def test_attention_items_block_stale_proposal(db):
     block = await si.compute_attention_items_block(db, _NOW)
     assert "הצעה ללא מענה" in block
     assert "דניאל" in block
+
+
+async def test_attention_stuck_days_from_status_changed_at(db):
+    """תיקון #3: 'ימים בסטטוס נוכחי' מחושב מ-status_changed_at (לא מ-due_at)."""
+    lead = await _mk_lead(
+        db, full_name="תקוע", status_changed_at=_NOW - timedelta(days=9),
+    )
+    # task תקוע (due לפני 10 ימים) — מזהה את הליד כתקוע:
+    db.add(Task(
+        lead_id=lead.id, type=TaskType.FOLLOWUP.value,
+        status=TaskStatus.OPEN.value, due_at=_NOW - timedelta(days=10),
+    ))
+    await db.flush()
+
+    block = await si.compute_attention_items_block(db, _NOW)
+    assert "ליד תקוע" in block
+    # 9 ימים מ-status_changed_at — לא 10 (שזה due_at של ה-task):
+    assert "ימים בסטטוס נוכחי: 9" in block
+
+
+async def test_tomorrow_focus_includes_attention_and_vip(db):
+    """
+    תיקון #6: tomorrow_focus כולל את פריטי attention + ליד VIP/ארגון שהכדור
+    אצלנו, בלי לכפול ליד שכבר ב-attention.
+    """
+    # ליד עם הצעה תקועה → ייכנס ל-attention:
+    await _mk_lead(
+        db, full_name="דניאל", status=LeadStatus.PROPOSAL_SENT.value,
+        proposal_sent_at=_NOW - timedelta(days=5), waiting_on=WaitingOn.NOAH.value,
+    )
+    # ליד VIP פתוח שהכדור אצל נועה (לא ב-attention) → תוספת ב-tomorrow:
+    await _mk_lead(
+        db, full_name="שרון", priority_level=PriorityLevel.VIP.value,
+        waiting_on=WaitingOn.NOAH.value,
+    )
+    lines, seen = await si._collect_attention_items(db, _NOW)
+    tomorrow = await si.compute_tomorrow_focus_block(db, _NOW, lines, seen)
+
+    assert tomorrow is not None
+    assert "דניאל" in tomorrow            # פריט ה-attention
+    assert "שרון" in tomorrow             # תוספת ה-VIP
+    assert "(VIP)" in tomorrow
+    assert tomorrow.count("דניאל") == 1   # בלי כפילות
+
+
+async def test_tomorrow_focus_none_when_empty(db):
+    """אין attention ואין VIP/ארגון שממתין לנו → tomorrow מושמט (None)."""
+    # ליד פתוח רגיל שהכדור אצל הלקוח — לא עומד בקריטריון:
+    await _mk_lead(db, full_name="רגיל", waiting_on=WaitingOn.CLIENT.value)
+    lines, seen = await si._collect_attention_items(db, _NOW)
+    tomorrow = await si.compute_tomorrow_focus_block(db, _NOW, lines, seen)
+    assert tomorrow is None
+
+
+async def test_status_changed_at_trigger(db):
+    """
+    ה-DB trigger מקדם status_changed_at רק בשינוי status בפועל, לא בכל UPDATE.
+    """
+    from sqlalchemy import update
+
+    lead = await _mk_lead(
+        db, status=LeadStatus.IN_PROGRESS.value,
+        status_changed_at=_NOW - timedelta(days=30),
+    )
+    await db.flush()
+
+    # UPDATE בלי שינוי status — status_changed_at לא אמור לזוז:
+    await db.execute(
+        update(Lead).where(Lead.id == lead.id).values(full_name="שם חדש")
+    )
+    await db.flush()
+    await db.refresh(lead)
+    before = lead.status_changed_at
+
+    # UPDATE עם שינוי status — status_changed_at אמור להתעדכן ל-now():
+    await db.execute(
+        update(Lead).where(Lead.id == lead.id).values(status=LeadStatus.PROPOSAL_SENT.value)
+    )
+    await db.flush()
+    await db.refresh(lead)
+
+    assert before == _NOW - timedelta(days=30)   # לא זז ב-UPDATE ללא שינוי status
+    assert lead.status_changed_at > before       # זז בשינוי status
 
 
 async def test_build_daily_user_prompt_renders(db):

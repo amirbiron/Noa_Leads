@@ -138,6 +138,12 @@ class Lead(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     closed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # זמן שינוי הסטטוס האחרון (C.1 §6.3) — מקור ל"ימים בסטטוס נוכחי" בסיכום.
+    # מתעדכן אוטומטית ע"י DB trigger (trg_lead_status_changed_at) בכל שינוי
+    # status בפועל. server_default now() ממלא לידים חדשים. ראה migration 0025.
+    status_changed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=True
+    )
 
     # ===== כלכלת עסקה (לחישוב רווחיות) =====
     # ערך כספי של ה-deal — נמלא בעת סגירה כ-WON.
