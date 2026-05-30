@@ -66,7 +66,9 @@ def upgrade() -> None:
         CREATE TRIGGER trg_lead_status_changed_at
         BEFORE UPDATE ON leads
         FOR EACH ROW
-        EXECUTE FUNCTION set_lead_status_changed_at();
+        -- EXECUTE PROCEDURE (ולא FUNCTION) לתאימות PG13 שעדיין נתמך ב-Render:
+        -- PG13 מקבל רק PROCEDURE, ו-PG14+ מקבל את שניהם (PROCEDURE כ-alias).
+        EXECUTE PROCEDURE set_lead_status_changed_at();
         """
     )
 
