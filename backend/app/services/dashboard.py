@@ -9,10 +9,11 @@ from datetime import datetime, time, timedelta, timezone
 from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import and_, case, func, or_, select
+from sqlalchemy import and_, case, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.constants import CLOSED_LEAD_STATUSES, LeadStatus, TaskStatus, TaskType
+from app.constants import CLOSED_LEAD_STATUSES, LeadStatus, TaskStatus
+from app.core.exceptions import NotFoundError
 from app.models.lead import Lead
 from app.models.task import Task
 from app.services.tasks import surfaceable_task_condition
