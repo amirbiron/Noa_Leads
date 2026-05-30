@@ -82,7 +82,7 @@ async def test_snapshot_writes_with_correct_fields(db):
     from app.services import summary_inputs
 
     state = await summary_inputs._open_state(db, now_utc)
-    dormant = await summary_inputs._dormant_with_recommendation_count(db)
+    dormant = await summary_inputs._dormant_with_recommendation_count(db, now_utc)
 
     stmt = (
         pg_insert(WeeklyOpenStateSnapshot)

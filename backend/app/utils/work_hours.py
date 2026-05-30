@@ -188,6 +188,10 @@ def should_skip_weekly_summary(now_utc: datetime) -> bool:
     האם לדלג על הסיכום השבועי (C.2 §6.7). הסיכום רץ ביום ראשון בבוקר ומסכם
     את כל השבוע שעבר (כולל שישי-שבת), אבל מדלגים אם יום ראשון עצמו נופל בחג
     יהודי — נועה לא עובדת אז (עקבי עם הסיכום היומי).
+
+    cursor bugbot: הוסר `is_saturday(d)` — ה-cron רץ ביום ראשון UTC ולכן
+    התאריך הישראלי בו אינו שבת אף פעם. ב-`is_saturday` הקיים, ריצה ידנית
+    בשבת (testing) הייתה גורמת ל-skip שגוי. §6.7 דורש דילוג רק על חג.
     """
     d = to_israel_tz(now_utc).date()
-    return is_saturday(d) or is_holiday(d)
+    return is_holiday(d)

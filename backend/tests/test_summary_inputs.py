@@ -468,6 +468,35 @@ async def test_open_state_stuck_count_matches_attention_list(db):
     assert any("תקוע סנוז" in line for line in lines)
 
 
+async def test_dormant_count_excludes_tasks_created_after_as_of(db):
+    """Regression cursor bugbot Finding C על capture_weekly_open_state:
+    DORMANT_SUGGESTION task שנוצר *אחרי* `as_of` לא נספר ב-`dormant_count`.
+
+    לפני התיקון, `_dormant_with_recommendation_count` לא קיבל as_of וסופר
+    לפי current state — בקריאה מה-cron זה משך את הרגע של ריצת ה-cron
+    במקום של capture_time, ויצר אי-עקביות בשורת ה-snapshot.
+    """
+    as_of = _NOW
+    before = as_of - timedelta(days=10)
+    after = as_of + timedelta(hours=2)
+
+    baseline = await si._dormant_with_recommendation_count(db, as_of)
+
+    # ליד שנוצר לפני as_of עם task DORMANT_SUGGESTION שנוצר *אחרי* as_of.
+    # ה-task לא היה קיים ב-as_of → לא צריך להיספר.
+    lead = await _mk_lead(db, created_at=before)
+    db.add(Task(
+        lead_id=lead.id, type=TaskType.DORMANT_SUGGESTION.value,
+        status=TaskStatus.OPEN.value,
+        created_at=after,
+        due_at=after + timedelta(days=1),
+    ))
+    await db.flush()
+
+    count = await si._dormant_with_recommendation_count(db, as_of)
+    assert count - baseline == 0
+
+
 async def test_highlighted_leads_block_silence_break(db):
     """ליד שענה אחרי 10 ימי שתיקה (outbound לפני 10 ימים → inbound בחלון)."""
     lead = await _mk_lead(db, full_name="מירב כהן", service_subtype="voice_rehab")
