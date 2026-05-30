@@ -1,48 +1,43 @@
 """
-weekly_summary — רץ ביום ראשון בבוקר.
+weekly_summary — רץ ביום ראשון בבוקר (מתוזמן ב-UTC ב-render.yaml).
 
-משתמש ב-get_weekly_insights הקיים מ-services/dashboard.
-שולח לטלגרם את 3 התובנות המרכזיות מהאפיון.
+מייצר סיכום שבועי נרטיבי (C.2) ושומר ב-ai_summaries. *לא* נשלח לטלגרם —
+לפי c1-c2-summaries-spec §3.1 + §7 ("TL;DR לטלגרם נשלל. רק במערכת").
+הסיכום מוצג בעמוד "היום" של נועה (UI — סבב נפרד).
+
+דילוג בחג: אם יום ראשון עצמו נופל בחג יהודי (§6.7) — נועה לא עובדת אז,
+וסיכום של שבוע ריק יטעה. should_skip_weekly_summary מטפל בזה.
 """
 
 import logging
+from datetime import datetime, timezone
 
 from app.db.session import AsyncSessionLocal
-from app.services import dashboard as dashboard_service
-from app.services import telegram as telegram_service
+from app.services import summaries as summaries_service
+from app.utils.work_hours import should_skip_weekly_summary
 from jobs._runner import run_job
 
 logger = logging.getLogger("jobs.weekly_summary")
 
 
-def _format_insights(stats) -> str:
-    # שיעור מענה בזמן — שימושי כעיני המקרו
-    pct = ""
-    if stats.new_leads_count > 0:
-        ratio = round(100 * stats.responded_in_time_count / stats.new_leads_count)
-        pct = f" ({ratio}%)"
-
-    lines = [
-        "📈 <b>סיכום שבועי</b>",
-        "",
-        f"📥 לידים השבוע: <b>{stats.new_leads_count}</b>",
-        f"⚡ מענה בזמן: <b>{stats.responded_in_time_count}</b>{pct}",
-        f"🔒 פתוחים בלי צעד הבא: <b>{stats.stuck_count}</b>",
-        f"📋 סה\"כ פתוחים: <b>{stats.total_open}</b>",
-    ]
-    return "\n".join(lines)
-
-
 async def weekly_summary() -> None:
-    async with AsyncSessionLocal() as db:
-        stats = await dashboard_service.get_weekly_insights(db)
+    now_utc = datetime.now(timezone.utc)
+    if should_skip_weekly_summary(now_utc):
+        logger.info("Weekly summary skipped (holiday/Saturday in Israel)")
+        return
 
-    text = _format_insights(stats)
-    sent = await telegram_service.send_message(text)
-    if sent:
-        logger.info("Weekly summary sent")
+    async with AsyncSessionLocal() as db:
+        summary = await summaries_service.generate_and_store_weekly_summary(
+            db, now_utc=now_utc
+        )
+        # ה-service עושה flush בלבד; ה-job בעל ה-session ואחראי על ה-commit.
+        if summary is not None:
+            await db.commit()
+
+    if summary is not None:
+        logger.info("Weekly summary generated and stored")
     else:
-        logger.info("Weekly summary not sent (telegram not configured)")
+        logger.warning("Weekly summary not generated (AI unavailable)")
 
 
 if __name__ == "__main__":

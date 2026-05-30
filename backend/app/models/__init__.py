@@ -3,6 +3,7 @@
 """
 
 from app.models.activity import Activity
+from app.models.ai_summary import AiSummary
 from app.models.booking import Booking
 from app.models.daily_summary import DailySummary
 from app.models.email_message import EmailMessage
@@ -15,9 +16,11 @@ from app.models.service_rate import ServiceRate
 from app.models.task import Task
 from app.models.template import Template
 from app.models.user import User
+from app.models.weekly_open_state_snapshot import WeeklyOpenStateSnapshot
 
 __all__ = [
     "Activity",
+    "AiSummary",
     "Booking",
     "DailySummary",
     "EmailMessage",
@@ -30,4 +33,5 @@ __all__ = [
     "Task",
     "Template",
     "User",
+    "WeeklyOpenStateSnapshot",
 ]

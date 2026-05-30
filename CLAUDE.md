@@ -20,6 +20,18 @@
 1. **קודם מתכננים** – לפני כל מימוש, יש להציג תוכנית עבודה ברורה (עם הסברים בשפה פשוטה ומובנת לכל)
 2. **אחר כך מממשים** – המימוש מתחיל רק לאחר אישור התוכנית.
 
+## ⚠️ תזכורת זמנית: לבטל `auto` mode ב-Claude Code
+
+> **הוספה זמנית עד שאנתרופיק יתקנו את הבאג ב-auto mode.**
+>
+> **לפני שליחת הצעת תכנון של plan mode (או מיד אחריה)** — חובה להזכיר למשתמש:
+> 1. **בצ'אט**: שורה בולטת קצרה, "תזכורת: לבטל את `auto` mode ב-Claude Code לפני אישור התוכנית". לא בתחתית של הודעה ארוכה.
+> 2. **בטלגרם** (אם הכלי `PushNotification` / MCP טלגרם מחובר): הודעה דחופה בכל פעם שעוברים plan mode.
+>
+> **סיבה:** יש כרגע חשש לבאגים חמורים במצב `auto` — עלולים לגרום לפעולות לא צפויות, push חלקי, או דילוג על שלבי אימות.
+>
+> **לא** לשלוח את התזכורת מחוץ למעבר plan mode (לא בכל הודעה רגילה).
+
 ## כלל חשוב: 
 
 אם נמצאו באגים כלשהם בריפו - תמיד נחפש פיתרונות שורשיים לבעיה, ולא פיתרונות "טלאי".
@@ -84,6 +96,9 @@
 
 ### כלל 14: כל touchpoint סוגר tasks מ-AUTO_CLOSE_TASK_TYPES
 > כל פעולה ש-Noah מבצעת על ליד (chip click, action, mark sent) היא touchpoint = "טיפלה". צריכה לסגור tasks תקועים מאותם sub-types שlist `AUTO_CLOSE_TASK_TYPES` ב-`backend/app/services/lead_actions.py` (FIRST_RESPONSE, LECTURE_INQUIRY, FOLLOWUP, AFTER_HOURS_REPLY, DORMANT_CHECK, WARM_FOLLOWUP, RETRY_CALL). אחרת ה-`/today` ו-`next_action_due_at` יציגו עבודה כפולה. ראה `_close_addressed_tasks` ב-lead_actions.py + שלב 2b ב-`apply_chip`.
+
+### כלל 15: Service functions עושים flush, לא commit — ה-route/caller הוא בעל הטרנזקציה
+> פונקציות service שמשנות DB לעולם לא קוראות ל-`await db.commit()`. עושות `await db.flush()` בלבד (או אפילו רק `execute` עבור UPDATE/INSERT שלא דורש re-read), וה-route (ב-API) או ה-job (ב-cron) הוא היחיד שעושה commit. זה: (1) הופך את גבול-הטרנזקציה לנקודה אחת ניתנת-לחיזוי; (2) מאפשר ל-rollback-based test fixture (`backend/tests/conftest.py`) לנקות נתונים בין בדיקות — commit אי-אפשר ל-rollback, ושורה שנותרת ב-DB גורמת ל-`UniqueViolationError` בהרצה הבאה; (3) מאפשר composition של מספר service calls באותו endpoint תחת טרנזקציה אחת. **דוגמה נכונה:** `_store_summary` ב-`backend/app/services/summaries.py` עושה flush; `jobs/weekly_summary.py` עושה commit. **דוגמה שגויה שתוקנה:** סבב ו' של `increment_inaccurate_count` עשה commit פנימי — 3 בדיקות נכשלו בגלל זיהום-בין-הרצות. **הערה:** בקוד הקיים יש services נוספים שעדיין עושים commit (`leads`, `intake`, `tasks`, `templates` וכו') — הם לא במצב שובר-בדיקות כעת, אבל ייושרו לדפוס בעת המגע הבא בהם.
 
 ---
 

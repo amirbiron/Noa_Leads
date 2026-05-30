@@ -225,6 +225,12 @@ class ProgramType(StrEnum):
     DIGITAL_COURSE_12 = "digital_course_12"    # קורס דיגיטלי - 12 מפגשים
 
 
+# ===== סוגי סיכומי AI (C.1/C.2 §6.5) =====
+class SummaryType(StrEnum):
+    DAILY = "daily"
+    WEEKLY = "weekly"
+
+
 # ===== כללי פולואפ =====
 # לפי האפיון יב סעיף 482, ה-spec מגדיר 5 סוגי פולואפ. כרגע 2 בשימוש
 # (FIRST_RESPONSE, PROPOSAL_ORG). ה-3 הנוספים (WARM, DORMANT,

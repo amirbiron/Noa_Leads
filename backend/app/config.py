@@ -2,6 +2,7 @@
 הגדרות אפליקציה — נטענות מתוך משתני סביבה (.env).
 """
 
+from datetime import date
 from functools import lru_cache
 
 from pydantic import Field, field_validator
@@ -46,6 +47,7 @@ class Settings(BaseSettings):
     ai_model_quality: str = "claude-sonnet-4-6"
     ai_model_email_classifier: str | None = None
     ai_model_daily_summary: str | None = None
+    ai_model_weekly_summary: str | None = None
     ai_model_proposal_draft: str | None = None
     # הצעת פעולה לליד רדום (§19 D.1) — החלטה אסטרטגית, default Opus לאיכות
     # (לא None: שונה משאר ה-overrides שיורשים מ-FAST/QUALITY).
@@ -58,6 +60,16 @@ class Settings(BaseSettings):
     # Spec §20.13: כמה פעמים cron retry_pending_classification ינסה לפני
     # יצירת ליד עם manual_review_needed=True. שמרני (10 דקות לAPI להתאושש).
     ai_max_classification_retries: int = 10
+    # C.1/C.2 (§6.1 ב-c1-c2-summaries-spec): פרמטרים לסיכומי AI נרטיביים.
+    # temperature 0.5 — איזון בין יציבות לגיוון ניסוח. 2000 טוקנים מספיקים
+    # לסיכום של עד 500 מילים + מבנה JSON.
+    ai_temperature_summaries: float = 0.5
+    ai_max_output_tokens_summaries: int = 2000
+    # C.1/C.2 (§4.1+§4.2): תאריך תחילת המערכת — קבוע. ממנו נגזרים
+    # days_in_system (יומי) ו-week_number_in_system + has_comparison_data
+    # (שבועי). ברירת המחדל היא תאריך ה-migration הראשון; אדיר מעדכן
+    # ל-go-live האמיתי דרך SYSTEM_START_DATE ב-Render (פורמט ISO: YYYY-MM-DD).
+    system_start_date: date = date(2026, 5, 23)
 
     # ===== Google =====
     google_client_id: str | None = None

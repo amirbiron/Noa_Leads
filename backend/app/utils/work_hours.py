@@ -157,3 +157,41 @@ def after_hours_reply_message(dt: datetime) -> str:
         "קיבלנו את הפנייה.\n"
         "נחזור אליך ביום העבודה הקרוב בין 9:00 ל-11:00."
     )
+
+
+def should_skip_daily_summary(now_utc: datetime) -> bool:
+    """
+    האם לדלג על הסיכום היומי (C.1 §6.7) — נועה לא עובדת אז, וסיכום של "0
+    פעולות" יראה כאילו המערכת מושבתת.
+
+    מדלגים כש (מחושב בזמן ישראל):
+    - שבת (כולל מוצאי שבת בערב — עדיין תאריך שבת)
+    - חג ישראלי (כולל מוצאי חג בערב — עדיין תאריך החג)
+    - יום שישי אחרי FRIDAY_CLOSE_HOUR (16:00)
+    - ערב חג אחרי FRIDAY_CLOSE_HOUR (אותה התנהגות כמו ערב שבת)
+
+    הערה: לא ניתן לעשות reuse של is_working_time — היא מחזירה False אחרי
+    WORK_DAY_END_HOUR (18:00) בכל יום, וה-cron של הסיכום רץ ב-19:00.
+    """
+    il = to_israel_tz(now_utc)
+    d = il.date()
+    if is_saturday(d) or is_holiday(d):
+        return True
+    cutoff = get_settings().friday_close_hour
+    if (is_friday(d) or is_holiday_eve(d)) and il.hour >= cutoff:
+        return True
+    return False
+
+
+def should_skip_weekly_summary(now_utc: datetime) -> bool:
+    """
+    האם לדלג על הסיכום השבועי (C.2 §6.7). הסיכום רץ ביום ראשון בבוקר ומסכם
+    את כל השבוע שעבר (כולל שישי-שבת), אבל מדלגים אם יום ראשון עצמו נופל בחג
+    יהודי — נועה לא עובדת אז (עקבי עם הסיכום היומי).
+
+    cursor bugbot: הוסר `is_saturday(d)` — ה-cron רץ ביום ראשון UTC ולכן
+    התאריך הישראלי בו אינו שבת אף פעם. ב-`is_saturday` הקיים, ריצה ידנית
+    בשבת (testing) הייתה גורמת ל-skip שגוי. §6.7 דורש דילוג רק על חג.
+    """
+    d = to_israel_tz(now_utc).date()
+    return is_holiday(d)
