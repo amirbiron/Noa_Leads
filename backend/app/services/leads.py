@@ -80,6 +80,10 @@ async def create_lead(
         priority_level=str(payload.priority_level),
         owner_id=owner_id,
         personal_note=payload.personal_note,
+        # §7.2 — נמסר מ-NewLeadModal (expand section). cursor bugbot
+        # caught: בלי השורה הזו השדה אובד בשתיקה והליד נשמר תמיד עם
+        # default False של המודל.
+        is_returning_customer=payload.is_returning_customer,
         lead_message=payload.lead_message,
         status=LeadStatus.NEW.value,
         waiting_on="NOAH",
