@@ -267,7 +267,10 @@ async def test_silence_break_survives_reply_in_same_window(db):
 
     block = await si.compute_highlighted_leads_block(db, _NOW - timedelta(hours=24), _NOW)
     assert "יעל" in block
-    assert "9 ימי שתיקה" in block
+    # 9 ימים פחות 3 שעות — gap.days מעגל כלפי מטה ל-8 (תיעוד "שמרני, לא
+    # מנפח את 'ימי השתיקה'" בקוד). העיקר: הערך נמדד מה-outbound *הקודם*
+    # לפני ה-inbound, לא מ-last_outbound_at (שהוא לפני שעה).
+    assert "8 ימי שתיקה" in block
 
 
 async def test_highlighted_leads_block_booked_via_meeting_approved(db):
