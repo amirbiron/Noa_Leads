@@ -139,8 +139,9 @@ async def test_grossly_over_limit_triggers_regen_then_kept():
     """
     סקציה שחרגה פי-3+ ממכסה → regen; אם נמשך → נשמר בלי חיתוך (§6.6#2).
     """
-    # bottom_line מכסה 40 מילים → פי-3 = 120. ניצור 130 מילים.
-    long_text = " ".join(["מילה"] * 130)
+    # bottom_line מכסה 40 מילים → פי-3 = 120. ניצור 130 מילים בנות תו אחד כדי
+    # לחרוג בספירת-מילים בלי לחרוג ממגבלת 280 התווים של Pydantic (259 תווים).
+    long_text = " ".join(["א"] * 130)
     over = _daily_result(bottom_line=long_text)
     fake = _make_fake_generate([over, over])
     out = await summaries._generate_validated(
