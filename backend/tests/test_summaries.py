@@ -135,6 +135,30 @@ async def test_known_name_no_warning():
     assert fake.calls["n"] == 1
 
 
+async def test_shel_possessive_does_not_trigger_false_positive():
+    """
+    regression: יחס הקניין "של" בעברית נפוץ לפני שמות עצם רגילים
+    (לא רק לפני שמות אנשים), ולכן הוצא מתבנית "שמות חשודים". סיכום
+    תקין שמשתמש ב"של" בהקשרים רגילים לא יקבל validation_warning כשיש
+    שמות-קלט אמיתיים.
+    """
+    # "של החודש", "של השבוע" — שניהם פוסיביים תקינים שאינם שמות אנשים.
+    valid = _daily_result(
+        today="זו הייתה ההצעה של החודש, ופייסבוק שמרה על המקום של השבוע."
+    )
+    fake = _make_fake_generate([valid])
+    out = await summaries._generate_validated(
+        generate_fn=fake,
+        user_prompt="p",
+        input_names={"מירב כהן"},  # יש שמות-קלט → ה-validator פעיל
+        word_caps=summaries._DAILY_WORD_CAPS,
+    )
+    assert out is not None
+    _r, _u, warning = out
+    assert warning is False  # ה"של" החוקיים לא הופכים את הסיכום ל"חשוד"
+    assert fake.calls["n"] == 1  # אין regen על קניין תקין
+
+
 async def test_grossly_over_limit_triggers_regen_then_kept():
     """
     סקציה שחרגה פי-3+ ממכסה → regen; אם נמשך → נשמר בלי חיתוך (§6.6#2).
