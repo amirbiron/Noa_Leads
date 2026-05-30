@@ -49,3 +49,65 @@ export function israelHour(d: Date = new Date()): number {
   // "24" ב-hour12:false על חצות בחלק מהדפדפנים → נרמול ל-0.
   return Number(h) % 24;
 }
+
+/**
+ * יום השבוע בישראל: 0=Sunday, 1=Monday, ..., 6=Saturday — תואם ל-Date.getDay().
+ * משמש ל-gating של תצוגות תלויות-יום (למשל סיכום שבועי ב-§6.8).
+ *
+ * המימוש: מעבירים את ה-Date לטקסט "MM/DD/YYYY" ב-en-US/Asia/Jerusalem ואז
+ * מפרסרים — נמנעים מהמלכודת של `new Date(toLocaleString(...))` שמפרסר
+ * את המחרוזת ב-TZ של ה-host, לא ב-TZ של ישראל.
+ */
+export function israelWeekday(d: Date = new Date()): number {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: ISRAEL_TZ,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(d);
+  const get = (type: string) => Number(parts.find((p) => p.type === type)!.value);
+  // Date.UTC + getUTCDay = יום-השבוע של התאריך הישראלי, ללא הזזת host TZ.
+  return new Date(Date.UTC(get("year"), get("month") - 1, get("day"))).getUTCDay();
+}
+
+/**
+ * §6.8 — חלון תצוגה לסיכום השבועי: ראשון 08:00 → שני 07:00 (כ-23 שעות).
+ * נקרא ב-`/` כדי להחליט אם להציג את כרטיס ה-`ai_weekly_summary`.
+ */
+export function shouldShowAiWeeklySummary(now: Date = new Date()): boolean {
+  const day = israelWeekday(now);
+  const hour = israelHour(now);
+  if (day === 0 && hour >= 8) return true; // ראשון אחרי 08:00
+  if (day === 1 && hour < 7) return true; // שני לפני 07:00
+  return false;
+}
+
+/**
+ * חישוב טריות תאריך הסיכום היומי (string YYYY-MM-DD מ-backend ב-Israel TZ)
+ * מול היום הנוכחי בישראל.
+ *
+ * משמש גם להצגת label "סיכום היום / סיכום אתמול" וגם ל-gating
+ * (`shouldShowDailySummary`).
+ */
+export function computeDailySummaryStaleness(
+  summaryDate: string,
+): "today" | "yesterday" | "older" {
+  const todayIsrael = toIsraelISODate();
+  if (summaryDate === todayIsrael) return "today";
+  if (plusOneIsoDate(summaryDate) === todayIsrael) return "yesterday";
+  return "older";
+}
+
+/**
+ * §12.4 / §6.8 — חלון תצוגה לסיכום היומי (בועה סטטיסטית או כרטיס AI):
+ * 19:00 → 07:00 למחרת. סיכום של היום מוצג תמיד; סיכום של אתמול מוצג
+ * רק לפני 07:00 (חלון סקירה לילי של 12 שעות); מ-07:00 ואילך — מוסתר עד
+ * הסיכום הבא ב-19:00. ישן מאתמול — מוסתר תמיד.
+ */
+const DAILY_SUMMARY_HIDE_HOUR = 7;
+export function shouldShowDailySummary(summaryDate: string): boolean {
+  const staleness = computeDailySummaryStaleness(summaryDate);
+  if (staleness === "today") return true;
+  if (staleness === "yesterday") return israelHour() < DAILY_SUMMARY_HIDE_HOUR;
+  return false;
+}

@@ -168,6 +168,13 @@ export const api = {
       `/dashboard/poll?since=${encodeURIComponent(since)}`,
     ),
 
+  // C.1/C.2 §3.7: כפתור "לא מדויק" ב-AiSummaryCard. מעלה את
+  // inaccurate_count ב-1 לסיכום הספציפי (counter פנימי לבקרת איכות).
+  markAiSummaryInaccurate: (id: string) =>
+    fetcher<void>(`/dashboard/ai-summaries/${id}/inaccurate`, {
+      method: "POST",
+    }),
+
   // ----- Leads -----
   listLeads: (params: Record<string, string | number | boolean> = {}) => {
     const qs = new URLSearchParams();
