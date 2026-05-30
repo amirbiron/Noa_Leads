@@ -465,10 +465,13 @@ async def compute_highlighted_leads_block(
     for lead, inbound_at, prev_outbound in silence_rows:
         if prev_outbound is None:
             continue  # אין outbound קודם — לא "שתיקה שנשברה", פשוט ליד צעיר.
-        gap_days = (inbound_at - prev_outbound).days
-        if gap_days < _SILENCE_BREAK_DAYS:
+        gap = inbound_at - prev_outbound
+        # סף timedelta מפורש — אותו ניסוח כמו stuck/stale (כלל 10), בלי
+        # להישען על truncation של .days. ה-.days משמש רק לערך התצוגה
+        # (מעוגל כלפי מטה — שמרני, לא מנפח את "ימי השתיקה").
+        if gap < timedelta(days=_SILENCE_BREAK_DAYS):
             continue
-        if _add(lead, f"ענה אחרי {gap_days} ימי שתיקה", None):
+        if _add(lead, f"ענה אחרי {gap.days} ימי שתיקה", None):
             return "\n".join(lines)
 
     # (2) שינוי סטטוס משמעותי בחלון: נסגר WON (LEAD_WON), או עבר ל-BOOKED.
