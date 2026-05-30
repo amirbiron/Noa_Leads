@@ -76,17 +76,19 @@ async def capture_weekly_open_state() -> None:
     בישראל), לא ב-`now_utc` — כך גם cron שרץ באיחור (חודר לראשון) לא
     יזהם את ה-snapshot עם פעילות ראשון.
 
-    `_dormant_with_recommendation_count(db)` עדיין מבוסס על current state
-    (D.1 §3.6). ה-snapshot לוכד אותו ברגע ההרצה — אם cron בזמן, current
-    state == state ב-week_end. cron מאוחר → drift קל, אבל ה-snapshot
-    עדיין קבוע פר-שבוע (first-write-wins).
+    `_dormant_with_recommendation_count(db, capture_time)` משתמש באותו
+    anchor כמו `_open_state`, כך שכל ה-5 שדות עקביים לאותה נקודת זמן
+    (cursor bugbot Finding C: לפני התיקון הזה ה-dormant נספר ברגע
+    ההרצה ולא ב-capture_time).
     """
     now_utc = datetime.now(timezone.utc)
     week_end_date, capture_time = _resolve_week_end_date(now_utc)
 
     async with AsyncSessionLocal() as db:
         state = await summary_inputs._open_state(db, capture_time)
-        dormant = await summary_inputs._dormant_with_recommendation_count(db)
+        dormant = await summary_inputs._dormant_with_recommendation_count(
+            db, capture_time
+        )
 
         stmt = (
             pg_insert(WeeklyOpenStateSnapshot)

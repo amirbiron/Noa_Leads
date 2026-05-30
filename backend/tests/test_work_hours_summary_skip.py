@@ -57,3 +57,10 @@ def test_weekly_runs_on_regular_sunday():
 def test_weekly_skips_when_sunday_is_holiday(monkeypatch):
     monkeypatch.setattr(wh, "is_holiday", lambda d: True)
     assert wh.should_skip_weekly_summary(_SUN_08) is True
+
+
+def test_weekly_does_not_skip_on_saturday_manual_run(monkeypatch):
+    """§6.7 + cursor bugbot: דילוג רק כשראשון (יום ה-cron) הוא חג.
+    ריצה ידנית בשבת (לבדיקה) אסור שתדלג — `is_saturday` הוסר מהתנאי."""
+    monkeypatch.setattr(wh, "is_holiday", lambda d: False)
+    assert wh.should_skip_weekly_summary(_SAT_12) is False

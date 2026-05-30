@@ -343,32 +343,28 @@ def _task_stuck_at_predicate(as_of: datetime):
     )
 
 
-def _lead_was_proposal_sent_at_predicate(as_of: datetime):
-    """Lead-level WHERE: הליד **כעת ב-status=PROPOSAL_SENT** בלי שינוי-סטטוס
-    מאז `as_of`.
+def _lead_currently_proposal_sent_predicate():
+    """Lead-level WHERE: הליד **כעת** ב-status=PROPOSAL_SENT. ללא as_of.
 
-    שיקול עיצוב (cursor bugbot Finding 1 על 52a89a5):
-    אין דרך אמינה לזהות "ליד שהיה PROPOSAL_SENT ב-`as_of` ועזב את הסטטוס
-    מאז" עם ה-schema הקיים. ניסינו Branch 2 על בסיס `proposal_sent_at`
-    + `status_changed_at`, אבל `proposal_sent_at` נשאר ישן גם אחרי
-    שהליד יצא מ-PROPOSAL_SENT — false-positive על לידים שהיו IN_PROGRESS
-    ב-`as_of` עם הצעה ישנה.
+    היסטוריה: היה כאן `_lead_was_proposal_sent_at_predicate(as_of)` שניסה
+    להסיק את הסטטוס בעבר. ההיסק הוכח שבור בשני הכיוונים ע"י cursor bugbot:
+    - over-count: ליד שעזב PROPOSAL_SENT לפני as_of ואחר-כך נסגר כ-WON —
+      נספר בטעות ע"י Branch 2 על בסיס proposal_sent_at הסטיקי.
+    - under-count: ליד שהיה PROPOSAL_SENT ב-as_of ועזב בפער as_of→cron —
+      לא נספר ב-Branch 1 שדורש "currently PROPOSAL_SENT".
+    בלי status-history אין דרך לתקן זאת.
 
     הפתרון השורשי: ה-snapshot (`weekly_open_state_snapshots`) הוא
-    source-of-truth. cron כותב אותו כש-`as_of=now`, ואז Branch 1 לבדה
-    מדויקת ("currently PROPOSAL_SENT" = "PROPOSAL_SENT ב-as_of").
+    source-of-truth ל-stale_proposals_count. cron כותב אותו ברגע
+    capture_time, ושם current-status == state-at-capture_time (modulo
+    פער cron קטן). שאר ה-callers (daily prompt, attention list) קוראים
+    עם as_of=now, אז current-status הוא הנכון בלי הסקה.
 
-    fallback ל-live (כש-snapshot חסר): **conservative under-count** —
-    לידים שעברו סטטוס בין `as_of` ל-now לא נספרים. עדיף over-count
-    שמראה false-positives.
+    מה עם fallback ב-live (כש-snapshot חסר)? התוצאה תהיה current-status
+    בזמן ה-fallback — drift קל אם היה גאפ ארוך, אבל זה המקסימום שאפשר
+    בלי schema של history. snapshot present הוא ה-norm בייצור.
     """
-    return and_(
-        Lead.status == LeadStatus.PROPOSAL_SENT.value,
-        or_(
-            Lead.status_changed_at.is_(None),
-            Lead.status_changed_at <= as_of,
-        ),
-    )
+    return Lead.status == LeadStatus.PROPOSAL_SENT.value
 
 
 async def _open_state(db: AsyncSession, as_of: datetime) -> dict:
@@ -423,7 +419,7 @@ async def _open_state(db: AsyncSession, as_of: datetime) -> dict:
             .select_from(Lead)
             .where(
                 _lead_open_at_predicate(as_of),
-                _lead_was_proposal_sent_at_predicate(as_of),
+                _lead_currently_proposal_sent_predicate(),
                 sent_at.is_not(None),
                 sent_at <= stale_threshold,
             )
@@ -456,14 +452,24 @@ async def _open_state(db: AsyncSession, as_of: datetime) -> dict:
     }
 
 
-async def _dormant_with_recommendation_count(db: AsyncSession) -> int:
-    """מספר לידים פתוחים עם משימת DORMANT_SUGGESTION פעילה (D.1, §3.6)."""
+async def _dormant_with_recommendation_count(
+    db: AsyncSession, as_of: datetime
+) -> int:
+    """מספר לידים פתוחים ב-`as_of` עם משימת DORMANT_SUGGESTION אקטיבית
+    ב-`as_of` (D.1, §3.6).
+
+    משתמש ב-predicates המשותפים שמבוססים על שדות write-once
+    (`_lead_open_at_predicate`, `_task_active_at_predicate`) כדי להיות
+    עקבי עם שאר השדות ב-weekly snapshot. cursor bugbot Finding C: בלי
+    `as_of` הספירה הייתה ברגע ההרצה של ה-cron במקום ב-capture_time, מה
+    שיצר שורת snapshot עם מדדי end-of-week מעורבים עם dormant חי.
+    """
     has_suggestion = (
         select(Task.id)
         .where(
             Task.lead_id == Lead.id,
             Task.type == TaskType.DORMANT_SUGGESTION.value,
-            Task.status.in_([TaskStatus.OPEN.value, TaskStatus.SNOOZED.value]),
+            _task_active_at_predicate(as_of),
         )
         .correlate(Lead)
         .exists()
@@ -471,7 +477,7 @@ async def _dormant_with_recommendation_count(db: AsyncSession) -> int:
     return (
         await db.execute(
             select(func.count()).select_from(Lead).where(
-                Lead.status.notin_([s.value for s in CLOSED_LEAD_STATUSES]),
+                _lead_open_at_predicate(as_of),
                 has_suggestion,
             )
         )
@@ -686,7 +692,7 @@ async def _collect_attention_items(
             select(Lead, sent_at.label("sent"))
             .where(
                 _lead_open_at_predicate(now_utc),
-                _lead_was_proposal_sent_at_predicate(now_utc),
+                _lead_currently_proposal_sent_predicate(),
                 sent_at.is_not(None),
                 sent_at <= stale_threshold,
             )
@@ -869,7 +875,7 @@ async def build_daily_user_prompt(
     # וגם כבסיס ל-tomorrow_focus (עם dedup לפי seen-ids).
     attention_lines, attention_seen = await _collect_attention_items(db, now_utc)
     attention = "\n".join(attention_lines) if attention_lines else "(ריק)"
-    dormant_count = await _dormant_with_recommendation_count(db)
+    dormant_count = await _dormant_with_recommendation_count(db, now_utc)
     tomorrow = await compute_tomorrow_focus_block(
         db, now_utc, attention_lines, attention_seen
     )
@@ -1335,7 +1341,7 @@ async def _resolve_weekly_open_state(
         week_end_date,
     )
     open_state = await _open_state(db, week_end_utc)
-    dormant = await _dormant_with_recommendation_count(db)
+    dormant = await _dormant_with_recommendation_count(db, week_end_utc)
     return open_state, dormant
 
 
