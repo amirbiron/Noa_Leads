@@ -273,6 +273,33 @@ async def test_silence_break_survives_reply_in_same_window(db):
     assert "8 ימי שתיקה" in block
 
 
+async def test_silence_break_anchors_on_proposal_sent(db):
+    """
+    regression: אם ה-outbound האחרון לפני תגובת הלקוח היה *שליחת הצעה*
+    (PROPOSAL_SENT), הוא ה-anchor לחישוב השתיקה — לא מסר/שיחה ישנים יותר.
+    PROPOSAL_SENT כלול ב-_OUTBOUND_CONTACT_TYPES (עקבי עם set_last_outbound
+    של mark_proposal_sent ועם backfill של first_outbound_at).
+    """
+    lead = await _mk_lead(db, full_name="רינה")
+    db.add_all([
+        # מסר ישן (לא ה-anchor הנכון):
+        Activity(lead_id=lead.id, type=ActivityType.OUTBOUND_MESSAGE_LOGGED.value,
+                 created_at=_NOW - timedelta(days=20)),
+        # הצעה נשלחה לפני 8 ימים — זה ה-anchor הנכון:
+        Activity(lead_id=lead.id, type=ActivityType.PROPOSAL_SENT.value,
+                 created_at=_NOW - timedelta(days=8)),
+        # הלקוח שבר שתיקה:
+        Activity(lead_id=lead.id, type=ActivityType.INBOUND_MESSAGE_LOGGED.value,
+                 created_at=_NOW - timedelta(hours=2)),
+    ])
+    await db.flush()
+
+    block = await si.compute_highlighted_leads_block(db, _NOW - timedelta(hours=24), _NOW)
+    assert "רינה" in block
+    # 8 ימים פחות 2 שעות → 7 (מעוגל מטה). נמדד מההצעה (8 ימים), לא מהמסר (20).
+    assert "7 ימי שתיקה" in block
+
+
 async def test_highlighted_leads_block_booked_via_meeting_approved(db):
     """
     מעבר ל-BOOKED נרשם כ-MEETING_APPROVED (לא STATUS_CHANGED). regression

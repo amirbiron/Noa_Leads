@@ -151,10 +151,29 @@ async def test_grossly_over_limit_triggers_regen_then_kept():
         word_caps=summaries._DAILY_WORD_CAPS,
     )
     assert out is not None
-    result, _u, _w = out
+    result, usage, _w = out
     # לא נחתך — הטקסט הארוך נשמר כמו שהוא (§6.6: "חיתוך טקסט: לעולם לא").
     assert result.bottom_line == long_text
     assert fake.calls["n"] == 2  # ניסה regen פעם אחת
+    # טוקנים נצברים על פני שתי הקריאות (regen לא מאבד את טוקני הקריאה הראשונה).
+    assert usage["input_tokens"] == 200  # 2 × 100
+    assert usage["output_tokens"] == 100  # 2 × 50
+    assert usage["model"] == "claude-sonnet-4-6"  # model מהקריאה האחרונה
+
+
+async def test_single_call_usage_not_doubled():
+    """קריאה אחת מוצלחת — הטוקנים נשארים כפי שהם (בלי צבירה מיותרת)."""
+    fake = _make_fake_generate([_daily_result()])
+    out = await summaries._generate_validated(
+        generate_fn=fake,
+        user_prompt="p",
+        input_names=set(),
+        word_caps=summaries._DAILY_WORD_CAPS,
+    )
+    assert out is not None
+    _r, usage, _w = out
+    assert usage["input_tokens"] == 100
+    assert usage["output_tokens"] == 50
 
 
 def test_extract_input_names():
@@ -228,14 +247,13 @@ async def test_store_daily_summary_first_write_wins(db, monkeypatch):
     first.inaccurate_count = 5
     await db.flush()
 
-    # ריצה שנייה (output שונה) — לא אמורה לדרוס:
-    monkeypatch.setattr(
-        ai,
-        "generate_daily_summary_text",
-        _make_fake_generate([_daily_result(bottom_line="גרסה חדשה.")]),
-    )
+    # ריצה שנייה — ה-idempotency check אמור לדלג על ה-AI לגמרי. נתקין fake
+    # שמתפוצץ אם נקרא, כדי להוכיח שלא בוזבזה קריאת generation:
+    second_fake = _make_fake_generate([_daily_result(bottom_line="גרסה חדשה.")])
+    monkeypatch.setattr(ai, "generate_daily_summary_text", second_fake)
     second = await summaries.generate_and_store_daily_summary(db, now_utc=_NOW)
 
+    assert second_fake.calls["n"] == 0  # ה-AI לא נקרא בריצה השנייה (idempotency)
     count = (
         await db.execute(select(func.count()).select_from(AiSummary))
     ).scalar_one()

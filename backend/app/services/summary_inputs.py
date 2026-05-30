@@ -66,13 +66,17 @@ _OUTBOUND_TYPES = (
 )
 
 # "מגע יוצא" לצורך מדידת *שתיקה* — כל פנייה יזומה של נועה/העוזרת ללקוח:
-# מסרים + שיחות (כולל ניסיון ללא מענה). רחב מ-_OUTBOUND_TYPES בכוונה — שיחה
-# שבוצעה אתמול מאפסת את שעון השתיקה, גם אם ההודעה האחרונה הייתה מזמן. בלי
-# זה היינו מנפחים את מספר "ימי השתיקה" ושוברים את האמון בסיכום (סבילות נמוכה).
+# מסרים + שיחות (כולל ניסיון ללא מענה) + שליחת הצעה. רחב מ-_OUTBOUND_TYPES
+# בכוונה — שיחה/הצעה שבוצעה אתמול מאפסת את שעון השתיקה, גם אם ההודעה האחרונה
+# הייתה מזמן. בלי זה היינו מנפחים את מספר "ימי השתיקה" ושוברים את האמון
+# בסיכום (סבילות נמוכה). PROPOSAL_SENT כלול — mark_proposal_sent מסומן
+# set_last_outbound=True (state_machine.py), עקבי עם backfill של first_outbound_at
+# (migration 0026) שכולל אף הוא proposal_sent.
 _OUTBOUND_CONTACT_TYPES = (
     *_OUTBOUND_TYPES,
     ActivityType.CALL_COMPLETED.value,
     ActivityType.CALL_NO_ANSWER.value,
+    ActivityType.PROPOSAL_SENT.value,
 )
 
 # ימי השבוע בעברית — date.weekday(): שני=0 .. ראשון=6.

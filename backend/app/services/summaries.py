@@ -163,8 +163,16 @@ async def _generate_validated(
     3. שם בפלט שלא בקלט.
     אם הבעיה נמשכת אחרי regen: שמות → validation_warning=True (שומרים); אורך →
     שומרים בלי חיתוך; JSON → None. AIRateLimitError → None בלי regen.
+
+    טוקנים: ה-usage המוחזר צובר את הטוקנים של *כל* הקריאות (כולל regen מבוזבז),
+    כדי ש-tokens_in/out ב-ai_summaries ישקפו את העלות המלאה. השדה model נשאר
+    מהקריאה הסופית (זו שתוצאתה נשמרת).
     """
     last_result: BaseModel | None = None
+    # צובר טוקנים על פני כל הקריאות (כולל regen מבוזבז) — finding: regen drops
+    # first call tokens. ה-usage הסופי מוחזר עם הסכום, model מהקריאה האחרונה.
+    cumulative_in = 0
+    cumulative_out = 0
     last_usage: dict | None = None
 
     for attempt in range(2):  # ניסיון ראשון + regen אחד
@@ -180,13 +188,20 @@ async def _generate_validated(
             logger.error("summary generation failed after regen: %s", e)
             return None
 
-        last_result, last_usage = result, usage
+        cumulative_in += usage.get("input_tokens") or 0
+        cumulative_out += usage.get("output_tokens") or 0
+        merged_usage = {
+            **usage,
+            "input_tokens": cumulative_in,
+            "output_tokens": cumulative_out,
+        }
+        last_result, last_usage = result, merged_usage
 
         over_limit = _section_grossly_over_limit(result, word_caps)
         unknown_name = _output_has_unknown_name(result, input_names)
 
         if not over_limit and not unknown_name:
-            return result, usage, False  # נקי
+            return result, merged_usage, False  # נקי
 
         if attempt == 0:
             logger.warning(
@@ -203,6 +218,29 @@ async def _generate_validated(
     if last_result is not None and last_usage is not None:
         return last_result, last_usage, False
     return None
+
+
+async def _get_existing_summary(
+    db: AsyncSession,
+    *,
+    summary_type: str,
+    range_start: date,
+    range_end: date,
+) -> AiSummary | None:
+    """
+    מחזיר סיכום קיים לטווח (אם יש), אחרת None. נקרא *לפני* הקריאה ל-AI כדי
+    לא לבזבז generation על טווח שכבר סוכם (first-write-wins ב-DB ממילא לא
+    ידרוס, אבל הקריאה ל-Claude עולה כסף וזמן). idempotency אמיתי = דילוג מוקדם.
+    """
+    return (
+        await db.execute(
+            select(AiSummary).where(
+                AiSummary.type == summary_type,
+                AiSummary.date_range_start == range_start,
+                AiSummary.date_range_end == range_end,
+            )
+        )
+    ).scalar_one_or_none()
 
 
 async def _store_summary(
@@ -267,6 +305,17 @@ async def generate_and_store_daily_summary(
     עושה flush בלבד — ה-caller אחראי על ה-commit (גבול טרנזקציה אחד).
     """
     now_utc = now_utc or datetime.now(timezone.utc)
+    day = to_israel_tz(now_utc).date()
+
+    # idempotency: אם כבר קיים סיכום ליום הזה — מחזירים אותו בלי לקרוא ל-AI
+    # (חוסך generation מבוזבז; first-write-wins ב-DB ממילא לא היה דורס).
+    existing = await _get_existing_summary(
+        db, summary_type=SummaryType.DAILY.value, range_start=day, range_end=day
+    )
+    if existing is not None:
+        logger.info("daily summary already exists for %s — skipping AI", day)
+        return existing
+
     user_prompt = await build_daily_user_prompt(db, now_utc)
 
     validated = await _generate_validated(
@@ -280,7 +329,6 @@ async def generate_and_store_daily_summary(
         return None
     result, usage, warning = validated
 
-    day = to_israel_tz(now_utc).date()
     summary = await _store_summary(
         db,
         summary_type=SummaryType.DAILY.value,
@@ -312,6 +360,28 @@ async def generate_and_store_weekly_summary(
     עושה flush בלבד — ה-caller אחראי על ה-commit (גבול טרנזקציה אחד).
     """
     now_utc = now_utc or datetime.now(timezone.utc)
+
+    # טווח התצוגה זהה ל-build_weekly_user_prompt: ראשון (start) עד שבת
+    # (end exclusive פחות יום). _last_week_bounds מחזיר UTC; ממירים לתאריך ישראל.
+    week_start_utc, week_end_utc = _last_week_bounds(now_utc)
+    range_start = to_israel_tz(week_start_utc).date()
+    range_end = to_israel_tz(week_end_utc).date() - _ONE_DAY
+
+    # idempotency: אם כבר קיים סיכום לשבוע הזה — מחזירים אותו בלי לקרוא ל-AI.
+    existing = await _get_existing_summary(
+        db,
+        summary_type=SummaryType.WEEKLY.value,
+        range_start=range_start,
+        range_end=range_end,
+    )
+    if existing is not None:
+        logger.info(
+            "weekly summary already exists for %s..%s — skipping AI",
+            range_start,
+            range_end,
+        )
+        return existing
+
     user_prompt = await build_weekly_user_prompt(db, now_utc)
 
     validated = await _generate_validated(
@@ -324,12 +394,6 @@ async def generate_and_store_weekly_summary(
         logger.error("weekly summary unavailable (AI failure)")
         return None
     result, usage, warning = validated
-
-    # טווח התצוגה זהה ל-build_weekly_user_prompt: ראשון (start) עד שבת
-    # (end exclusive פחות יום). _last_week_bounds מחזיר UTC; ממירים לתאריך ישראל.
-    week_start_utc, week_end_utc = _last_week_bounds(now_utc)
-    range_start = to_israel_tz(week_start_utc).date()
-    range_end = to_israel_tz(week_end_utc).date() - _ONE_DAY
 
     summary = await _store_summary(
         db,
