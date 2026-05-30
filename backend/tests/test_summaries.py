@@ -223,9 +223,10 @@ async def test_store_daily_summary_first_write_wins(db, monkeypatch):
     )
     first = await summaries.generate_and_store_daily_summary(db, now_utc=_NOW)
 
-    # מדמים לחיצת "לא מדויק" → מעלים את ה-counter:
+    # מדמים לחיצת "לא מדויק" → מעלים את ה-counter (flush בלבד; ה-fixture
+    # מנקה ב-rollback, וה-service עצמו עושה flush ולא commit):
     first.inaccurate_count = 5
-    await db.commit()
+    await db.flush()
 
     # ריצה שנייה (output שונה) — לא אמורה לדרוס:
     monkeypatch.setattr(

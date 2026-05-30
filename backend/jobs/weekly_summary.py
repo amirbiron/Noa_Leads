@@ -30,6 +30,9 @@ async def weekly_summary() -> None:
         summary = await summaries_service.generate_and_store_weekly_summary(
             db, now_utc=now_utc
         )
+        # ה-service עושה flush בלבד; ה-job בעל ה-session ואחראי על ה-commit.
+        if summary is not None:
+            await db.commit()
 
     if summary is not None:
         logger.info("Weekly summary generated and stored")

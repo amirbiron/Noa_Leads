@@ -220,6 +220,9 @@ async def _store_summary(
     שומר את הסיכום ב-ai_summaries עם first-write-wins (ON CONFLICT DO NOTHING
     על הטווח). אם כבר קיים row לאותו טווח — מחזיר אותו בלי לדרוס (שומר על
     inaccurate_count של נועה). מחזיר את ה-AiSummary (חדש או קיים).
+
+    עושה flush בלבד — ה-commit באחריות ה-caller (ה-job שבעל ה-session). כך
+    גבול הטרנזקציה נשלט במקום אחד, וגם בדיקות יכולות לרוץ תחת rollback fixture.
     """
     stmt = (
         pg_insert(AiSummary)
@@ -239,7 +242,7 @@ async def _store_summary(
         )
     )
     await db.execute(stmt)
-    await db.commit()
+    await db.flush()
 
     # טוענים מחדש (בין אם נכתב עכשיו ובין אם כבר היה קיים) — מקור אמת יחיד.
     existing = (
@@ -260,6 +263,8 @@ async def generate_and_store_daily_summary(
     """
     מייצר סיכום יומי (C.1) ושומר ב-ai_summaries. הטווח = יום-הלוח בישראל.
     מחזיר את ה-AiSummary, או None בכשל AI (UI יציג "סיכום לא זמין כרגע").
+
+    עושה flush בלבד — ה-caller אחראי על ה-commit (גבול טרנזקציה אחד).
     """
     now_utc = now_utc or datetime.now(timezone.utc)
     user_prompt = await build_daily_user_prompt(db, now_utc)
@@ -303,6 +308,8 @@ async def generate_and_store_weekly_summary(
     """
     מייצר סיכום שבועי (C.2) ושומר ב-ai_summaries. הטווח = השבוע הקודם המלא
     (ראשון→שבת). מחזיר את ה-AiSummary, או None בכשל AI.
+
+    עושה flush בלבד — ה-caller אחראי על ה-commit (גבול טרנזקציה אחד).
     """
     now_utc = now_utc or datetime.now(timezone.utc)
     user_prompt = await build_weekly_user_prompt(db, now_utc)
