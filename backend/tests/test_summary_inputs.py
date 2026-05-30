@@ -292,6 +292,44 @@ async def test_highlighted_leads_block_booked_via_meeting_approved(db):
     assert 'בוצע ע"י: נועה' in block
 
 
+async def test_silence_break_reset_by_recent_call(db):
+    """
+    שיחה עדכנית (CALL_COMPLETED לפני יומיים) מאפסת את שעון השתיקה — גם אם
+    ההודעה האחרונה הייתה לפני 20 יום. הליד לא יוצג כ"שבר שתיקה ארוכה".
+    """
+    lead = await _mk_lead(db, full_name="אבי")
+    db.add_all([
+        Activity(lead_id=lead.id, type=ActivityType.OUTBOUND_MESSAGE_LOGGED.value,
+                 created_at=_NOW - timedelta(days=20)),
+        Activity(lead_id=lead.id, type=ActivityType.CALL_COMPLETED.value,
+                 created_at=_NOW - timedelta(days=2)),
+        Activity(lead_id=lead.id, type=ActivityType.INBOUND_MESSAGE_LOGGED.value,
+                 created_at=_IN_WINDOW),
+    ])
+    await db.flush()
+
+    block = await si.compute_highlighted_leads_block(db, _NOW - timedelta(hours=24), _NOW)
+    assert "אבי" not in block  # הפער מהשיחה = יומיים < 7 → לא highlight
+
+
+async def test_attention_block_dedups_same_lead(db):
+    """ליד שהוא גם הצעה תקועה וגם תקוע → מופיע פעם אחת בלבד."""
+    lead = await _mk_lead(
+        db, full_name="כפול", status=LeadStatus.PROPOSAL_SENT.value,
+        proposal_sent_at=_NOW - timedelta(days=5),
+    )
+    db.add(Task(
+        lead_id=lead.id, type=TaskType.PROPOSAL_FOLLOWUP.value,
+        status=TaskStatus.OPEN.value, due_at=_NOW - timedelta(days=10),
+    ))
+    await db.flush()
+
+    block = await si.compute_attention_items_block(db, _NOW)
+    assert block.count("כפול") == 1  # לא כפילות
+    # מופיע לפי הקריטריון בעל העדיפות הגבוהה (הצעה תקועה).
+    assert "הצעה ללא מענה" in block
+
+
 async def test_attention_items_block_stale_proposal(db):
     """הצעה תקועה מופיעה ב-block עם מספר הימים."""
     await _mk_lead(

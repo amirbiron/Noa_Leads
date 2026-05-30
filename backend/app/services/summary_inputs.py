@@ -50,11 +50,22 @@ logger = logging.getLogger("services.summary_inputs")
 
 # ===== קבועי מיפוי =====
 
-# הודעות יוצאות — שלושת ה-ActivityType שמייצגים שליחה יוצאת של נועה/העוזרת.
+# הודעות יוצאות — שלושת ה-ActivityType שמייצגים שליחת *מסר* יוצא (לספירת
+# מטריקת "הודעות יוצאות"; שיחות נספרות בנפרד כ-CALL_COMPLETED).
 _OUTBOUND_TYPES = (
     ActivityType.TEMPLATE_MARKED_SENT.value,
     ActivityType.MANUAL_MESSAGE_LOGGED.value,
     ActivityType.OUTBOUND_MESSAGE_LOGGED.value,
+)
+
+# "מגע יוצא" לצורך מדידת *שתיקה* — כל פנייה יזומה של נועה/העוזרת ללקוח:
+# מסרים + שיחות (כולל ניסיון ללא מענה). רחב מ-_OUTBOUND_TYPES בכוונה — שיחה
+# שבוצעה אתמול מאפסת את שעון השתיקה, גם אם ההודעה האחרונה הייתה מזמן. בלי
+# זה היינו מנפחים את מספר "ימי השתיקה" ושוברים את האמון בסיכום (סבילות נמוכה).
+_OUTBOUND_CONTACT_TYPES = (
+    *_OUTBOUND_TYPES,
+    ActivityType.CALL_COMPLETED.value,
+    ActivityType.CALL_NO_ANSWER.value,
 )
 
 # ימי השבוע בעברית — date.weekday(): שני=0 .. ראשון=6.
@@ -432,7 +443,8 @@ async def compute_highlighted_leads_block(
         select(func.max(prev_out.created_at))
         .where(
             prev_out.lead_id == Activity.lead_id,
-            prev_out.type.in_(_OUTBOUND_TYPES),
+            # כל מגע יוצא (מסר/שיחה) מאפס את שעון השתיקה — לא רק מסרים.
+            prev_out.type.in_(_OUTBOUND_CONTACT_TYPES),
             prev_out.created_at < Activity.created_at,
         )
         .correlate(Activity)
@@ -530,8 +542,21 @@ async def compute_attention_items_block(db: AsyncSession, now_utc: datetime) -> 
     2. ליד תקוע מעל 7 ימים.
     3. משימה פעילה שעברה את היעד.
     מחזיר מחרוזת בפורמט §4.1, או "(ריק)" אם אין.
+
+    dedup גלובלי לפי lead: ליד שגם הצעתו תקועה וגם יש לו task תקוע יופיע
+    *פעם אחת* בלבד, לפי הקריטריון בעל העדיפות הגבוהה ביותר (לפי סדר הסעיפים).
+    כך לא מבזבזים slots ולא מבלבלים את ה-AI בכפילויות.
     """
     lines: list[str] = []
+    seen: set = set()
+
+    def _add(lead: Lead, text: str) -> bool:
+        """מוסיף שורה אם הליד טרם נכלל. מחזיר True כשהגענו לתקרה."""
+        if lead.id in seen:
+            return len(lines) >= _BLOCK_LIMIT
+        seen.add(lead.id)
+        lines.append(text)
+        return len(lines) >= _BLOCK_LIMIT
 
     # (1) הצעות תקועות — הוותיקה ביותר ראשונה.
     sent_at = func.coalesce(Lead.proposal_sent_at, Lead.last_outbound_at)
@@ -550,11 +575,11 @@ async def compute_attention_items_block(db: AsyncSession, now_utc: datetime) -> 
     ).all()
     for lead, sent in stale:
         days = max(0, (now_utc - sent).days)
-        lines.append(
+        if _add(
+            lead,
             f"- סוג: הצעה ללא מענה | ליד: {_lead_display_name(lead)} | "
-            f"ימים מאז שליחה: {days}"
-        )
-        if len(lines) >= _BLOCK_LIMIT:
+            f"ימים מאז שליחה: {days}",
+        ):
             return "\n".join(lines)
 
     # (2) לידים תקועים — הוותיק ביותר (לפי due_at של ה-task התקוע) ראשון.
@@ -577,14 +602,15 @@ async def compute_attention_items_block(db: AsyncSession, now_utc: datetime) -> 
     ).all()
     for lead, oldest_due in stuck:
         days = max(0, (now_utc - oldest_due).days)
-        lines.append(
+        if _add(
+            lead,
             f"- סוג: ליד תקוע | ליד: {_lead_display_name(lead)} | "
-            f"ימים בסטטוס נוכחי: {days}"
-        )
-        if len(lines) >= _BLOCK_LIMIT:
+            f"ימים בסטטוס נוכחי: {days}",
+        ):
             return "\n".join(lines)
 
-    # (3) משימות פעילות שעברו את היעד — הוותיקה ביותר ראשונה.
+    # (3) משימות פעילות שעברו את היעד — הוותיקה ביותר ראשונה. headroom של
+    # פי-3 בשליפה כי כמה tasks יכולים להיות לאותו ליד (dedup מסנן אותם).
     overdue = (
         await db.execute(
             select(Task, Lead)
@@ -595,17 +621,17 @@ async def compute_attention_items_block(db: AsyncSession, now_utc: datetime) -> 
                 surfaceable_task_condition(),
             )
             .order_by(Task.due_at.asc())
-            .limit(_BLOCK_LIMIT)
+            .limit(_BLOCK_LIMIT * 3)
         )
     ).all()
     for task, lead in overdue:
         desc = (task.task_metadata or {}).get("description") if task.task_metadata else None
         desc = desc or _task_type_label(task.type)
-        lines.append(
+        if _add(
+            lead,
             f"- סוג: משימה שלא בוצעה | ליד: {_lead_display_name(lead)} | "
-            f"תיאור: {desc}"
-        )
-        if len(lines) >= _BLOCK_LIMIT:
+            f"תיאור: {desc}",
+        ):
             return "\n".join(lines)
 
     return "\n".join(lines) if lines else "(ריק)"
