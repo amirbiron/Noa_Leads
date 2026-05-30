@@ -1288,6 +1288,56 @@ def compute_next_week_focus_suggestion(
 
 # ===== assembly שבועי =====
 
+
+async def _resolve_weekly_open_state(
+    db: AsyncSession,
+    week_end_utc: datetime,
+    week_end_date: date,
+) -> tuple[dict, int]:
+    """שולף את "מצב פתוח בסוף השבוע" מ-snapshot קבוע, או fallback ל-live.
+
+    דרך-המלך: row ב-`weekly_open_state_snapshots` נכתב ע"י cron בראשון 00:00
+    שעון ישראל (`jobs/capture_weekly_open_state`). שחזור מתוך שדות mutable
+    אינו אמין (7 ממצאי cursor bugbot); הצילום פותר את הבעיה בשורש.
+
+    fallback ל-`_open_state(db, week_end)` + `_dormant_with_recommendation_count`
+    כש-snapshot חסר — לפני שה-cron הראשון רץ, או אם נכשל. logged בכל פעם
+    שה-fallback מופעל כדי שיהיה visible ב-monitoring.
+
+    מחזיר (open_state_dict, dormant_count) כדי לשמר את החתימה של ה-callers.
+    """
+    from app.models.weekly_open_state_snapshot import WeeklyOpenStateSnapshot
+
+    snapshot = (
+        await db.execute(
+            select(WeeklyOpenStateSnapshot).where(
+                WeeklyOpenStateSnapshot.week_end_date == week_end_date
+            )
+        )
+    ).scalar_one_or_none()
+
+    if snapshot is not None:
+        return (
+            {
+                "open_leads_total": snapshot.open_leads_total,
+                "stuck_leads_count": snapshot.stuck_leads_count,
+                "stale_proposals_count": snapshot.stale_proposals_count,
+                "overdue_tasks_count": snapshot.overdue_tasks_count,
+            },
+            snapshot.dormant_with_recommendation_count,
+        )
+
+    logger.warning(
+        "weekly open-state snapshot missing for week ending %s — "
+        "falling back to live _open_state. cron capture_weekly_open_state "
+        "may have failed or not yet run.",
+        week_end_date,
+    )
+    open_state = await _open_state(db, week_end_utc)
+    dormant = await _dormant_with_recommendation_count(db)
+    return open_state, dormant
+
+
 async def build_weekly_user_prompt(
     db: AsyncSession, now_utc: datetime | None = None
 ) -> str:
@@ -1314,12 +1364,16 @@ async def build_weekly_user_prompt(
     movement = await _lead_movement(db, week_start, week_end)
     newly_dormant = await _newly_dormant_count(db, week_start, week_end)
 
-    # snapshot מצב נכון לסוף השבוע (לא ל-now): cron רץ ראשון בבוקר ~9 שעות
-    # אחרי week_end, ופעילות בפער (לידים שנכנסו/נסגרו ראשון בבוקר) לא צריכה
-    # להשתקף בשדות end_of_week. שדות הזמן ב-_open_state (created_at/closed_at/
-    # completed_at/status_changed_at) נותנים את ה-as-of הזה ב-best-effort.
-    open_state = await _open_state(db, week_end)
-    dormant_count = await _dormant_with_recommendation_count(db)
+    # snapshot מצב נכון לסוף השבוע — נשלף מ-row קבוע ב-weekly_open_state_snapshots
+    # שנכתב ע"י cron ב-ראשון 00:00 שעון ישראל (`jobs/capture_weekly_open_state`).
+    # זה ה-source-of-truth: שחזור מתוך שדות mutable (status נוכחי, due_at שנדרס
+    # ב-snooze, closed_at שמתאפס ב-reopen) הוכח כלא אמין (7 ממצאי cursor bugbot).
+    # fallback ל-live `_open_state(db, week_end)` אם אין snapshot — לפני שה-cron
+    # הראשון רץ או אם נכשל. ה-live מבוסס על temporal predicates עם best-effort
+    # ידוע ומתועד.
+    open_state, dormant_count = await _resolve_weekly_open_state(
+        db, week_end, week_end_date
+    )
 
     trends = await compute_trends_block(
         db,

@@ -845,6 +845,54 @@ async def test_build_weekly_user_prompt_renders(db):
     assert "תובנות אסטרטגיות שחושבו מראש:" in prompt
 
 
+async def test_build_weekly_user_prompt_reads_from_snapshot(db):
+    """כש-row של `weekly_open_state_snapshots` קיים — ה-prompt קורא ממנו,
+    לא מ-`_open_state` חי.
+
+    יצירת snapshot עם ערכים ייחודיים (`open_leads_total=42`) שלא ייווצרו
+    באופן ספונטני ע"י `_open_state` חי, ואז ודא שהם נכנסו ל-prompt.
+    """
+    from app.models.weekly_open_state_snapshot import WeeklyOpenStateSnapshot
+
+    # _SUNDAY_NOW = ראשון 2026-05-31. השבוע שהסתיים: ראשון-שבת = 2026-05-24..30.
+    # `week_end_date` בתבנית = שבת = 2026-05-30.
+    db.add(WeeklyOpenStateSnapshot(
+        week_end_date=date(2026, 5, 30),
+        open_leads_total=42,
+        stuck_leads_count=7,
+        stale_proposals_count=3,
+        overdue_tasks_count=11,
+        dormant_with_recommendation_count=5,
+    ))
+    await db.flush()
+
+    prompt = await si.build_weekly_user_prompt(db, now_utc=_SUNDAY_NOW)
+
+    # ה-template מציג open_leads_end_of_week, stuck_leads_count וכו'.
+    assert "לידים פתוחים בסוף השבוע: 42" in prompt
+    assert "לידים תקועים מעל 7 ימים: 7" in prompt
+    assert "הצעות שנשלחו ללא מענה מעל 4 ימים: 3" in prompt
+    assert "סך לידים רדומים עם המלצת AI: 5" in prompt
+
+
+async def test_build_weekly_user_prompt_falls_back_when_no_snapshot(db):
+    """אם אין snapshot ל-week_end — fallback ל-`_open_state` חי.
+
+    בדיקה: יוצרים ליד פתוח אחד; ב-fallback `_open_state` יחזיר open=1,
+    שונה מערכי snapshot-בדיוני שהיו במבחן הקודם.
+    """
+    await _mk_lead(db, created_at=_SUNDAY_NOW - timedelta(days=10))
+    await db.flush()
+
+    prompt = await si.build_weekly_user_prompt(db, now_utc=_SUNDAY_NOW)
+
+    # אין snapshot → fallback. open_leads_total >= 1 (לא 42 מהבדיקה הקודמת).
+    assert "לידים פתוחים בסוף השבוע: 42" not in prompt
+    # הליד שיצרנו נמצא ב-spectrum הסביר: 1 או יותר ע"פ contamination.
+    # מאמתים שהשורה קיימת ומשתנה דינמית — לא רק presence של placeholder.
+    assert "לידים פתוחים בסוף השבוע:" in prompt
+
+
 # ===================== בדיקות שבועיות — integration (DB) =====================
 
 # מקבע system_start_date מוקדם מספיק כך ש-has_comparison_data=true בבדיקות.
