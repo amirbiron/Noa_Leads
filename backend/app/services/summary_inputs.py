@@ -25,6 +25,7 @@ from datetime import date, datetime, timedelta, timezone
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from app.config import get_settings
 from app.constants import (
@@ -421,21 +422,40 @@ async def compute_highlighted_leads_block(
         )
         return len(lines) >= _BLOCK_LIMIT
 
-    # (1) שבירת שתיקה: last_inbound_at בחלון, ופער של 7+ ימים מ-outbound האחרון.
-    # פעולת לקוח — בלי "בוצע ע"י".
+    # (1) שבירת שתיקה: לקוח שלח הודעה נכנסת בחלון, וה-outbound *שקדם לה*
+    # היה לפני 7+ ימים. מחושב מלוג הפעילות (לא מ-last_outbound_at הדנורמלי):
+    # אם נועה תענה ללקוח *אחרי* ההודעה הנכנסת באותו יום, last_outbound_at
+    # יקפוץ קדימה — אבל כאן אנחנו מסתכלים רק על outbound עם created_at קטן
+    # מזמן ה-inbound, כך שהזיהוי יציב גם אחרי מענה. פעולת לקוח — בלי "בוצע ע"י".
+    prev_out = aliased(Activity)
+    prev_outbound_at = (
+        select(func.max(prev_out.created_at))
+        .where(
+            prev_out.lead_id == Activity.lead_id,
+            prev_out.type.in_(_OUTBOUND_TYPES),
+            prev_out.created_at < Activity.created_at,
+        )
+        .correlate(Activity)
+        .scalar_subquery()
+    )
     silence_rows = (
         await db.execute(
-            select(Lead).where(
-                Lead.last_inbound_at >= window_start,
-                Lead.last_inbound_at < now_utc,
-                Lead.last_outbound_at.is_not(None),
-                Lead.last_inbound_at - Lead.last_outbound_at
-                >= timedelta(days=_SILENCE_BREAK_DAYS),
+            select(Lead, Activity.created_at, prev_outbound_at.label("prev_out"))
+            .join(Lead, Activity.lead_id == Lead.id)
+            .where(
+                Activity.type == ActivityType.INBOUND_MESSAGE_LOGGED.value,
+                Activity.created_at >= window_start,
+                Activity.created_at < now_utc,
             )
+            .order_by(Activity.created_at.desc())
         )
-    ).scalars().all()
-    for lead in silence_rows:
-        gap_days = (lead.last_inbound_at - lead.last_outbound_at).days
+    ).all()
+    for lead, inbound_at, prev_outbound in silence_rows:
+        if prev_outbound is None:
+            continue  # אין outbound קודם — לא "שתיקה שנשברה", פשוט ליד צעיר.
+        gap_days = (inbound_at - prev_outbound).days
+        if gap_days < _SILENCE_BREAK_DAYS:
+            continue
         if _add(lead, f"ענה אחרי {gap_days} ימי שתיקה", None):
             return "\n".join(lines)
 

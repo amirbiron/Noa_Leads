@@ -231,18 +231,45 @@ async def test_open_state_counts(db):
 
 
 async def test_highlighted_leads_block_silence_break(db):
-    """ליד שענה אחרי 8 ימי שתיקה מופיע ב-block עם האירוע הנכון."""
-    lead = await _mk_lead(
-        db,
-        full_name="מירב כהן",
-        service_subtype="voice_rehab",
-        last_outbound_at=_NOW - timedelta(days=10),
-        last_inbound_at=_IN_WINDOW,
-    )
+    """ליד שענה אחרי 10 ימי שתיקה (outbound לפני 10 ימים → inbound בחלון)."""
+    lead = await _mk_lead(db, full_name="מירב כהן", service_subtype="voice_rehab")
+    db.add_all([
+        Activity(lead_id=lead.id, type=ActivityType.OUTBOUND_MESSAGE_LOGGED.value,
+                 created_at=_NOW - timedelta(days=10)),
+        Activity(lead_id=lead.id, type=ActivityType.INBOUND_MESSAGE_LOGGED.value,
+                 created_at=_IN_WINDOW),
+    ])
+    await db.flush()
+
     block = await si.compute_highlighted_leads_block(db, _NOW - timedelta(hours=24), _NOW)
     assert "מירב כהן" in block
     assert "ימי שתיקה" in block
     assert str(lead.id) not in block  # לא חושפים IDs
+
+
+async def test_silence_break_survives_reply_in_same_window(db):
+    """
+    regression: גם אם נועה ענתה ללקוח *אחרי* ההודעה הנכנסת באותו חלון
+    (outbound חדש), שבירת השתיקה עדיין מזוהה — כי מודדים מ-outbound שקדם
+    ל-inbound, לא מ-last_outbound_at הדנורמלי.
+    """
+    lead = await _mk_lead(db, full_name="יעל")
+    db.add_all([
+        # outbound ישן (תחילת השתיקה):
+        Activity(lead_id=lead.id, type=ActivityType.OUTBOUND_MESSAGE_LOGGED.value,
+                 created_at=_NOW - timedelta(days=9)),
+        # הלקוח שבר שתיקה:
+        Activity(lead_id=lead.id, type=ActivityType.INBOUND_MESSAGE_LOGGED.value,
+                 created_at=_NOW - timedelta(hours=3)),
+        # נועה ענתה מיד אחרי — outbound חדש בתוך החלון:
+        Activity(lead_id=lead.id, type=ActivityType.TEMPLATE_MARKED_SENT.value,
+                 created_at=_NOW - timedelta(hours=1)),
+    ])
+    await db.flush()
+
+    block = await si.compute_highlighted_leads_block(db, _NOW - timedelta(hours=24), _NOW)
+    assert "יעל" in block
+    assert "9 ימי שתיקה" in block
 
 
 async def test_highlighted_leads_block_booked_via_meeting_approved(db):
