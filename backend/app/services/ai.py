@@ -27,7 +27,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import Literal, TypeVar
+from typing import Annotated, Literal, TypeVar
 
 from anthropic import (
     APIConnectionError,
@@ -382,27 +382,43 @@ class DormantSuggestionResult(BaseModel):
 
 
 class DailySummaryResult(BaseModel):
-    """תוצאת סיכום יומי (C.1, §5.3). max_length תואם ל-output schema באפיון.
-    omitted_sections — סקציות שה-AI השמיט (ה-UI לא מרנדר אותן)."""
+    """תוצאת סיכום יומי (C.1, §5.3). max_length + item constraints + enum של
+    omitted_sections — תואמים 1:1 ל-output schema באפיון. ערך מחוץ לסכמה (typo /
+    סקציה לא מוכרת / מחרוזת ארוכה מדי) נכשל ב-Pydantic → regen (§6.6)."""
 
     bottom_line: str = Field(min_length=1, max_length=280)
     today: str = Field(min_length=1, max_length=560)
-    highlights: list[str] = Field(default_factory=list, max_length=3)
-    needs_attention: list[str] = Field(default_factory=list, max_length=3)
+    highlights: list[Annotated[str, Field(min_length=1, max_length=280)]] = Field(
+        default_factory=list, max_length=3
+    )
+    needs_attention: list[Annotated[str, Field(min_length=1, max_length=220)]] = Field(
+        default_factory=list, max_length=3
+    )
     tomorrow: str | None = Field(default=None, max_length=350)
-    omitted_sections: list[str] = Field(default_factory=list)
+    omitted_sections: list[
+        Literal["highlights", "needs_attention", "tomorrow"]
+    ] = Field(default_factory=list)
 
 
 class WeeklySummaryResult(BaseModel):
-    """תוצאת סיכום שבועי (C.2, §5.7). max_length תואם ל-output schema באפיון."""
+    """תוצאת סיכום שבועי (C.2, §5.7). max_length + item constraints + enum של
+    omitted_sections — תואמים 1:1 ל-output schema באפיון."""
 
     bottom_line: str = Field(min_length=1, max_length=320)
     week_overview: str = Field(min_length=1, max_length=700)
     trends_vs_last_week: str | None = Field(default=None, max_length=800)
-    what_worked: list[str] = Field(default_factory=list, max_length=3)
-    what_stuck: list[str] = Field(default_factory=list, max_length=3)
+    what_worked: list[Annotated[str, Field(min_length=1, max_length=280)]] = Field(
+        default_factory=list, max_length=3
+    )
+    what_stuck: list[Annotated[str, Field(min_length=1, max_length=280)]] = Field(
+        default_factory=list, max_length=3
+    )
     next_week_focus: str | None = Field(default=None, max_length=400)
-    omitted_sections: list[str] = Field(default_factory=list)
+    omitted_sections: list[
+        Literal[
+            "trends_vs_last_week", "what_worked", "what_stuck", "next_week_focus"
+        ]
+    ] = Field(default_factory=list)
 
 
 # ===== JSON parsing =====
