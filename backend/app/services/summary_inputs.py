@@ -289,64 +289,89 @@ async def _lead_movement(
     }
 
 
-# ===== מצב פתוחים (snapshot ל-now) =====
+# ===== מצב פתוחים (snapshot ל-as_of) =====
 
-def _stuck_lead_condition(now_utc: datetime):
-    """ליד פתוח עם task פעיל surfaceable שה-due_at שלו עבר ב-7+ ימים (כלל 10)."""
-    threshold = now_utc - timedelta(days=_STUCK_DAYS)
-    stuck_task_exists = (
+
+async def _open_state(db: AsyncSession, as_of: datetime) -> dict:
+    """ספירות מצב נכון לרגע `as_of` (לא תלוי חלון).
+
+    `as_of` הוא ה-anchor של ה-snapshot: ב-daily נקרא עם `now_utc`, ב-weekly
+    עם `week_end` (סוף שבת / תחילת ראשון 00:00 ישראל). כך פעילות בפער
+    שבין סוף-השבוע לרגע ה-cron (ראשון בבוקר) לא משויכת בטעות לסיכום
+    השבועי.
+
+    כל ספירה מתבססת על שדות זמן קיימים:
+    - Lead: created_at, closed_at, status_changed_at
+    - Task: created_at, due_at, completed_at
+    ה-snapshot ב-`as_of` מוגדר: "נוצר עד אז, עוד לא נסגר באותו רגע".
+    """
+    # ליד היה פתוח ב-`as_of`: נוצר עד אז ועוד לא נסגר אז.
+    open_at_as_of = and_(
+        Lead.created_at <= as_of,
+        or_(Lead.closed_at.is_(None), Lead.closed_at > as_of),
+    )
+
+    open_leads_total = (
+        await db.execute(
+            select(func.count()).select_from(Lead).where(open_at_as_of)
+        )
+    ).scalar_one()
+
+    # ליד תקוע ב-`as_of`: היה פתוח אז + EXISTS task שהיה אקטיבי
+    # (open/snoozed) באותו רגע ושה-due_at שלו עבר ב-7+ ימים. task active
+    # ב-`as_of` = created_at<=as_of AND (completed_at IS NULL OR completed_at>as_of).
+    stuck_threshold = as_of - timedelta(days=_STUCK_DAYS)
+    stuck_task_at_as_of = (
         select(Task.id)
         .where(
             Task.lead_id == Lead.id,
-            Task.status.in_([TaskStatus.OPEN.value, TaskStatus.SNOOZED.value]),
-            Task.due_at <= threshold,
+            Task.created_at <= as_of,
+            Task.due_at <= stuck_threshold,
+            or_(Task.completed_at.is_(None), Task.completed_at > as_of),
             surfaceable_task_condition(),
         )
         .correlate(Lead)
         .exists()
     )
-    return (
-        Lead.status.notin_([s.value for s in CLOSED_LEAD_STATUSES]),
-        stuck_task_exists,
-    )
-
-
-async def _open_state(db: AsyncSession, now_utc: datetime) -> dict:
-    """ספירות מצב נכון ל-now (לא תלוי חלון)."""
-    closed = [s.value for s in CLOSED_LEAD_STATUSES]
-
-    open_leads_total = (
-        await db.execute(
-            select(func.count()).select_from(Lead).where(Lead.status.notin_(closed))
-        )
-    ).scalar_one()
-
     stuck_leads_count = (
         await db.execute(
-            select(func.count()).select_from(Lead).where(*_stuck_lead_condition(now_utc))
+            select(func.count()).select_from(Lead).where(
+                open_at_as_of,
+                stuck_task_at_as_of,
+            )
         )
     ).scalar_one()
 
-    # הצעה תקועה: PROPOSAL_SENT שנשלח לפני 4+ ימים. proposal_sent_at הוא
-    # השדה הייעודי; fallback ל-last_outbound_at ללידים ישנים (כמו get_open_proposals).
-    stale_threshold = now_utc - timedelta(days=_STALE_PROPOSAL_DAYS)
+    # הצעה תקועה ב-`as_of`: ליד שהיה ב-PROPOSAL_SENT באותו רגע (current
+    # status + status_changed_at<=as_of — אין שינוי מאז `as_of`), נוצר
+    # עד אז, ושלח הצעה לפני 4+ ימים מ-`as_of`. proposal_sent_at הוא
+    # השדה הייעודי; fallback ל-last_outbound_at ללידים ישנים.
+    # מגבלה ידועה: אם הסטטוס תנודד PROPOSAL_SENT → אחר → PROPOSAL_SENT
+    # בפער שבין as_of ל-now, לא נתפוס. נדיר; אין היסטוריה מלאה ב-DB.
+    stale_threshold = as_of - timedelta(days=_STALE_PROPOSAL_DAYS)
     sent_at = func.coalesce(Lead.proposal_sent_at, Lead.last_outbound_at)
     stale_proposals_count = (
         await db.execute(
             select(func.count()).select_from(Lead).where(
                 Lead.status == LeadStatus.PROPOSAL_SENT.value,
+                or_(
+                    Lead.status_changed_at.is_(None),
+                    Lead.status_changed_at <= as_of,
+                ),
+                Lead.created_at <= as_of,
                 sent_at.is_not(None),
                 sent_at <= stale_threshold,
             )
         )
     ).scalar_one()
 
-    # משימות שעברו את היעד ולא טופלו: task פעיל surfaceable עם due_at<=now.
+    # משימות overdue ב-`as_of`: היו אקטיביות באותו רגע ושעברו את ה-due_at אז.
     overdue_tasks_count = (
         await db.execute(
             select(func.count()).select_from(Task).where(
-                Task.status.in_([TaskStatus.OPEN.value, TaskStatus.SNOOZED.value]),
-                Task.due_at <= now_utc,
+                Task.created_at <= as_of,
+                Task.due_at <= as_of,
+                or_(Task.completed_at.is_(None), Task.completed_at > as_of),
                 surfaceable_task_condition(),
             )
         )
@@ -1191,7 +1216,10 @@ async def build_weekly_user_prompt(
 ) -> str:
     """
     אוסף את כל הקלט המבושל לסיכום השבועי ומרכיב אותו לתוך WEEKLY_USER_TEMPLATE.
-    החלון הוא השבוע הקודם המלא (ראשון→ראשון); מטריקות מצב הן snapshot ל-now.
+    החלון הוא השבוע הקודם המלא (ראשון→ראשון); מטריקות מצב (`open_state`) הן
+    snapshot **לסוף השבוע** (week_end), לא ל-now — כך פעילות שקרתה בפער שבין
+    סוף-השבוע לרגע ה-cron (ראשון בבוקר) לא משויכת בטעות לסיכום השבועי
+    (תיקון cursor bot: counts may not match the stated range).
     מחזיר את ה-user prompt המוכן ל-generate_weekly_summary_text.
     """
     now_utc = now_utc or datetime.now(timezone.utc)
@@ -1209,8 +1237,11 @@ async def build_weekly_user_prompt(
     movement = await _lead_movement(db, week_start, week_end)
     newly_dormant = await _newly_dormant_count(db, week_start, week_end)
 
-    # snapshot מצב ל-now (כמו ביומי).
-    open_state = await _open_state(db, now_utc)
+    # snapshot מצב נכון לסוף השבוע (לא ל-now): cron רץ ראשון בבוקר ~9 שעות
+    # אחרי week_end, ופעילות בפער (לידים שנכנסו/נסגרו ראשון בבוקר) לא צריכה
+    # להשתקף בשדות end_of_week. שדות הזמן ב-_open_state (created_at/closed_at/
+    # completed_at/status_changed_at) נותנים את ה-as-of הזה ב-best-effort.
+    open_state = await _open_state(db, week_end)
     dormant_count = await _dormant_with_recommendation_count(db)
 
     trends = await compute_trends_block(

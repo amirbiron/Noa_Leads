@@ -205,18 +205,28 @@ async def test_lead_movement_segments_and_closures(db):
 
 
 async def test_open_state_counts(db):
-    """open_total / stuck>7d / stale_proposal>4d / overdue tasks."""
+    """open_total / stuck>7d / stale_proposal>4d / overdue tasks.
+
+    הליד/task נוצרים עם `created_at` מפורש לפני `_NOW`, כי `_open_state`
+    מסנן על `created_at <= as_of` (לא רק על current status) — בלי תאריך
+    מפורש server-side default = NOW אמיתי, ש-> _NOW (קבוע הבדיקה),
+    והלידים לא נספרים.
+    """
+    one_hour_ago = _NOW - timedelta(hours=1)
     # ליד פתוח רגיל (לא תקוע):
-    await _mk_lead(db)
+    await _mk_lead(db, created_at=one_hour_ago)
     # ליד תקוע: task פעיל due לפני 10 ימים:
-    stuck_lead = await _mk_lead(db)
+    stuck_lead = await _mk_lead(db, created_at=one_hour_ago)
     db.add(Task(
         lead_id=stuck_lead.id, type=TaskType.FOLLOWUP.value,
-        status=TaskStatus.OPEN.value, due_at=_NOW - timedelta(days=10),
+        status=TaskStatus.OPEN.value,
+        created_at=one_hour_ago,
+        due_at=_NOW - timedelta(days=10),
     ))
     # הצעה תקועה (נשלחה לפני 5 ימים):
     await _mk_lead(
-        db, status=LeadStatus.PROPOSAL_SENT.value,
+        db, created_at=one_hour_ago,
+        status=LeadStatus.PROPOSAL_SENT.value,
         proposal_sent_at=_NOW - timedelta(days=5),
     )
     await db.flush()
@@ -226,6 +236,67 @@ async def test_open_state_counts(db):
     assert state["stuck_leads_count"] >= 1
     assert state["stale_proposals_count"] >= 1
     assert state["overdue_tasks_count"] >= 1
+
+
+async def test_open_state_excludes_post_anchor_activity(db):
+    """Regression cursor bot: snapshot ב-`as_of` נשען על שדות זמן ולא על
+    current state — פעילות שקרתה אחרי `as_of` לא משויכת אליו.
+
+    תרחיש: cron של weekly summary רץ ראשון בבוקר, כ-9 שעות אחרי week_end.
+    שדה `open_leads_end_of_week` חייב לשקף את המצב ב-week_end (סוף שבת),
+    לא ב-cron time — אחרת ליד שנוצר ראשון בבוקר נספר כפתוח-בסוף-שבוע, וליד
+    שנסגר ראשון בבוקר נחסר אף-על-פי שהיה פתוח בסוף-השבוע.
+    """
+    as_of = _NOW
+    before = as_of - timedelta(days=1)
+    after = as_of + timedelta(hours=12)
+
+    baseline = await si._open_state(db, as_of)
+
+    # (א) ליד שנוצר *אחרי* as_of → לא היה קיים אז → לא נספר.
+    await _mk_lead(db, created_at=after)
+    # (ב) ליד שנוצר לפני as_of ונסגר *אחרי* → היה פתוח אז → נספר.
+    await _mk_lead(
+        db, created_at=before, status=LeadStatus.WON.value, closed_at=after
+    )
+    # (ג) ליד שנוצר ונסגר לפני as_of → לא נספר.
+    await _mk_lead(
+        db, created_at=before, status=LeadStatus.LOST.value, closed_at=before,
+    )
+    # (ד) ליד שנוצר לפני as_of ועדיין פתוח → נספר.
+    open_lead = await _mk_lead(db, created_at=before)
+
+    # (ה) task overdue ב-as_of שהושלם רק *אחרי* as_of → היה אקטיבי
+    # ב-as_of, אז נחשב overdue ב-as_of (גם אם current status=DONE).
+    db.add(Task(
+        lead_id=open_lead.id, type=TaskType.FOLLOWUP.value,
+        status=TaskStatus.DONE.value,
+        created_at=before,
+        due_at=as_of - timedelta(days=1),
+        completed_at=after,
+    ))
+    # (ו) task שנוצר *אחרי* as_of → לא היה קיים אז → לא overdue ב-as_of.
+    db.add(Task(
+        lead_id=open_lead.id, type=TaskType.FOLLOWUP.value,
+        status=TaskStatus.OPEN.value,
+        created_at=after,
+        due_at=after + timedelta(hours=1),
+    ))
+    await db.flush()
+
+    state = await si._open_state(db, as_of)
+    # פתוחים ב-as_of: (ב) ו-(ד). (א) טרם נוצר, (ג) כבר נסגר.
+    assert state["open_leads_total"] - baseline["open_leads_total"] == 2
+    # overdue ב-as_of: (ה) בלבד. (ו) טרם נוצר.
+    assert state["overdue_tasks_count"] - baseline["overdue_tasks_count"] == 1
+
+    # ודא שב-future (אחרי `after`) הספירות זזות: (א) מצטרף ל-open;
+    # (ב) יוצא; (ה) יוצא מ-overdue (completed_at <= future).
+    state_future = await si._open_state(db, after + timedelta(hours=1))
+    open_delta_future = (
+        state_future["open_leads_total"] - baseline["open_leads_total"]
+    )
+    assert open_delta_future == 2  # (א) ו-(ד); (ב) נסגר, (ג) נסגר.
 
 
 async def test_highlighted_leads_block_silence_break(db):
