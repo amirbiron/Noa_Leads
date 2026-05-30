@@ -2,6 +2,7 @@
 הגדרות אפליקציה — נטענות מתוך משתני סביבה (.env).
 """
 
+from datetime import date
 from functools import lru_cache
 
 from pydantic import Field, field_validator
@@ -64,6 +65,11 @@ class Settings(BaseSettings):
     # לסיכום של עד 500 מילים + מבנה JSON.
     ai_temperature_summaries: float = 0.5
     ai_max_output_tokens_summaries: int = 2000
+    # C.1/C.2 (§4.1+§4.2): תאריך תחילת המערכת — קבוע. ממנו נגזרים
+    # days_in_system (יומי) ו-week_number_in_system + has_comparison_data
+    # (שבועי). ברירת המחדל היא תאריך ה-migration הראשון; אדיר מעדכן
+    # ל-go-live האמיתי דרך SYSTEM_START_DATE ב-Render (פורמט ISO: YYYY-MM-DD).
+    system_start_date: date = date(2026, 5, 23)
 
     # ===== Google =====
     google_client_id: str | None = None
