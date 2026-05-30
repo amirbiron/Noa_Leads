@@ -112,21 +112,23 @@ export default function HomePage() {
               - Weekly slot: AI נרטיבי בלבד, חלון ראשון 08:00→שני 07:00.
               Mobile: stacked (flex-col), daily מעל weekly.
               Desktop (lg+): side-by-side (flex-row). */}
+
           {(hasStatsInWindow || hasAiDailyInWindow || hasWeeklyInWindow) && (
             <div className="flex flex-col lg:flex-row lg:gap-4 lg:items-stretch gap-3 mb-3">
-              {/* Daily slot — סטטיסטי או AI לפי dailyView */}
-              {dailyView === "statistical" && hasStatsInWindow && (
+              {/* Daily slot — display whichever is available */}
+              {(dailyView === "statistical" || !hasAiDailyInWindow) && hasStatsInWindow && (
                 <DailySummaryBubble
                   summary={data.daily_summary!}
                   collapsible
                 />
               )}
-              {dailyView === "ai" && hasAiDailyInWindow && (
+              {(dailyView === "ai" || !hasStatsInWindow) && hasAiDailyInWindow && (
                 <AiSummaryCard
                   summary={data.ai_daily_summary!}
                   collapsible
                 />
               )}
+
               {/* Weekly slot — בלי טוגל */}
               {hasWeeklyInWindow && (
                 <AiSummaryCard
