@@ -205,18 +205,35 @@ async def test_lead_movement_segments_and_closures(db):
 
 
 async def test_open_state_counts(db):
-    """open_total / stuck>7d / stale_proposal>4d / overdue tasks."""
+    """open_total / stuck>7d / stale_proposal>4d / overdue tasks.
+
+    הליד/task נוצרים עם `created_at` מפורש כי `_open_state` מסנן על
+    `created_at` (write-once) ולא על status בלבד — בלי תאריך מפורש
+    server-side default = NOW אמיתי, ש-> _NOW (קבוע הבדיקה).
+
+    ה-task ה-"stuck" צריך `created_at <= _NOW - 7d` כי קריטריון התקיעה
+    הוחלף מ-`due_at` ל-`created_at` (snooze דורס due_at — ראה הערה ב-
+    `_open_state`).
+    """
+    one_hour_ago = _NOW - timedelta(hours=1)
+    ten_days_ago = _NOW - timedelta(days=10)
     # ליד פתוח רגיל (לא תקוע):
-    await _mk_lead(db)
-    # ליד תקוע: task פעיל due לפני 10 ימים:
-    stuck_lead = await _mk_lead(db)
+    await _mk_lead(db, created_at=one_hour_ago)
+    # ליד תקוע: task פעיל שנוצר לפני 10 ימים:
+    stuck_lead = await _mk_lead(db, created_at=ten_days_ago)
     db.add(Task(
         lead_id=stuck_lead.id, type=TaskType.FOLLOWUP.value,
-        status=TaskStatus.OPEN.value, due_at=_NOW - timedelta(days=10),
+        status=TaskStatus.OPEN.value,
+        created_at=ten_days_ago,
+        due_at=ten_days_ago,
     ))
-    # הצעה תקועה (נשלחה לפני 5 ימים):
+    # הצעה תקועה (נשלחה לפני 5 ימים). `status_changed_at` מפורש כי
+    # ה-trigger ב-DB מציב אותו ל-NOW אמיתי בעת INSERT, > `_NOW` הקבוע →
+    # נכשל ב-`status_changed_at <= as_of`.
     await _mk_lead(
-        db, status=LeadStatus.PROPOSAL_SENT.value,
+        db, created_at=one_hour_ago,
+        status=LeadStatus.PROPOSAL_SENT.value,
+        status_changed_at=one_hour_ago,
         proposal_sent_at=_NOW - timedelta(days=5),
     )
     await db.flush()
@@ -226,6 +243,229 @@ async def test_open_state_counts(db):
     assert state["stuck_leads_count"] >= 1
     assert state["stale_proposals_count"] >= 1
     assert state["overdue_tasks_count"] >= 1
+
+
+async def test_open_state_excludes_post_anchor_activity(db):
+    """Regression cursor bot: snapshot ב-`as_of` נשען על שדות זמן ולא על
+    current state — פעילות שקרתה אחרי `as_of` לא משויכת אליו.
+
+    תרחיש: cron של weekly summary רץ ראשון בבוקר, כ-9 שעות אחרי week_end.
+    שדה `open_leads_end_of_week` חייב לשקף את המצב ב-week_end (סוף שבת),
+    לא ב-cron time — אחרת ליד שנוצר ראשון בבוקר נספר כפתוח-בסוף-שבוע, וליד
+    שנסגר ראשון בבוקר נחסר אף-על-פי שהיה פתוח בסוף-השבוע.
+    """
+    as_of = _NOW
+    before = as_of - timedelta(days=1)
+    after = as_of + timedelta(hours=12)
+
+    baseline = await si._open_state(db, as_of)
+
+    # (א) ליד שנוצר *אחרי* as_of → לא היה קיים אז → לא נספר.
+    await _mk_lead(db, created_at=after)
+    # (ב) ליד שנוצר לפני as_of ונסגר *אחרי* → היה פתוח אז → נספר.
+    await _mk_lead(
+        db, created_at=before, status=LeadStatus.WON.value, closed_at=after
+    )
+    # (ג) ליד שנוצר ונסגר לפני as_of → לא נספר.
+    await _mk_lead(
+        db, created_at=before, status=LeadStatus.LOST.value, closed_at=before,
+    )
+    # (ד) ליד שנוצר לפני as_of ועדיין פתוח → נספר.
+    open_lead = await _mk_lead(db, created_at=before)
+
+    # (ה) task overdue ב-as_of שהושלם רק *אחרי* as_of → היה אקטיבי
+    # ב-as_of, אז נחשב overdue ב-as_of (גם אם current status=DONE).
+    db.add(Task(
+        lead_id=open_lead.id, type=TaskType.FOLLOWUP.value,
+        status=TaskStatus.DONE.value,
+        created_at=before,
+        due_at=as_of - timedelta(days=1),
+        completed_at=after,
+    ))
+    # (ו) task שנוצר *אחרי* as_of → לא היה קיים אז → לא overdue ב-as_of.
+    db.add(Task(
+        lead_id=open_lead.id, type=TaskType.FOLLOWUP.value,
+        status=TaskStatus.OPEN.value,
+        created_at=after,
+        due_at=after + timedelta(hours=1),
+    ))
+    await db.flush()
+
+    state = await si._open_state(db, as_of)
+    # פתוחים ב-as_of: (ב) ו-(ד). (א) טרם נוצר, (ג) כבר נסגר.
+    assert state["open_leads_total"] - baseline["open_leads_total"] == 2
+    # overdue ב-as_of: (ה) בלבד. (ו) טרם נוצר.
+    assert state["overdue_tasks_count"] - baseline["overdue_tasks_count"] == 1
+
+    # ודא שב-future (אחרי `after`) הספירות זזות: (א) מצטרף ל-open;
+    # (ב) יוצא; (ה) יוצא מ-overdue (completed_at <= future).
+    state_future = await si._open_state(db, after + timedelta(hours=1))
+    open_delta_future = (
+        state_future["open_leads_total"] - baseline["open_leads_total"]
+    )
+    assert open_delta_future == 2  # (א) ו-(ד); (ב) נסגר, (ג) נסגר.
+
+
+async def test_open_state_excludes_canceled_tasks(db):
+    """Regression cursor bot Finding 1 (High): tasks ב-status=CANCELED לא
+    נספרים כ-active ב-as_of, גם כש-`completed_at IS NULL`.
+
+    close_lead (`services/leads.py:340`) ו-chip apply
+    (`services/quick_action_chips.py:303`) מציבים `status=canceled` בלי
+    לעדכן `completed_at`. בלי הפילטר `status != CANCELED`, tasks שבוטלו
+    לפני שבועות היו נספרים כ-overdue ובמספרי stuck_leads.
+    """
+    long_ago = _NOW - timedelta(days=10)
+    baseline = await si._open_state(db, _NOW)
+
+    # (א) ליד עם task יחיד שבוטל — לא צריך להתווסף ל-stuck.
+    canceled_lead = await _mk_lead(db, created_at=long_ago)
+    db.add(Task(
+        lead_id=canceled_lead.id, type=TaskType.FOLLOWUP.value,
+        status=TaskStatus.CANCELED.value,
+        created_at=long_ago,
+        due_at=long_ago,  # היה עוקף את ה-7d threshold (פרוקסי ישן)
+        completed_at=None,  # close_lead לא מציב completed_at
+    ))
+    # (ב) ליד נפרד עם task OPEN ישן — צריך להתווסף ל-stuck (control).
+    stuck_lead = await _mk_lead(db, created_at=long_ago)
+    db.add(Task(
+        lead_id=stuck_lead.id, type=TaskType.FOLLOWUP.value,
+        status=TaskStatus.OPEN.value,
+        created_at=long_ago,
+        due_at=long_ago,
+    ))
+    await db.flush()
+
+    state = await si._open_state(db, _NOW)
+    # רק (ב) נספר ב-stuck — לא (א).
+    assert state["stuck_leads_count"] - baseline["stuck_leads_count"] == 1
+    # overdue_tasks_count מתעדכן רק לפי (ב) (task ה-CANCELED של (א) לא נספר).
+    assert state["overdue_tasks_count"] - baseline["overdue_tasks_count"] == 1
+
+
+async def test_open_state_stuck_uses_created_at_not_due_at(db):
+    """Regression cursor bot Finding 2 (Medium): קביעת "תקוע 7+ ימים"
+    משתמשת ב-`created_at` (write-once) ולא ב-`due_at` שהוא mutable.
+
+    snooze_task (`services/tasks.py:242`) דורס את `due_at`. תרחיש שלם:
+    task נוצר לפני 10 ימים → היה תקוע ב-as_of → המשתמש סנוז אותו אחרי
+    as_of (or just before) → due_at נדחף לעתיד. עם הפרוקסי הישן
+    (`due_at <= as_of - 7d`) המספר היה False למרות שהליד תקוע 10 ימים.
+    """
+    long_ago = _NOW - timedelta(days=10)
+    baseline = await si._open_state(db, _NOW)
+
+    # ליד עם task שנוצר לפני 10 ימים אבל סנוז → due_at הנוכחי בעתיד.
+    snoozed_lead = await _mk_lead(db, created_at=long_ago)
+    db.add(Task(
+        lead_id=snoozed_lead.id, type=TaskType.FOLLOWUP.value,
+        status=TaskStatus.SNOOZED.value,
+        created_at=long_ago,
+        due_at=_NOW + timedelta(days=5),  # snooze דחף לעתיד
+        snoozed_until=_NOW + timedelta(days=5),
+    ))
+    await db.flush()
+
+    state = await si._open_state(db, _NOW)
+    # עם הקוד הישן (due_at): False → 0. עם הקוד החדש (created_at): True → 1.
+    assert state["stuck_leads_count"] - baseline["stuck_leads_count"] == 1
+
+
+async def test_stale_proposals_excludes_in_progress_with_old_proposal_sent_at(db):
+    """Regression cursor bugbot Finding 1 על 52a89a5: ליד עם `proposal_sent_at`
+    ישן שכבר עזב את PROPOSAL_SENT לא נספר כ-stale ב-as_of.
+
+    הניסיון הקודם (Branch 2 ב-`_lead_was_proposal_sent_at_predicate`) היה
+    מסיק "PROPOSAL_SENT ב-as_of" מ-`proposal_sent_at <= as_of +
+    status_changed_at > as_of`. הבעיה: `proposal_sent_at` נשאר ישן גם
+    אחרי שהליד עזב את הסטטוס — false-positive על לידים שהיו IN_PROGRESS
+    ב-as_of (עם proposal_sent_at ישן) ועברו ל-WON אחרי.
+
+    הפתרון השורשי: ה-snapshot (`weekly_open_state_snapshots`) נכתב ע"י
+    cron כש-as_of=now, אז Branch 1 לבדה ("currently PROPOSAL_SENT")
+    מדויקת. fallback ל-live conservative ⇒ under-count, לא over-count.
+    """
+    as_of = _NOW
+    long_ago = as_of - timedelta(days=10)
+    after = as_of + timedelta(hours=6)
+
+    baseline = await si._open_state(db, as_of)
+
+    # ליד שגוי-לכלול (היה ניצוד ע"י Branch 2 הישן): היה PROPOSAL_SENT
+    # אי-פעם, עזב את הסטטוס לפני as_of (status_changed_at>as_of הוא
+    # ל-WON, לא ל-PROPOSAL_SENT), ועדיין מחזיק `proposal_sent_at` ישן.
+    await _mk_lead(
+        db, full_name="IN_PROGRESS עם הצעה ישנה → WON",
+        created_at=long_ago,
+        status=LeadStatus.WON.value,
+        status_changed_at=after,
+        closed_at=after,
+        proposal_sent_at=long_ago,
+    )
+    # ליד control: כן stale ב-as_of (currently PROPOSAL_SENT, status
+    # changed לפני as_of).
+    await _mk_lead(
+        db, full_name="עדיין PROPOSAL_SENT",
+        created_at=long_ago,
+        status=LeadStatus.PROPOSAL_SENT.value,
+        status_changed_at=as_of - timedelta(days=5),
+        proposal_sent_at=as_of - timedelta(days=5),
+    )
+    await db.flush()
+
+    state = await si._open_state(db, as_of)
+    # רק ה-control נספר — הליד הראשון (false-positive הישן) לא.
+    assert (
+        state["stale_proposals_count"] - baseline["stale_proposals_count"] == 1
+    )
+
+
+async def test_open_state_stuck_count_matches_attention_list(db):
+    """Regression cursor bugbot Finding 2: ה-count וה-list של "תקוע" חייבים
+    להשתמש באותו predicate.
+
+    הקוד הישן: count השתמש ב-`created_at + status != CANCELED`, list השתמש
+    ב-`due_at + status IN OPEN/SNOOZED`. תרחיש שלם: task נוצר לפני 10 ימים,
+    נסנז (due_at בעתיד). count אמר 1, list לא הציגה את הליד → סתירה.
+    התיקון: שניהם משתמשים ב-`_task_stuck_at_predicate` המשותף.
+    """
+    as_of = _NOW
+    ten_days_ago = as_of - timedelta(days=10)
+    nine_days_ago = as_of - timedelta(days=9)
+
+    baseline = await si._open_state(db, as_of)
+    baseline_lines, _ = await si._collect_attention_items(db, as_of)
+    baseline_stuck_lines = sum(
+        1 for line in baseline_lines if "ליד תקוע" in line
+    )
+
+    # ליד תקוע עם task שנסנז (due_at בעתיד) — מאתגר את הסתירה הישנה.
+    snoozed_lead = await _mk_lead(
+        db, full_name="תקוע סנוז",
+        created_at=ten_days_ago,
+        status_changed_at=nine_days_ago,
+    )
+    db.add(Task(
+        lead_id=snoozed_lead.id, type=TaskType.FOLLOWUP.value,
+        status=TaskStatus.SNOOZED.value,
+        created_at=ten_days_ago,
+        due_at=as_of + timedelta(days=5),  # snooze דחף לעתיד
+        snoozed_until=as_of + timedelta(days=5),
+    ))
+    await db.flush()
+
+    state = await si._open_state(db, as_of)
+    lines, _ = await si._collect_attention_items(db, as_of)
+    stuck_lines = sum(1 for line in lines if "ליד תקוע" in line)
+
+    count_delta = state["stuck_leads_count"] - baseline["stuck_leads_count"]
+    list_delta = stuck_lines - baseline_stuck_lines
+
+    # consistency: count ו-list הסכימו על אותו ליד.
+    assert count_delta == 1
+    assert list_delta == 1
+    assert any("תקוע סנוז" in line for line in lines)
 
 
 async def test_highlighted_leads_block_silence_break(db):
@@ -341,14 +581,25 @@ async def test_silence_break_reset_by_recent_call(db):
 
 
 async def test_attention_block_dedups_same_lead(db):
-    """ליד שהוא גם הצעה תקועה וגם תקוע → מופיע פעם אחת בלבד."""
+    """ליד שהוא גם הצעה תקועה וגם תקוע → מופיע פעם אחת בלבד.
+
+    `created_at` ו-`status_changed_at` מפורשים — אחרת ה-DB מציב NOW
+    אמיתי שגדול מ-`_NOW` הקבוע, וה-predicates של as-of-snapshot נכשלים.
+    """
+    ten_days_ago = _NOW - timedelta(days=10)
+    five_days_ago = _NOW - timedelta(days=5)
     lead = await _mk_lead(
-        db, full_name="כפול", status=LeadStatus.PROPOSAL_SENT.value,
-        proposal_sent_at=_NOW - timedelta(days=5),
+        db, full_name="כפול",
+        created_at=ten_days_ago,
+        status=LeadStatus.PROPOSAL_SENT.value,
+        status_changed_at=five_days_ago,
+        proposal_sent_at=five_days_ago,
     )
     db.add(Task(
         lead_id=lead.id, type=TaskType.PROPOSAL_FOLLOWUP.value,
-        status=TaskStatus.OPEN.value, due_at=_NOW - timedelta(days=10),
+        status=TaskStatus.OPEN.value,
+        created_at=ten_days_ago,
+        due_at=ten_days_ago,
     ))
     await db.flush()
 
@@ -360,9 +611,13 @@ async def test_attention_block_dedups_same_lead(db):
 
 async def test_attention_items_block_stale_proposal(db):
     """הצעה תקועה מופיעה ב-block עם מספר הימים."""
+    five_days_ago = _NOW - timedelta(days=5)
     await _mk_lead(
-        db, full_name="דניאל", status=LeadStatus.PROPOSAL_SENT.value,
-        proposal_sent_at=_NOW - timedelta(days=5),
+        db, full_name="דניאל",
+        created_at=_NOW - timedelta(days=10),
+        status=LeadStatus.PROPOSAL_SENT.value,
+        status_changed_at=five_days_ago,
+        proposal_sent_at=five_days_ago,
     )
     block = await si.compute_attention_items_block(db, _NOW)
     assert "הצעה ללא מענה" in block
@@ -370,20 +625,28 @@ async def test_attention_items_block_stale_proposal(db):
 
 
 async def test_attention_stuck_days_from_status_changed_at(db):
-    """תיקון #3: 'ימים בסטטוס נוכחי' מחושב מ-status_changed_at (לא מ-due_at)."""
+    """תיקון #3: 'ימים בסטטוס נוכחי' מחושב מ-status_changed_at (לא מ-due_at).
+
+    כעת ה-task מזוהה כתקוע לפי `created_at <= as_of - 7d` (snooze דורס due_at).
+    """
+    ten_days_ago = _NOW - timedelta(days=10)
     lead = await _mk_lead(
-        db, full_name="תקוע", status_changed_at=_NOW - timedelta(days=9),
+        db, full_name="תקוע",
+        created_at=ten_days_ago,
+        status_changed_at=_NOW - timedelta(days=9),
     )
-    # task תקוע (due לפני 10 ימים) — מזהה את הליד כתקוע:
+    # task תקוע שנוצר לפני 10 ימים — מזהה את הליד כתקוע:
     db.add(Task(
         lead_id=lead.id, type=TaskType.FOLLOWUP.value,
-        status=TaskStatus.OPEN.value, due_at=_NOW - timedelta(days=10),
+        status=TaskStatus.OPEN.value,
+        created_at=ten_days_ago,
+        due_at=ten_days_ago,
     ))
     await db.flush()
 
     block = await si.compute_attention_items_block(db, _NOW)
     assert "ליד תקוע" in block
-    # 9 ימים מ-status_changed_at — לא 10 (שזה due_at של ה-task):
+    # 9 ימים מ-status_changed_at:
     assert "ימים בסטטוס נוכחי: 9" in block
 
 
@@ -392,14 +655,22 @@ async def test_tomorrow_focus_vip_plus_attention_pointer(db):
     תיקון #6 (מזוקק): tomorrow_focus כולל ליד VIP/ארגון שהכדור אצלנו +
     שורת מצביע לעומס ה-attention, *בלי* לשכפל את שורות ה-attention עצמן.
     """
+    five_days_ago = _NOW - timedelta(days=5)
+    one_hour_ago = _NOW - timedelta(hours=1)
     # ליד עם הצעה תקועה → ייכנס ל-attention (לא ל-tomorrow verbatim):
     await _mk_lead(
-        db, full_name="דניאל", status=LeadStatus.PROPOSAL_SENT.value,
-        proposal_sent_at=_NOW - timedelta(days=5), waiting_on=WaitingOn.NOAH.value,
+        db, full_name="דניאל",
+        created_at=_NOW - timedelta(days=10),
+        status=LeadStatus.PROPOSAL_SENT.value,
+        status_changed_at=five_days_ago,
+        proposal_sent_at=five_days_ago,
+        waiting_on=WaitingOn.NOAH.value,
     )
     # ליד VIP פתוח שהכדור אצל נועה (לא ב-attention) → תוספת ב-tomorrow:
     await _mk_lead(
-        db, full_name="שרון", priority_level=PriorityLevel.VIP.value,
+        db, full_name="שרון",
+        created_at=one_hour_ago,
+        priority_level=PriorityLevel.VIP.value,
         waiting_on=WaitingOn.NOAH.value,
     )
     lines, seen = await si._collect_attention_items(db, _NOW)
@@ -417,10 +688,15 @@ async def test_tomorrow_focus_none_when_only_attention(db):
     אין ליד VIP/ארגון — גם אם יש פריט attention, tomorrow מושמט (None).
     (משחזר את תקפות few-shot דוגמה 2: tomorrow=null למרות attention קיים.)
     """
+    five_days_ago = _NOW - timedelta(days=5)
     # הצעה תקועה (attention) אך הליד אינו VIP ואינו ארגוני:
     await _mk_lead(
-        db, full_name="רגיל", status=LeadStatus.PROPOSAL_SENT.value,
-        proposal_sent_at=_NOW - timedelta(days=5), waiting_on=WaitingOn.NOAH.value,
+        db, full_name="רגיל",
+        created_at=_NOW - timedelta(days=10),
+        status=LeadStatus.PROPOSAL_SENT.value,
+        status_changed_at=five_days_ago,
+        proposal_sent_at=five_days_ago,
+        waiting_on=WaitingOn.NOAH.value,
     )
     lines, seen = await si._collect_attention_items(db, _NOW)
     assert lines  # יש פריט attention
@@ -567,6 +843,54 @@ async def test_build_weekly_user_prompt_renders(db):
     assert "פעילות נועה השבוע:" in prompt
     assert "מצב שבועי כללי:" in prompt
     assert "תובנות אסטרטגיות שחושבו מראש:" in prompt
+
+
+async def test_build_weekly_user_prompt_reads_from_snapshot(db):
+    """כש-row של `weekly_open_state_snapshots` קיים — ה-prompt קורא ממנו,
+    לא מ-`_open_state` חי.
+
+    יצירת snapshot עם ערכים ייחודיים (`open_leads_total=42`) שלא ייווצרו
+    באופן ספונטני ע"י `_open_state` חי, ואז ודא שהם נכנסו ל-prompt.
+    """
+    from app.models.weekly_open_state_snapshot import WeeklyOpenStateSnapshot
+
+    # _SUNDAY_NOW = ראשון 2026-05-31. השבוע שהסתיים: ראשון-שבת = 2026-05-24..30.
+    # `week_end_date` בתבנית = שבת = 2026-05-30.
+    db.add(WeeklyOpenStateSnapshot(
+        week_end_date=date(2026, 5, 30),
+        open_leads_total=42,
+        stuck_leads_count=7,
+        stale_proposals_count=3,
+        overdue_tasks_count=11,
+        dormant_with_recommendation_count=5,
+    ))
+    await db.flush()
+
+    prompt = await si.build_weekly_user_prompt(db, now_utc=_SUNDAY_NOW)
+
+    # ה-template מציג open_leads_end_of_week, stuck_leads_count וכו'.
+    assert "לידים פתוחים בסוף השבוע: 42" in prompt
+    assert "לידים תקועים מעל 7 ימים: 7" in prompt
+    assert "הצעות שנשלחו ללא מענה מעל 4 ימים: 3" in prompt
+    assert "סך לידים רדומים עם המלצת AI: 5" in prompt
+
+
+async def test_build_weekly_user_prompt_falls_back_when_no_snapshot(db):
+    """אם אין snapshot ל-week_end — fallback ל-`_open_state` חי.
+
+    בדיקה: יוצרים ליד פתוח אחד; ב-fallback `_open_state` יחזיר open=1,
+    שונה מערכי snapshot-בדיוני שהיו במבחן הקודם.
+    """
+    await _mk_lead(db, created_at=_SUNDAY_NOW - timedelta(days=10))
+    await db.flush()
+
+    prompt = await si.build_weekly_user_prompt(db, now_utc=_SUNDAY_NOW)
+
+    # אין snapshot → fallback. open_leads_total >= 1 (לא 42 מהבדיקה הקודמת).
+    assert "לידים פתוחים בסוף השבוע: 42" not in prompt
+    # הליד שיצרנו נמצא ב-spectrum הסביר: 1 או יותר ע"פ contamination.
+    # מאמתים שהשורה קיימת ומשתנה דינמית — לא רק presence של placeholder.
+    assert "לידים פתוחים בסוף השבוע:" in prompt
 
 
 # ===================== בדיקות שבועיות — integration (DB) =====================

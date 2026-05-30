@@ -289,64 +289,160 @@ async def _lead_movement(
     }
 
 
-# ===== מצב פתוחים (snapshot ל-now) =====
+# ===== מצב פתוחים (snapshot ל-as_of) =====
 
-def _stuck_lead_condition(now_utc: datetime):
-    """ליד פתוח עם task פעיל surfaceable שה-due_at שלו עבר ב-7+ ימים (כלל 10)."""
-    threshold = now_utc - timedelta(days=_STUCK_DAYS)
+# ה-helpers מתחתינו הם **המקור היחיד** להגדרת "פתוח / תקוע / הצעה תקועה
+# ב-as_of". כל ספירה (`_open_state`) או רשימה (`_collect_attention_items`)
+# חייבת לקרוא אליהם — אסור לכתוב logic מקבילה. אי-עקביות בין count
+# לrשימה באותו סיכום נראית למשתמש כסתירה ("המספר אומר 5, ראיתי 3").
+#
+# כל ה-predicates נשענים על שדות זמן write-once (Lead: created_at,
+# closed_at, status_changed_at; Task: created_at, completed_at) במקום
+# על שדות mutable (status נוכחי, due_at — snooze דורס אותו). מגבלות
+# מתועדות בדוקסטרינג של כל helper.
+
+
+def _lead_open_at_predicate(as_of: datetime):
+    """Lead-level WHERE: הליד היה קיים ולא סגור ב-`as_of`."""
+    return and_(
+        Lead.created_at <= as_of,
+        or_(Lead.closed_at.is_(None), Lead.closed_at > as_of),
+    )
+
+
+def _task_active_at_predicate(as_of: datetime):
+    """Task-level WHERE: ה-task היה אקטיבי (לא DONE, לא CANCELED) ב-`as_of`.
+
+    DONE: `completed_at` מסומן כש-status עובר ל-DONE — write-once de facto.
+    CANCELED: close_lead (`leads.py:340`) ו-chip apply
+    (`quick_action_chips.py:303`) מציבים canceled **בלי** `completed_at` →
+    שדה זמן ייעודי לא קיים, ולכן best-effort: מחריגים tasks ש-status נוכחי
+    הוא CANCELED. tradeoff: task שהיה אקטיבי ב-as_of ובוטל בפער as_of→now
+    יוחרג בטעות. הפער ב-weekly הוא 9h ליל שבת — ביטולים שם נדירים.
+    """
+    return and_(
+        Task.created_at <= as_of,
+        Task.status != TaskStatus.CANCELED.value,
+        or_(Task.completed_at.is_(None), Task.completed_at > as_of),
+    )
+
+
+def _task_stuck_at_predicate(as_of: datetime):
+    """Task-level WHERE: surfaceable task אקטיבי ב-`as_of` שנוצר 7+ ימים
+    לפני `as_of`.
+
+    `created_at` (לא `due_at`) — `due_at` נדרס ע"י snooze (`tasks.py:242`),
+    אז due_at הנוכחי לא מייצג את due_at ב-`as_of`. הפרוקסי החדש: "task
+    במערכת 7+ ימים בלי טיפול" במקום "due_at עבר 7+ ימים". לרוב ה-types
+    כמעט זהה (FIRST_RESPONSE due_at = created_at+24h).
+    """
+    return and_(
+        _task_active_at_predicate(as_of),
+        Task.created_at <= as_of - timedelta(days=_STUCK_DAYS),
+        surfaceable_task_condition(),
+    )
+
+
+def _lead_was_proposal_sent_at_predicate(as_of: datetime):
+    """Lead-level WHERE: הליד **כעת ב-status=PROPOSAL_SENT** בלי שינוי-סטטוס
+    מאז `as_of`.
+
+    שיקול עיצוב (cursor bugbot Finding 1 על 52a89a5):
+    אין דרך אמינה לזהות "ליד שהיה PROPOSAL_SENT ב-`as_of` ועזב את הסטטוס
+    מאז" עם ה-schema הקיים. ניסינו Branch 2 על בסיס `proposal_sent_at`
+    + `status_changed_at`, אבל `proposal_sent_at` נשאר ישן גם אחרי
+    שהליד יצא מ-PROPOSAL_SENT — false-positive על לידים שהיו IN_PROGRESS
+    ב-`as_of` עם הצעה ישנה.
+
+    הפתרון השורשי: ה-snapshot (`weekly_open_state_snapshots`) הוא
+    source-of-truth. cron כותב אותו כש-`as_of=now`, ואז Branch 1 לבדה
+    מדויקת ("currently PROPOSAL_SENT" = "PROPOSAL_SENT ב-as_of").
+
+    fallback ל-live (כש-snapshot חסר): **conservative under-count** —
+    לידים שעברו סטטוס בין `as_of` ל-now לא נספרים. עדיף over-count
+    שמראה false-positives.
+    """
+    return and_(
+        Lead.status == LeadStatus.PROPOSAL_SENT.value,
+        or_(
+            Lead.status_changed_at.is_(None),
+            Lead.status_changed_at <= as_of,
+        ),
+    )
+
+
+async def _open_state(db: AsyncSession, as_of: datetime) -> dict:
+    """ספירות מצב נכון לרגע `as_of` (לא תלוי חלון).
+
+    `as_of` הוא ה-anchor של ה-snapshot: ב-daily נקרא עם `now_utc`, ב-weekly
+    עם `week_end` (סוף שבת / תחילת ראשון 00:00 ישראל). כך פעילות בפער
+    שבין סוף-השבוע לרגע ה-cron (ראשון בבוקר) לא משויכת בטעות לסיכום
+    השבועי.
+
+    כל ספירה משתמשת ב-predicates המשותפים (`_lead_open_at_predicate` וכו')
+    שמוגדרים מעלה. זה מבטיח עקביות מול הרשימות ב-`_collect_attention_items`.
+    """
+    sent_at = func.coalesce(Lead.proposal_sent_at, Lead.last_outbound_at)
+    stale_threshold = as_of - timedelta(days=_STALE_PROPOSAL_DAYS)
+
+    open_leads_total = (
+        await db.execute(
+            select(func.count())
+            .select_from(Lead)
+            .where(_lead_open_at_predicate(as_of))
+        )
+    ).scalar_one()
+
+    # ליד תקוע ב-`as_of`: היה פתוח אז + EXISTS task stuck ב-`as_of`.
     stuck_task_exists = (
         select(Task.id)
         .where(
             Task.lead_id == Lead.id,
-            Task.status.in_([TaskStatus.OPEN.value, TaskStatus.SNOOZED.value]),
-            Task.due_at <= threshold,
-            surfaceable_task_condition(),
+            _task_stuck_at_predicate(as_of),
         )
         .correlate(Lead)
         .exists()
     )
-    return (
-        Lead.status.notin_([s.value for s in CLOSED_LEAD_STATUSES]),
-        stuck_task_exists,
-    )
-
-
-async def _open_state(db: AsyncSession, now_utc: datetime) -> dict:
-    """ספירות מצב נכון ל-now (לא תלוי חלון)."""
-    closed = [s.value for s in CLOSED_LEAD_STATUSES]
-
-    open_leads_total = (
-        await db.execute(
-            select(func.count()).select_from(Lead).where(Lead.status.notin_(closed))
-        )
-    ).scalar_one()
-
     stuck_leads_count = (
         await db.execute(
-            select(func.count()).select_from(Lead).where(*_stuck_lead_condition(now_utc))
+            select(func.count())
+            .select_from(Lead)
+            .where(
+                _lead_open_at_predicate(as_of),
+                stuck_task_exists,
+            )
         )
     ).scalar_one()
 
-    # הצעה תקועה: PROPOSAL_SENT שנשלח לפני 4+ ימים. proposal_sent_at הוא
-    # השדה הייעודי; fallback ל-last_outbound_at ללידים ישנים (כמו get_open_proposals).
-    stale_threshold = now_utc - timedelta(days=_STALE_PROPOSAL_DAYS)
-    sent_at = func.coalesce(Lead.proposal_sent_at, Lead.last_outbound_at)
+    # הצעה תקועה ב-`as_of`: ליד שהיה פתוח אז + היה ב-PROPOSAL_SENT ב-`as_of`
+    # (כולל לידים שעברו סטטוס אחרי `as_of` — Finding 1 של cursor bugbot)
+    # + sent_at <= as_of - 4d.
     stale_proposals_count = (
         await db.execute(
-            select(func.count()).select_from(Lead).where(
-                Lead.status == LeadStatus.PROPOSAL_SENT.value,
+            select(func.count())
+            .select_from(Lead)
+            .where(
+                _lead_open_at_predicate(as_of),
+                _lead_was_proposal_sent_at_predicate(as_of),
                 sent_at.is_not(None),
                 sent_at <= stale_threshold,
             )
         )
     ).scalar_one()
 
-    # משימות שעברו את היעד ולא טופלו: task פעיל surfaceable עם due_at<=now.
+    # משימות overdue ב-`as_of`: היו אקטיביות באותו רגע ושעברו את ה-due_at אז.
+    # `due_at <= as_of` משתמש ב-due_at הנוכחי (mutable ע"י snooze, ראה הערה
+    # ב-`_task_stuck_at_predicate`) — מובן רק כש-`as_of ≈ now` (קריאת daily).
+    # ב-`_open_state(db, week_end)` הערך מחושב אך *לא מוצג* ב-weekly prompt
+    # (`prompts/weekly_summary.py` מציג 3 שדות, ללא overdue_tasks_count) →
+    # drift שם לא נראה למשתמש.
     overdue_tasks_count = (
         await db.execute(
-            select(func.count()).select_from(Task).where(
-                Task.status.in_([TaskStatus.OPEN.value, TaskStatus.SNOOZED.value]),
-                Task.due_at <= now_utc,
+            select(func.count())
+            .select_from(Task)
+            .where(
+                _task_active_at_predicate(as_of),
+                Task.due_at <= as_of,
                 surfaceable_task_condition(),
             )
         )
@@ -577,14 +673,20 @@ async def _collect_attention_items(
         lines.append(text)
         return len(lines) >= _BLOCK_LIMIT
 
-    # (1) הצעות תקועות — הוותיקה ביותר ראשונה.
+    # כל הקריטריונים משתמשים ב-predicates המשותפים עם `_open_state` —
+    # כך המספר ב-`stuck_leads_count` והרשימה כאן לעולם לא יסתרו זה את זה
+    # (Finding 2 של cursor bugbot על da8b9c8).
+
+    # (1) הצעות תקועות — הוותיקה ביותר ראשונה. אותו predicate כמו
+    # `stale_proposals_count` (כולל ה-OR-branch של "transition אחרי as_of").
     sent_at = func.coalesce(Lead.proposal_sent_at, Lead.last_outbound_at)
     stale_threshold = now_utc - timedelta(days=_STALE_PROPOSAL_DAYS)
     stale = (
         await db.execute(
             select(Lead, sent_at.label("sent"))
             .where(
-                Lead.status == LeadStatus.PROPOSAL_SENT.value,
+                _lead_open_at_predicate(now_utc),
+                _lead_was_proposal_sent_at_predicate(now_utc),
                 sent_at.is_not(None),
                 sent_at <= stale_threshold,
             )
@@ -604,15 +706,15 @@ async def _collect_attention_items(
     # (2) לידים תקועים — הוותיק ביותר (לפי status_changed_at) ראשון.
     # "ימים בסטטוס נוכחי" מחושב מ-status_changed_at האמיתי (DB trigger,
     # migration 0025), fallback ל-created_at אם NULL (לידים לפני ה-backfill).
+    # אותו predicate כמו `stuck_leads_count` (`created_at` במקום `due_at`,
+    # החרגת CANCELED).
     stuck = (
         await db.execute(
             select(Lead)
             .join(Task, Task.lead_id == Lead.id)
             .where(
-                Lead.status.notin_([s.value for s in CLOSED_LEAD_STATUSES]),
-                Task.status.in_([TaskStatus.OPEN.value, TaskStatus.SNOOZED.value]),
-                Task.due_at <= now_utc - timedelta(days=_STUCK_DAYS),
-                surfaceable_task_condition(),
+                _lead_open_at_predicate(now_utc),
+                _task_stuck_at_predicate(now_utc),
             )
             .group_by(Lead.id)
             .order_by(Lead.status_changed_at.asc())
@@ -631,12 +733,13 @@ async def _collect_attention_items(
 
     # (3) משימות פעילות שעברו את היעד — הוותיקה ביותר ראשונה. headroom של
     # פי-3 בשליפה כי כמה tasks יכולים להיות לאותו ליד (dedup מסנן אותם).
+    # אותו predicate כמו `overdue_tasks_count`.
     overdue = (
         await db.execute(
             select(Task, Lead)
             .join(Lead, Task.lead_id == Lead.id)
             .where(
-                Task.status.in_([TaskStatus.OPEN.value, TaskStatus.SNOOZED.value]),
+                _task_active_at_predicate(now_utc),
                 Task.due_at <= now_utc,
                 surfaceable_task_condition(),
             )
@@ -1186,12 +1289,65 @@ def compute_next_week_focus_suggestion(
 
 # ===== assembly שבועי =====
 
+
+async def _resolve_weekly_open_state(
+    db: AsyncSession,
+    week_end_utc: datetime,
+    week_end_date: date,
+) -> tuple[dict, int]:
+    """שולף את "מצב פתוח בסוף השבוע" מ-snapshot קבוע, או fallback ל-live.
+
+    דרך-המלך: row ב-`weekly_open_state_snapshots` נכתב ע"י cron בראשון 00:00
+    שעון ישראל (`jobs/capture_weekly_open_state`). שחזור מתוך שדות mutable
+    אינו אמין (7 ממצאי cursor bugbot); הצילום פותר את הבעיה בשורש.
+
+    fallback ל-`_open_state(db, week_end)` + `_dormant_with_recommendation_count`
+    כש-snapshot חסר — לפני שה-cron הראשון רץ, או אם נכשל. logged בכל פעם
+    שה-fallback מופעל כדי שיהיה visible ב-monitoring.
+
+    מחזיר (open_state_dict, dormant_count) כדי לשמר את החתימה של ה-callers.
+    """
+    from app.models.weekly_open_state_snapshot import WeeklyOpenStateSnapshot
+
+    snapshot = (
+        await db.execute(
+            select(WeeklyOpenStateSnapshot).where(
+                WeeklyOpenStateSnapshot.week_end_date == week_end_date
+            )
+        )
+    ).scalar_one_or_none()
+
+    if snapshot is not None:
+        return (
+            {
+                "open_leads_total": snapshot.open_leads_total,
+                "stuck_leads_count": snapshot.stuck_leads_count,
+                "stale_proposals_count": snapshot.stale_proposals_count,
+                "overdue_tasks_count": snapshot.overdue_tasks_count,
+            },
+            snapshot.dormant_with_recommendation_count,
+        )
+
+    logger.warning(
+        "weekly open-state snapshot missing for week ending %s — "
+        "falling back to live _open_state. cron capture_weekly_open_state "
+        "may have failed or not yet run.",
+        week_end_date,
+    )
+    open_state = await _open_state(db, week_end_utc)
+    dormant = await _dormant_with_recommendation_count(db)
+    return open_state, dormant
+
+
 async def build_weekly_user_prompt(
     db: AsyncSession, now_utc: datetime | None = None
 ) -> str:
     """
     אוסף את כל הקלט המבושל לסיכום השבועי ומרכיב אותו לתוך WEEKLY_USER_TEMPLATE.
-    החלון הוא השבוע הקודם המלא (ראשון→ראשון); מטריקות מצב הן snapshot ל-now.
+    החלון הוא השבוע הקודם המלא (ראשון→ראשון); מטריקות מצב (`open_state`) הן
+    snapshot **לסוף השבוע** (week_end), לא ל-now — כך פעילות שקרתה בפער שבין
+    סוף-השבוע לרגע ה-cron (ראשון בבוקר) לא משויכת בטעות לסיכום השבועי
+    (תיקון cursor bot: counts may not match the stated range).
     מחזיר את ה-user prompt המוכן ל-generate_weekly_summary_text.
     """
     now_utc = now_utc or datetime.now(timezone.utc)
@@ -1209,9 +1365,16 @@ async def build_weekly_user_prompt(
     movement = await _lead_movement(db, week_start, week_end)
     newly_dormant = await _newly_dormant_count(db, week_start, week_end)
 
-    # snapshot מצב ל-now (כמו ביומי).
-    open_state = await _open_state(db, now_utc)
-    dormant_count = await _dormant_with_recommendation_count(db)
+    # snapshot מצב נכון לסוף השבוע — נשלף מ-row קבוע ב-weekly_open_state_snapshots
+    # שנכתב ע"י cron ב-ראשון 00:00 שעון ישראל (`jobs/capture_weekly_open_state`).
+    # זה ה-source-of-truth: שחזור מתוך שדות mutable (status נוכחי, due_at שנדרס
+    # ב-snooze, closed_at שמתאפס ב-reopen) הוכח כלא אמין (7 ממצאי cursor bugbot).
+    # fallback ל-live `_open_state(db, week_end)` אם אין snapshot — לפני שה-cron
+    # הראשון רץ או אם נכשל. ה-live מבוסס על temporal predicates עם best-effort
+    # ידוע ומתועד.
+    open_state, dormant_count = await _resolve_weekly_open_state(
+        db, week_end, week_end_date
+    )
 
     trends = await compute_trends_block(
         db,

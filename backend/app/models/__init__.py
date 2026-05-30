@@ -16,6 +16,7 @@ from app.models.service_rate import ServiceRate
 from app.models.task import Task
 from app.models.template import Template
 from app.models.user import User
+from app.models.weekly_open_state_snapshot import WeeklyOpenStateSnapshot
 
 __all__ = [
     "Activity",
@@ -32,4 +33,5 @@ __all__ = [
     "Task",
     "Template",
     "User",
+    "WeeklyOpenStateSnapshot",
 ]
