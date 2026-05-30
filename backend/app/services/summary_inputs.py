@@ -135,6 +135,7 @@ async def _activity_counts_by_role(
     tracked = (ActivityType.CALL_COMPLETED.value, *_OUTBOUND_TYPES)
     stmt = (
         select(User.role, Activity.type, func.count())
+        .select_from(Activity)
         .join(User, Activity.performed_by == User.id)
         .where(
             Activity.created_at >= window_start,
@@ -173,6 +174,7 @@ async def _tasks_completed_by_role(
     """
     stmt = (
         select(User.role, func.count())
+        .select_from(Task)
         .join(User, Task.assigned_to == User.id)
         .where(
             Task.status == TaskStatus.DONE.value,
