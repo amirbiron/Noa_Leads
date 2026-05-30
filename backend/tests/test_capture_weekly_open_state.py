@@ -19,25 +19,32 @@ from jobs.capture_weekly_open_state import _resolve_week_end_date
 # ===== בדיקות pure (ללא DB) =====
 
 
-def test_resolve_week_end_idt_sunday_midnight():
-    """IDT (קיץ): cron ב-Sat 21:00 UTC → Sun 00:00 IDT. weekday=Sun, day-back=1."""
-    # Sat 2026-08-29 21:00 UTC == Sun 2026-08-30 00:00 IDT (UTC+3)
-    now_utc = datetime(2026, 8, 29, 21, 0, tzinfo=timezone.utc)
+def test_resolve_week_end_idt_sunday_post_midnight():
+    """IDT (קיץ): cron ב-Sat 22:30 UTC → Sun 01:30 IDT. weekday=Sun, day-back=1.
+
+    זמן ההרצה הוא 1.5h אחרי capture_time (Sun 00:00 IDT), בשטח של "אחרי
+    מוצ"ש לפני בוקר ראשון".
+    """
+    # Sat 2026-08-29 22:30 UTC == Sun 2026-08-30 01:30 IDT (UTC+3)
+    now_utc = datetime(2026, 8, 29, 22, 30, tzinfo=timezone.utc)
     week_end_date, capture_time = _resolve_week_end_date(now_utc)
-    # השבת האחרונה בישראל בנקודה הזו = אתמול (Sat 2026-08-29)
+    # השבת האחרונה בישראל = אתמול בישראל = Sat 2026-08-29
     assert week_end_date == date(2026, 8, 29)
-    # capture_time = חצות ראשון בישראל = 21:00 UTC ערב שבת בקיץ
+    # capture_time = חצות ראשון בישראל בקיץ = Sat 21:00 UTC
     assert capture_time == datetime(2026, 8, 29, 21, 0, tzinfo=timezone.utc)
 
 
-def test_resolve_week_end_ist_saturday_late():
-    """IST (חורף): cron ב-Sat 21:00 UTC → Sat 23:00 IST. weekday=Sat, day-back=0."""
-    # Sat 2026-12-26 21:00 UTC == Sat 2026-12-26 23:00 IST (UTC+2)
-    now_utc = datetime(2026, 12, 26, 21, 0, tzinfo=timezone.utc)
+def test_resolve_week_end_ist_sunday_post_midnight():
+    """IST (חורף): cron ב-Sat 22:30 UTC → Sun 00:30 IST. weekday=Sun, day-back=1.
+
+    זמן ההרצה הוא 30min אחרי capture_time (Sun 00:00 IST). פער מינימלי.
+    """
+    # Sat 2026-12-26 22:30 UTC == Sun 2026-12-27 00:30 IST (UTC+2)
+    now_utc = datetime(2026, 12, 26, 22, 30, tzinfo=timezone.utc)
     week_end_date, capture_time = _resolve_week_end_date(now_utc)
-    # השבת האחרונה בישראל = היום (Sat 2026-12-26)
+    # השבת האחרונה בישראל = אתמול בישראל = Sat 2026-12-26
     assert week_end_date == date(2026, 12, 26)
-    # capture_time = חצות ראשון בישראל IST = 22:00 UTC ערב שבת בחורף
+    # capture_time = חצות ראשון בישראל בחורף = Sat 22:00 UTC
     assert capture_time == datetime(2026, 12, 26, 22, 0, tzinfo=timezone.utc)
 
 

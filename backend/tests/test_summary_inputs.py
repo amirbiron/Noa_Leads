@@ -372,52 +372,52 @@ async def test_open_state_stuck_uses_created_at_not_due_at(db):
     assert state["stuck_leads_count"] - baseline["stuck_leads_count"] == 1
 
 
-async def test_stale_proposals_includes_lead_closed_after_as_of(db):
-    """Regression cursor bugbot Finding 1: ליד שהיה PROPOSAL_SENT ב-as_of
-    ושינה סטטוס *אחרי* (נסגר / BOOKED / IN_PROGRESS) — חייב להיות בספירה.
+async def test_stale_proposals_excludes_in_progress_with_old_proposal_sent_at(db):
+    """Regression cursor bugbot Finding 1 על 52a89a5: ליד עם `proposal_sent_at`
+    ישן שכבר עזב את PROPOSAL_SENT לא נספר כ-stale ב-as_of.
 
-    הקוד הישן דרש `Lead.status == PROPOSAL_SENT` נוכחי — ולכן פספס את
-    הקטגוריה הזו. הגרסה החדשה (`_lead_was_proposal_sent_at_predicate`)
-    יש לה OR-branch ל-`status_changed_at > as_of + proposal_sent_at <= as_of`.
+    הניסיון הקודם (Branch 2 ב-`_lead_was_proposal_sent_at_predicate`) היה
+    מסיק "PROPOSAL_SENT ב-as_of" מ-`proposal_sent_at <= as_of +
+    status_changed_at > as_of`. הבעיה: `proposal_sent_at` נשאר ישן גם
+    אחרי שהליד עזב את הסטטוס — false-positive על לידים שהיו IN_PROGRESS
+    ב-as_of (עם proposal_sent_at ישן) ועברו ל-WON אחרי.
+
+    הפתרון השורשי: ה-snapshot (`weekly_open_state_snapshots`) נכתב ע"י
+    cron כש-as_of=now, אז Branch 1 לבדה ("currently PROPOSAL_SENT")
+    מדויקת. fallback ל-live conservative ⇒ under-count, לא over-count.
     """
     as_of = _NOW
-    before = as_of - timedelta(days=10)
-    proposal_sent = as_of - timedelta(days=5)
+    long_ago = as_of - timedelta(days=10)
     after = as_of + timedelta(hours=6)
 
     baseline = await si._open_state(db, as_of)
 
-    # ליד 1: היה PROPOSAL_SENT ב-as_of, נסגר WON אחרי as_of.
+    # ליד שגוי-לכלול (היה ניצוד ע"י Branch 2 הישן): היה PROPOSAL_SENT
+    # אי-פעם, עזב את הסטטוס לפני as_of (status_changed_at>as_of הוא
+    # ל-WON, לא ל-PROPOSAL_SENT), ועדיין מחזיק `proposal_sent_at` ישן.
     await _mk_lead(
-        db, full_name="נסגר אחרי",
-        created_at=before,
+        db, full_name="IN_PROGRESS עם הצעה ישנה → WON",
+        created_at=long_ago,
         status=LeadStatus.WON.value,
         status_changed_at=after,
         closed_at=after,
-        proposal_sent_at=proposal_sent,
+        proposal_sent_at=long_ago,
     )
-    # ליד 2: היה PROPOSAL_SENT ב-as_of, עבר ל-IN_PROGRESS אחרי as_of.
+    # ליד control: כן stale ב-as_of (currently PROPOSAL_SENT, status
+    # changed לפני as_of).
     await _mk_lead(
-        db, full_name="שינה סטטוס אחרי",
-        created_at=before,
-        status=LeadStatus.IN_PROGRESS.value,
-        status_changed_at=after,
-        proposal_sent_at=proposal_sent,
-    )
-    # ליד control: עדיין PROPOSAL_SENT, status_changed_at לפני as_of.
-    await _mk_lead(
-        db, full_name="עדיין הצעה",
-        created_at=before,
+        db, full_name="עדיין PROPOSAL_SENT",
+        created_at=long_ago,
         status=LeadStatus.PROPOSAL_SENT.value,
-        status_changed_at=proposal_sent,
-        proposal_sent_at=proposal_sent,
+        status_changed_at=as_of - timedelta(days=5),
+        proposal_sent_at=as_of - timedelta(days=5),
     )
     await db.flush()
 
     state = await si._open_state(db, as_of)
-    # שלושת הלידים נספרים: 2 שעברו סטטוס אחרי + 1 שעדיין PROPOSAL_SENT.
+    # רק ה-control נספר — הליד הראשון (false-positive הישן) לא.
     assert (
-        state["stale_proposals_count"] - baseline["stale_proposals_count"] == 3
+        state["stale_proposals_count"] - baseline["stale_proposals_count"] == 1
     )
 
 

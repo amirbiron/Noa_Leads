@@ -344,28 +344,29 @@ def _task_stuck_at_predicate(as_of: datetime):
 
 
 def _lead_was_proposal_sent_at_predicate(as_of: datetime):
-    """Lead-level WHERE: הליד היה ב-status=PROPOSAL_SENT ב-`as_of` (best-effort).
+    """Lead-level WHERE: הליד **כעת ב-status=PROPOSAL_SENT** בלי שינוי-סטטוס
+    מאז `as_of`.
 
-    אין status-history → 2 branches:
-    1. **definite:** currently PROPOSAL_SENT AND `status_changed_at<=as_of`
-       (אין שינוי מאז `as_of`).
-    2. **inferred:** `status_changed_at>as_of` (transition אחרי `as_of`)
-       AND `proposal_sent_at<=as_of` (היה כבר PROPOSAL_SENT לפני).
-       מגבלה: לא מבחין בתרחיש של PROPOSAL_SENT→other→other שכולן לפני
-       `as_of` — נדיר, אין דרך לדעת בלי history מלא.
+    שיקול עיצוב (cursor bugbot Finding 1 על 52a89a5):
+    אין דרך אמינה לזהות "ליד שהיה PROPOSAL_SENT ב-`as_of` ועזב את הסטטוס
+    מאז" עם ה-schema הקיים. ניסינו Branch 2 על בסיס `proposal_sent_at`
+    + `status_changed_at`, אבל `proposal_sent_at` נשאר ישן גם אחרי
+    שהליד יצא מ-PROPOSAL_SENT — false-positive על לידים שהיו IN_PROGRESS
+    ב-`as_of` עם הצעה ישנה.
+
+    הפתרון השורשי: ה-snapshot (`weekly_open_state_snapshots`) הוא
+    source-of-truth. cron כותב אותו כש-`as_of=now`, ואז Branch 1 לבדה
+    מדויקת ("currently PROPOSAL_SENT" = "PROPOSAL_SENT ב-as_of").
+
+    fallback ל-live (כש-snapshot חסר): **conservative under-count** —
+    לידים שעברו סטטוס בין `as_of` ל-now לא נספרים. עדיף over-count
+    שמראה false-positives.
     """
-    return or_(
-        and_(
-            Lead.status == LeadStatus.PROPOSAL_SENT.value,
-            or_(
-                Lead.status_changed_at.is_(None),
-                Lead.status_changed_at <= as_of,
-            ),
-        ),
-        and_(
-            Lead.status_changed_at > as_of,
-            Lead.proposal_sent_at.is_not(None),
-            Lead.proposal_sent_at <= as_of,
+    return and_(
+        Lead.status == LeadStatus.PROPOSAL_SENT.value,
+        or_(
+            Lead.status_changed_at.is_(None),
+            Lead.status_changed_at <= as_of,
         ),
     )
 

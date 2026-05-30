@@ -1,13 +1,18 @@
 """
 capture_weekly_open_state — צילום קבוע של "מצב פתוח בסוף השבוע".
 
-מתוזמן: Saturday 21:00 UTC ב-`render.yaml`. בשעון ישראל:
-- IDT (קיץ, UTC+3): Sunday 00:00 — בדיוק חצות ראשון.
-- IST (חורף, UTC+2): Saturday 23:00 — שעה לפני חצות ראשון.
+מתוזמן: Saturday 22:30 UTC ב-`render.yaml`. בשעון ישראל:
+- IDT (קיץ, UTC+3): Sunday 01:30 — שעה וחצי אחרי חצות ראשון.
+- IST (חורף, UTC+2): Sunday 00:30 — חצי שעה אחרי חצות ראשון.
 
-שני המקרים הם **נקודה מתה** — מוצ"ש כבר עבר (~20:00 IDT / ~17:30 IST),
-ופעילות ראשון-בבוקר עוד לא התחילה. זוהי הזדמנות לחתום על המצב לפני
-שפעילות ראשון מזהמת את הסטטיסטיקות "בסוף השבוע".
+הזמן נבחר כך שה-cron רץ **אחרי** `capture_time` (= חצות ראשון בישראל)
+בשתי העונות. תזמון מוקדם יותר (Sat 21:00 UTC, ניסיון קודם) רץ בחורף
+Sat 23:00 IST — שעה *לפני* capture_time, וה-DB לא שיקף את המצב הסופי
+של שבת. ראה cursor bugbot Finding 2 על da8b9c8.
+
+בשני המקרים: מוצ"ש כבר עבר (~20:00 IDT / ~17:30 IST), ופעילות ראשון
+בוקר עוד לא התחילה (אנשים ישנים). הפער (30min בחורף / 1.5h בקיץ)
+מכיל activity מינימלית.
 
 הסיבה הארכיטקטונית: שחזור עבר מתוך שדות mutable (`Lead.status`,
 `Task.due_at` שנדרס ב-snooze, `Lead.closed_at` שמתאפס ב-reopen, וכו')
@@ -19,7 +24,8 @@ first-write-wins (`ON CONFLICT (week_end_date) DO NOTHING`): re-run של ה-cron
 באותו שבוע לא דורס. הצילום קבוע אחרי הריצה הראשונה.
 
 חישוב week_end_date robust ל-DST: מציאת השבת האחרונה בישראל מה-now של
-ההרצה — מטפל בשני המצבים (IDT שמראה Sun, IST שמראה Sat) זהה.
+ההרצה — אחרי התזמון החדש שני מצבי DST שניהם מצביעים על "ראשון בישראל
+(weekday=Sun)", אז `(weekday-5)%7 = 1` תמיד מוביל ל"אתמול = שבת".
 """
 
 import logging
@@ -41,10 +47,12 @@ def _resolve_week_end_date(now_utc: datetime):
     מחזיר את התאריך של השבת האחרונה בישראל (כולל היום אם היום שבת),
     + capture_time UTC = חצות ראשון בישראל (סיום השבוע exclusive).
 
-    מטפל DST-safe בשני המצבים של זמני ה-cron:
-    - IDT (Sat 21:00 UTC → Sun 00:00 IL): weekday=Sun=6, days_back=1, אתמול.
-    - IST (Sat 21:00 UTC → Sat 23:00 IL): weekday=Sat=5, days_back=0, היום.
-    שני המקרים מחזירים את אותה שבת — סוף השבוע שהסתיים.
+    מטפל DST-safe בשני המצבים של זמני ה-cron (Saturday 22:30 UTC):
+    - IDT (Sun 01:30 IL): weekday=Sun=6, days_back=1, אתמול = שבת.
+    - IST (Sun 00:30 IL): weekday=Sun=6, days_back=1, אתמול = שבת.
+    שני המקרים מחזירים את אותה שבת — סוף השבוע שהסתיים. helper נשאר
+    DST-robust גם אם התזמון ישתנה — תמיד "השבת האחרונה" (helper יבדק
+    גם על תזמונים אחרים בבדיקות).
     """
     local = to_israel_tz(now_utc)
     # weekday: Mon=0..Sat=5..Sun=6. שבת=5; ימי אחורה ממנו (=0 אם היום שבת):
