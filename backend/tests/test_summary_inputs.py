@@ -245,6 +245,26 @@ async def test_highlighted_leads_block_silence_break(db):
     assert str(lead.id) not in block  # לא חושפים IDs
 
 
+async def test_highlighted_leads_block_booked_via_meeting_approved(db):
+    """
+    מעבר ל-BOOKED נרשם כ-MEETING_APPROVED (לא STATUS_CHANGED). regression
+    guard: ה-highlight של 'סטטוס עבר ל-BOOKED' חייב להופיע מ-MEETING_APPROVED.
+    """
+    noa = await _mk_user(db, UserRole.OWNER.value)
+    lead = await _mk_lead(db, full_name="רוני", status=LeadStatus.BOOKED.value)
+    db.add(Activity(
+        lead_id=lead.id, performed_by=noa.id,
+        type=ActivityType.MEETING_APPROVED.value, created_at=_IN_WINDOW,
+        activity_metadata={"booking_id": "x"},
+    ))
+    await db.flush()
+
+    block = await si.compute_highlighted_leads_block(db, _NOW - timedelta(hours=24), _NOW)
+    assert "רוני" in block
+    assert "BOOKED" in block
+    assert 'בוצע ע"י: נועה' in block
+
+
 async def test_attention_items_block_stale_proposal(db):
     """הצעה תקועה מופיעה ב-block עם מספר הימים."""
     await _mk_lead(

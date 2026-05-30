@@ -23,7 +23,7 @@ summary_inputs — שכבת החישוב לסיכום היומי של C.1 (§6.3
 import logging
 from datetime import date, datetime, timedelta, timezone
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
@@ -439,7 +439,11 @@ async def compute_highlighted_leads_block(
         if _add(lead, f"ענה אחרי {gap_days} ימי שתיקה", None):
             return "\n".join(lines)
 
-    # (2) שינוי סטטוס משמעותי: LEAD_WON, או STATUS_CHANGED ל-BOOKED, בחלון.
+    # (2) שינוי סטטוס משמעותי בחלון: נסגר WON (LEAD_WON), או עבר ל-BOOKED.
+    # מעבר ל-BOOKED נרשם כ-MEETING_APPROVED (booking.py: אישור הזמנה →
+    # status=BOOKED), *לא* כ-STATUS_CHANGED — זה ה-signal הקנוני למעבר
+    # BOOKING_PENDING→BOOKED. (ההבחנה כאן היא על *שינוי הסטטוס*, לא על
+    # השאלה אם פגישה פיזית התקיימה — אותה מטריקה הוסרה במכוון.)
     status_events = (
         await db.execute(
             select(Activity, Lead, User.role)
@@ -448,13 +452,11 @@ async def compute_highlighted_leads_block(
             .where(
                 Activity.created_at >= window_start,
                 Activity.created_at < now_utc,
-                or_(
-                    Activity.type == ActivityType.LEAD_WON.value,
-                    (Activity.type == ActivityType.STATUS_CHANGED.value)
-                    & (
-                        Activity.activity_metadata["new_status"].astext
-                        == LeadStatus.BOOKED.value
-                    ),
+                Activity.type.in_(
+                    [
+                        ActivityType.LEAD_WON.value,
+                        ActivityType.MEETING_APPROVED.value,
+                    ]
                 ),
             )
             .order_by(Activity.created_at.desc())
