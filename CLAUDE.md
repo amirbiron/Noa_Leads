@@ -85,6 +85,9 @@
 ### כלל 14: כל touchpoint סוגר tasks מ-AUTO_CLOSE_TASK_TYPES
 > כל פעולה ש-Noah מבצעת על ליד (chip click, action, mark sent) היא touchpoint = "טיפלה". צריכה לסגור tasks תקועים מאותם sub-types שlist `AUTO_CLOSE_TASK_TYPES` ב-`backend/app/services/lead_actions.py` (FIRST_RESPONSE, LECTURE_INQUIRY, FOLLOWUP, AFTER_HOURS_REPLY, DORMANT_CHECK, WARM_FOLLOWUP, RETRY_CALL). אחרת ה-`/today` ו-`next_action_due_at` יציגו עבודה כפולה. ראה `_close_addressed_tasks` ב-lead_actions.py + שלב 2b ב-`apply_chip`.
 
+### כלל 15: Service functions עושים flush, לא commit — ה-route/caller הוא בעל הטרנזקציה
+> פונקציות service שמשנות DB לעולם לא קוראות ל-`await db.commit()`. עושות `await db.flush()` בלבד (או אפילו רק `execute` עבור UPDATE/INSERT שלא דורש re-read), וה-route (ב-API) או ה-job (ב-cron) הוא היחיד שעושה commit. זה: (1) הופך את גבול-הטרנזקציה לנקודה אחת ניתנת-לחיזוי; (2) מאפשר ל-rollback-based test fixture (`backend/tests/conftest.py`) לנקות נתונים בין בדיקות — commit אי-אפשר ל-rollback, ושורה שנותרת ב-DB גורמת ל-`UniqueViolationError` בהרצה הבאה; (3) מאפשר composition של מספר service calls באותו endpoint תחת טרנזקציה אחת. **דוגמה נכונה:** `_store_summary` ב-`backend/app/services/summaries.py` עושה flush; `jobs/weekly_summary.py` עושה commit. **דוגמה שגויה שתוקנה:** סבב ו' של `increment_inaccurate_count` עשה commit פנימי — 3 בדיקות נכשלו בגלל זיהום-בין-הרצות. **הערה:** בקוד הקיים יש services נוספים שעדיין עושים commit (`leads`, `intake`, `tasks`, `templates` וכו') — הם לא במצב שובר-בדיקות כעת, אבל ייושרו לדפוס בעת המגע הבא בהם.
+
 ---
 
 ## מסמכי ייחוס חיצוניים

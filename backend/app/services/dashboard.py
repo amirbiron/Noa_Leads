@@ -619,6 +619,8 @@ async def increment_inaccurate_count(db: AsyncSession, summary_id: UUID) -> None
     מעלה ב-1 את inaccurate_count של סיכום AI (כפתור "לא מדויק", §3.7/§6.8).
     אטומי (כלל 2): UPDATE ... SET col = col + 1, בלי SELECT+UPDATE. אם אין
     שורה תואמת (rowcount=0) → NotFoundError (כלל 3: הודעה גנרית בעברית).
+
+    לא עושה commit (כלל 15) — ה-route בעל ה-session ואחראי על ה-commit.
     """
     from app.models.ai_summary import AiSummary
 
@@ -629,4 +631,3 @@ async def increment_inaccurate_count(db: AsyncSession, summary_id: UUID) -> None
     )
     if result.rowcount == 0:
         raise NotFoundError("הסיכום לא נמצא.")
-    await db.commit()

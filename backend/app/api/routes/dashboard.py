@@ -82,8 +82,12 @@ async def mark_ai_summary_inaccurate(
 
     זמין לכל משתמש מאומת (לא OwnerOnly — §3.7 לא מגביל). 404 אם הסיכום
     לא נמצא. אין body בתשובה (204).
+
+    ה-service עושה UPDATE בלבד (כלל 15) — ה-commit כאן. NotFoundError
+    שיוטל מה-service קופץ מעל ה-commit, ו-FastAPI עוטף ל-HTTP 404.
     """
     await dashboard_service.increment_inaccurate_count(db, summary_id)
+    await db.commit()
 
 
 @router.get("/poll", response_model=DashboardPollResponse)
