@@ -19,6 +19,8 @@
 | **2 — Google Calendar** | ✅ הושלמה | שלבים 11-15: OAuth, booking page, approve/reject, סנכרון הפוך, post-meeting update. |
 | **3 — AI** | ⬜ עתיד | סיכומים, סינון מיילים, ניסוח הצעות |
 
+> **בתכנון (טרם מומש):** **C.1 + C.2 — סיכומים יומיים ושבועיים מבוססי-AI** — אפיון מלא ב-`docs/c1-c2-summaries-spec.md`. מחליף את הסיכום הסטטיסטי הקיים (`daily_summary`/`weekly_summary`) בסיכום נרטיבי שמנוסח ע"י Claude (Sonnet) מנתונים מבושלים שהקוד מחשב מראש ("AI מפרש, לא מחשב"). מוצג בעמוד "היום" בלבד — **בלי טלגרם**. כולל טבלת `ai_summaries` חדשה, ולידציה (regen על חריגה/שם מומצא), וכפתור "לא מדויק". פיצ'ר D.1 (הצעת פעולה לליד רדום) כבר מומש ב-§19.3.
+
 ### פאזה 2 — שלבים פנימיים
 
 | שלב | סטטוס | הערות |
@@ -43,6 +45,7 @@
 | `docs/references/google-calendar-blueprint.md` | blueprint חיצוני שאצלנו רק נשאב ממנו |
 | `docs/phase-2.5-plan.md` | תכנון פאזה 2.5 — ✅ הושלמה |
 | `docs/phase-3-plan.md` | תכנון פאזה 3 — Gmail + AI |
+| `docs/c1-c2-summaries-spec.md` | **אפיון C.1+C.2** (סיכומים יומיים/שבועיים מבוססי-AI) — בתכנון, טרם מומש. ה-source of truth לפיצ'ר; מחליף את "חבילה C" ב-phase-3-plan |
 | `docs/phase-3-ai-token-management.md` | **חובה לפני פאזה 3** — מפרט `clean_email_body_for_ai`, retry, סינון לפני AI. לקח מ-EmailFlow |
 
 ---
