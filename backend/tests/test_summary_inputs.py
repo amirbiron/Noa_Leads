@@ -207,26 +207,33 @@ async def test_lead_movement_segments_and_closures(db):
 async def test_open_state_counts(db):
     """open_total / stuck>7d / stale_proposal>4d / overdue tasks.
 
-    הליד/task נוצרים עם `created_at` מפורש לפני `_NOW`, כי `_open_state`
-    מסנן על `created_at <= as_of` (לא רק על current status) — בלי תאריך
-    מפורש server-side default = NOW אמיתי, ש-> _NOW (קבוע הבדיקה),
-    והלידים לא נספרים.
+    הליד/task נוצרים עם `created_at` מפורש כי `_open_state` מסנן על
+    `created_at` (write-once) ולא על status בלבד — בלי תאריך מפורש
+    server-side default = NOW אמיתי, ש-> _NOW (קבוע הבדיקה).
+
+    ה-task ה-"stuck" צריך `created_at <= _NOW - 7d` כי קריטריון התקיעה
+    הוחלף מ-`due_at` ל-`created_at` (snooze דורס due_at — ראה הערה ב-
+    `_open_state`).
     """
     one_hour_ago = _NOW - timedelta(hours=1)
+    ten_days_ago = _NOW - timedelta(days=10)
     # ליד פתוח רגיל (לא תקוע):
     await _mk_lead(db, created_at=one_hour_ago)
-    # ליד תקוע: task פעיל due לפני 10 ימים:
-    stuck_lead = await _mk_lead(db, created_at=one_hour_ago)
+    # ליד תקוע: task פעיל שנוצר לפני 10 ימים:
+    stuck_lead = await _mk_lead(db, created_at=ten_days_ago)
     db.add(Task(
         lead_id=stuck_lead.id, type=TaskType.FOLLOWUP.value,
         status=TaskStatus.OPEN.value,
-        created_at=one_hour_ago,
-        due_at=_NOW - timedelta(days=10),
+        created_at=ten_days_ago,
+        due_at=ten_days_ago,
     ))
-    # הצעה תקועה (נשלחה לפני 5 ימים):
+    # הצעה תקועה (נשלחה לפני 5 ימים). `status_changed_at` מפורש כי
+    # ה-trigger ב-DB מציב אותו ל-NOW אמיתי בעת INSERT, > `_NOW` הקבוע →
+    # נכשל ב-`status_changed_at <= as_of`.
     await _mk_lead(
         db, created_at=one_hour_ago,
         status=LeadStatus.PROPOSAL_SENT.value,
+        status_changed_at=one_hour_ago,
         proposal_sent_at=_NOW - timedelta(days=5),
     )
     await db.flush()
@@ -297,6 +304,72 @@ async def test_open_state_excludes_post_anchor_activity(db):
         state_future["open_leads_total"] - baseline["open_leads_total"]
     )
     assert open_delta_future == 2  # (א) ו-(ד); (ב) נסגר, (ג) נסגר.
+
+
+async def test_open_state_excludes_canceled_tasks(db):
+    """Regression cursor bot Finding 1 (High): tasks ב-status=CANCELED לא
+    נספרים כ-active ב-as_of, גם כש-`completed_at IS NULL`.
+
+    close_lead (`services/leads.py:340`) ו-chip apply
+    (`services/quick_action_chips.py:303`) מציבים `status=canceled` בלי
+    לעדכן `completed_at`. בלי הפילטר `status != CANCELED`, tasks שבוטלו
+    לפני שבועות היו נספרים כ-overdue ובמספרי stuck_leads.
+    """
+    long_ago = _NOW - timedelta(days=10)
+    baseline = await si._open_state(db, _NOW)
+
+    # (א) ליד עם task יחיד שבוטל — לא צריך להתווסף ל-stuck.
+    canceled_lead = await _mk_lead(db, created_at=long_ago)
+    db.add(Task(
+        lead_id=canceled_lead.id, type=TaskType.FOLLOWUP.value,
+        status=TaskStatus.CANCELED.value,
+        created_at=long_ago,
+        due_at=long_ago,  # היה עוקף את ה-7d threshold (פרוקסי ישן)
+        completed_at=None,  # close_lead לא מציב completed_at
+    ))
+    # (ב) ליד נפרד עם task OPEN ישן — צריך להתווסף ל-stuck (control).
+    stuck_lead = await _mk_lead(db, created_at=long_ago)
+    db.add(Task(
+        lead_id=stuck_lead.id, type=TaskType.FOLLOWUP.value,
+        status=TaskStatus.OPEN.value,
+        created_at=long_ago,
+        due_at=long_ago,
+    ))
+    await db.flush()
+
+    state = await si._open_state(db, _NOW)
+    # רק (ב) נספר ב-stuck — לא (א).
+    assert state["stuck_leads_count"] - baseline["stuck_leads_count"] == 1
+    # overdue_tasks_count מתעדכן רק לפי (ב) (task ה-CANCELED של (א) לא נספר).
+    assert state["overdue_tasks_count"] - baseline["overdue_tasks_count"] == 1
+
+
+async def test_open_state_stuck_uses_created_at_not_due_at(db):
+    """Regression cursor bot Finding 2 (Medium): קביעת "תקוע 7+ ימים"
+    משתמשת ב-`created_at` (write-once) ולא ב-`due_at` שהוא mutable.
+
+    snooze_task (`services/tasks.py:242`) דורס את `due_at`. תרחיש שלם:
+    task נוצר לפני 10 ימים → היה תקוע ב-as_of → המשתמש סנוז אותו אחרי
+    as_of (or just before) → due_at נדחף לעתיד. עם הפרוקסי הישן
+    (`due_at <= as_of - 7d`) המספר היה False למרות שהליד תקוע 10 ימים.
+    """
+    long_ago = _NOW - timedelta(days=10)
+    baseline = await si._open_state(db, _NOW)
+
+    # ליד עם task שנוצר לפני 10 ימים אבל סנוז → due_at הנוכחי בעתיד.
+    snoozed_lead = await _mk_lead(db, created_at=long_ago)
+    db.add(Task(
+        lead_id=snoozed_lead.id, type=TaskType.FOLLOWUP.value,
+        status=TaskStatus.SNOOZED.value,
+        created_at=long_ago,
+        due_at=_NOW + timedelta(days=5),  # snooze דחף לעתיד
+        snoozed_until=_NOW + timedelta(days=5),
+    ))
+    await db.flush()
+
+    state = await si._open_state(db, _NOW)
+    # עם הקוד הישן (due_at): False → 0. עם הקוד החדש (created_at): True → 1.
+    assert state["stuck_leads_count"] - baseline["stuck_leads_count"] == 1
 
 
 async def test_highlighted_leads_block_silence_break(db):

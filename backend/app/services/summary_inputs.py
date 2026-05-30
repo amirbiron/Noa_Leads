@@ -300,10 +300,10 @@ async def _open_state(db: AsyncSession, as_of: datetime) -> dict:
     שבין סוף-השבוע לרגע ה-cron (ראשון בבוקר) לא משויכת בטעות לסיכום
     השבועי.
 
-    כל ספירה מתבססת על שדות זמן קיימים:
+    כל ספירה מתבססת על שדות זמן write-once:
     - Lead: created_at, closed_at, status_changed_at
-    - Task: created_at, due_at, completed_at
-    ה-snapshot ב-`as_of` מוגדר: "נוצר עד אז, עוד לא נסגר באותו רגע".
+    - Task: created_at, completed_at (status — best-effort: ראה הערות
+      ב-CANCELED ו-due_at למטה)
     """
     # ליד היה פתוח ב-`as_of`: נוצר עד אז ועוד לא נסגר אז.
     open_at_as_of = and_(
@@ -317,16 +317,29 @@ async def _open_state(db: AsyncSession, as_of: datetime) -> dict:
         )
     ).scalar_one()
 
-    # ליד תקוע ב-`as_of`: היה פתוח אז + EXISTS task שהיה אקטיבי
-    # (open/snoozed) באותו רגע ושה-due_at שלו עבר ב-7+ ימים. task active
-    # ב-`as_of` = created_at<=as_of AND (completed_at IS NULL OR completed_at>as_of).
-    stuck_threshold = as_of - timedelta(days=_STUCK_DAYS)
+    # ליד תקוע ב-`as_of`: היה פתוח אז + EXISTS task שהיה אקטיבי באותו
+    # רגע ושב-`as_of` עברו 7+ ימים מאז שנוצר.
+    #
+    # שתי הגנות נגד false-positives:
+    # 1. `status != CANCELED` — close_lead ו-chip apply מציבים canceled
+    #    בלי `completed_at`. בלי הפילטר, tasks שבוטלו לפני שבועות נספרים
+    #    כ-stuck (אסקלציה של cursor bugbot). best-effort: task שהיה
+    #    open/snoozed ב-as_of ובוטל *בפער as_of→now* — לא נספר. במצב
+    #    הריאלי הפער ב-weekly הוא 9h בליל שבת, פעולות ביטול שם נדירות.
+    # 2. סף 7+ ימים מבוסס על `created_at`, לא על `due_at` — snooze דורס
+    #    את `due_at` (`tasks/snooze_task:242`), אז due_at הנוכחי אינו
+    #    מייצג את due_at-ב-`as_of`. `created_at` write-once → יציב.
+    #    שינוי פרוקסי: "תקוע" עכשיו = "task במערכת 7+ ימים בלי טיפול"
+    #    במקום "due_at עבר 7+ ימים". לרוב ה-types תוצאה כמעט זהה
+    #    (FIRST_RESPONSE due_at = created_at+24h, אז 7d ב-created_at
+    #    ≈ 6d ב-due_at-המקורי).
+    stuck_created_threshold = as_of - timedelta(days=_STUCK_DAYS)
     stuck_task_at_as_of = (
         select(Task.id)
         .where(
             Task.lead_id == Lead.id,
-            Task.created_at <= as_of,
-            Task.due_at <= stuck_threshold,
+            Task.created_at <= stuck_created_threshold,
+            Task.status != TaskStatus.CANCELED.value,
             or_(Task.completed_at.is_(None), Task.completed_at > as_of),
             surfaceable_task_condition(),
         )
@@ -366,11 +379,20 @@ async def _open_state(db: AsyncSession, as_of: datetime) -> dict:
     ).scalar_one()
 
     # משימות overdue ב-`as_of`: היו אקטיביות באותו רגע ושעברו את ה-due_at אז.
+    # `status != CANCELED` — כמו ב-stuck_task: בלי הפילטר tasks שבוטלו ע"י
+    # close_lead/chip apply נספרים כ-overdue (cursor bugbot Finding 1).
+    #
+    # `due_at <= as_of` — שימוש ב-due_at הנוכחי. snooze דורס את due_at
+    # (ראה הערה ב-stuck_task), אז המטריקה הזו מובנת רק כש-`as_of ≈ now`
+    # (קריאת daily). ב-`_open_state(db, week_end)` הערך מחושב אך *לא
+    # מוצג* ב-weekly prompt (`prompts/weekly_summary.py` מציג רק 3 שדות,
+    # ללא overdue_tasks_count) — drift שם לא נראה למשתמש.
     overdue_tasks_count = (
         await db.execute(
             select(func.count()).select_from(Task).where(
                 Task.created_at <= as_of,
                 Task.due_at <= as_of,
+                Task.status != TaskStatus.CANCELED.value,
                 or_(Task.completed_at.is_(None), Task.completed_at > as_of),
                 surfaceable_task_condition(),
             )
