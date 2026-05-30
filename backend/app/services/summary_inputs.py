@@ -21,9 +21,9 @@ summary_inputs — שכבת החישוב לסיכום היומי של C.1 (§6.3
 """
 
 import logging
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -44,9 +44,14 @@ from app.models.lead import Lead
 from app.models.task import Task
 from app.models.user import User
 from app.prompts.daily_summary import USER_TEMPLATE
+from app.prompts.weekly_summary import USER_TEMPLATE as WEEKLY_USER_TEMPLATE
 from app.services.tasks import surfaceable_task_condition
-from app.utils.labels import SERVICE_SUBTYPE_HE, SOURCE_CHANNEL_HE
-from app.utils.work_hours import to_israel_tz
+from app.utils.labels import (
+    SERVICE_CATEGORY_HE,
+    SERVICE_SUBTYPE_HE,
+    SOURCE_CHANNEL_HE,
+)
+from app.utils.work_hours import ISRAEL_TZ, to_israel_tz
 
 logger = logging.getLogger("services.summary_inputs")
 
@@ -785,5 +790,461 @@ async def build_daily_user_prompt(
         dormant_with_recommendation_count=dormant_count,
         tomorrow_focus_suggestion_or_null=(
             tomorrow if tomorrow is not None else "null"
+        ),
+    )
+
+
+# ============================================================================
+# ===== שכבת החישוב לסיכום השבועי — C.2 (§4.2 + §5.5–§5.8) =====
+# ============================================================================
+#
+# עיקרון זהה ליומי: "AI מפרש, לא מחשב". כל מספר/השוואה/תובנה מחושב כאן
+# מ-DB ומוזן ל-WEEKLY_USER_TEMPLATE כמחרוזת מבושלת. ה-AI רק מנסח.
+#
+# מודל החלון השבועי (§4.2): החלון הוא **השבוע הקודם המלא** (ראשון 00:00 →
+# ראשון הבא 00:00, סוף לא-כולל), בזמן ישראל. הריצה היא בבוקר יום ראשון
+# ומסכמת את השבוע שהסתיים אתמול (שבת). מטריקות מצב (פתוחים/תקועים/הצעות
+# תקועות) הן snapshot ל-now (כמו ביומי).
+
+# חלון 30 יום לתובנות אסטרטגיות מבוססות-היסטוריה (§4.2 precomputed_insights).
+_INSIGHTS_WINDOW_DAYS = 30
+
+# סף שבועות-במערכת שמעליו מציגים נתוני השוואה (§4.2: "פחות מ-4 שבועות → אין
+# מספיק היסטוריה"). מתחת לסף — trends_block = "NO_COMPARISON".
+_COMPARISON_MIN_WEEKS = 4
+
+# מספר התובנות המקסימלי בכל סוג (top-N לפי denominator) — תואם _BLOCK_LIMIT.
+_INSIGHTS_TOP_N = _BLOCK_LIMIT
+
+
+# ===== גבולות שבוע (DST-safe, ממראה את dashboard._current_week_bounds) =====
+
+def _last_week_bounds(now_utc: datetime) -> tuple[datetime, datetime]:
+    """
+    גבולות (start, end) של **השבוע הקודם המלא** בזמן ישראל — ראשון 00:00 עד
+    ראשון הבא 00:00 (end לא-כולל). מורץ בבוקר יום ראשון: "שבוע שעבר" = השבוע
+    שמתחיל ראשון-שעבר ומסתיים ראשון-הנוכחי.
+
+    שני ה-bounds נבנים כ-midnight מקומי **באופן עצמאי** (לא start+7days) כדי
+    להימנע מ-DST drift בשבוע של מעבר שעון (כמו ב-dashboard._current_week_bounds).
+    """
+    local = to_israel_tz(now_utc)
+    today = local.date()
+    # weekday: שני=0 .. שבת=5 .. ראשון=6. מספר ימים אחורה ליום ראשון הנוכחי:
+    days_since_sunday = (today.weekday() + 1) % 7
+    current_sunday = today - timedelta(days=days_since_sunday)
+    last_sunday = current_sunday - timedelta(days=7)
+    start_local = datetime.combine(last_sunday, time(0, 0, tzinfo=ISRAEL_TZ))
+    end_local = datetime.combine(current_sunday, time(0, 0, tzinfo=ISRAEL_TZ))
+    return start_local.astimezone(timezone.utc), end_local.astimezone(timezone.utc)
+
+
+def _prev_week_bounds(week_start_utc: datetime) -> tuple[datetime, datetime]:
+    """
+    גבולות השבוע שקדם מיד ל-week_start נתון (לצורך השוואת מגמות) — אותו
+    מבנה midnight-עצמאי כדי להימנע מ-DST drift.
+    """
+    start_local = to_israel_tz(week_start_utc).date()
+    prev_sunday = start_local - timedelta(days=7)
+    start = datetime.combine(prev_sunday, time(0, 0, tzinfo=ISRAEL_TZ))
+    end = datetime.combine(start_local, time(0, 0, tzinfo=ISRAEL_TZ))
+    return start.astimezone(timezone.utc), end.astimezone(timezone.utc)
+
+
+# ===== מטריקות בסיסיות שבועיות =====
+
+def compute_weeks_in_system(week_start_date: date) -> int:
+    """
+    מספר השבוע במערכת לשבוע שמתחיל ב-week_start_date.
+    חלוקה ב-7 + 1 כך שהשבוע הראשון = 1 (ולא 0). רצפה 1 (תצורה שגויה).
+    """
+    start = get_settings().system_start_date
+    return max(1, (week_start_date - start).days // 7 + 1)
+
+
+def has_comparison_data(weeks_in_system: int) -> bool:
+    """האם יש מספיק היסטוריה (4+ שבועות) להצגת נתוני השוואה (§4.2)."""
+    return weeks_in_system >= _COMPARISON_MIN_WEEKS
+
+
+async def _newly_dormant_count(
+    db: AsyncSession, window_start: datetime, window_end: datetime
+) -> int:
+    """
+    "לידים רדומים שזוהו השבוע" — קירוב. אין שדה timestamp ייעודי ל"מתי הליד
+    סומן רדום", לכן סופרים משימות DORMANT_SUGGESTION שנוצרו בחלון (כל זיהוי
+    רדום מייצר משימה כזו, D.1 §3.6). קירוב שמרני ושקוף — לא המצאה.
+    """
+    return (
+        await db.execute(
+            select(func.count()).select_from(Task).where(
+                Task.type == TaskType.DORMANT_SUGGESTION.value,
+                Task.created_at >= window_start,
+                Task.created_at < window_end,
+            )
+        )
+    ).scalar_one()
+
+
+# ===== מגמות מול שבוע קודם (trends_block, §4.2) =====
+
+def _trend_direction(curr, prev, *, lower_is_better: bool = False) -> str:
+    """
+    כיוון מגמה מילולי בין שני ערכים.
+    - רגיל: עלייה (curr>prev) / ירידה (curr<prev) / יציב (שווה).
+    - lower_is_better (זמן תגובה — נמוך עדיף): שיפור (curr<prev) /
+      הרעה (curr>prev) / יציב (שווה). אומת מול §5.8: 4→2 שעות = שיפור,
+      2→6 = הרעה.
+    - אם אחד מהצדדים None (אין נתון) — "יציב" (הבחירה הכי פחות-מפתיעה,
+      בלי להמציא כיוון).
+    """
+    if curr is None or prev is None:
+        return "יציב"
+    if curr == prev:
+        return "יציב"
+    if lower_is_better:
+        return "שיפור" if curr < prev else "הרעה"
+    return "עלייה" if curr > prev else "ירידה"
+
+
+async def _avg_first_response_hours(
+    db: AsyncSession, window_start: datetime, window_end: datetime
+) -> int | None:
+    """
+    "זמן תגובה ראשון ממוצע" (שעות) — AVG(first_outbound_at - created_at) על
+    לידים שנוצרו בחלון ושכבר קיבלו outbound ראשון. תנאי first_outbound_at >=
+    created_at שומר מפני נתונים פגומים (outbound לפני יצירה). מעוגל לשלם
+    הקרוב. None אם אין לידים מתאימים.
+    """
+    delta_seconds = func.extract(
+        "epoch", Lead.first_outbound_at - Lead.created_at
+    )
+    avg_hours = (
+        await db.execute(
+            select(func.avg(delta_seconds / 3600.0)).where(
+                Lead.created_at >= window_start,
+                Lead.created_at < window_end,
+                Lead.first_outbound_at.is_not(None),
+                Lead.first_outbound_at >= Lead.created_at,
+            )
+        )
+    ).scalar_one()
+    return round(avg_hours) if avg_hours is not None else None
+
+
+async def _top_source_by_new_leads(
+    db: AsyncSession, window_start: datetime, window_end: datetime
+) -> str | None:
+    """תווית המקור (SOURCE_CHANNEL_HE) עם הכי הרבה לידים חדשים בחלון. None אם אין."""
+    row = (
+        await db.execute(
+            select(Lead.source_channel, func.count().label("c"))
+            .where(
+                Lead.created_at >= window_start,
+                Lead.created_at < window_end,
+            )
+            .group_by(Lead.source_channel)
+            .order_by(func.count().desc())
+            .limit(1)
+        )
+    ).first()
+    if row is None or not row.c:
+        return None
+    return SOURCE_CHANNEL_HE.get(row[0] or "", "אחר")
+
+
+async def compute_trends_block(
+    db: AsyncSession,
+    week_start: datetime,
+    week_end: datetime,
+    weeks_in_system: int,
+    *,
+    curr_new_leads: int,
+    curr_won: int,
+) -> str:
+    """
+    בונה את trends_block (§4.2): 4 שורות השוואה מול השבוע הקודם, או
+    "NO_COMPARISON" אם פחות מ-4 שבועות במערכת. הפורמט verbatim מ-§4.2 +
+    few-shot (כל שורה מתחילה ב-"- ").
+
+    curr_new_leads / curr_won מתקבלים מבחוץ (כבר חושבו ב-_lead_movement של
+    השבוע הנוכחי) כדי לא לשאול פעמיים.
+    """
+    if weeks_in_system < _COMPARISON_MIN_WEEKS:
+        return "NO_COMPARISON"
+
+    prev_start, prev_end = _prev_week_bounds(week_start)
+    prev_movement = await _lead_movement(db, prev_start, prev_end)
+    prev_new_leads = prev_movement["new_leads_count"]
+    prev_won = prev_movement["won_count"]
+
+    curr_hours = await _avg_first_response_hours(db, week_start, week_end)
+    prev_hours = await _avg_first_response_hours(db, prev_start, prev_end)
+
+    curr_src = await _top_source_by_new_leads(db, week_start, week_end)
+    prev_src = await _top_source_by_new_leads(db, prev_start, prev_end)
+
+    leads_dir = _trend_direction(curr_new_leads, prev_new_leads)
+    won_dir = _trend_direction(curr_won, prev_won)
+    # זמן תגובה — נמוך יותר עדיף (שיפור/הרעה).
+    hours_dir = _trend_direction(curr_hours, prev_hours, lower_is_better=True)
+
+    # ערכי תצוגה לזמן תגובה: אם אין נתון מציגים "אין נתון" (לא ממציאים 0).
+    curr_hours_text = curr_hours if curr_hours is not None else "אין נתון"
+    prev_hours_text = prev_hours if prev_hours is not None else "אין נתון"
+    curr_src_text = curr_src if curr_src is not None else "-"
+    prev_src_text = prev_src if prev_src is not None else "-"
+
+    return "\n".join(
+        [
+            f"- לידים חדשים: {curr_new_leads} השבוע מול {prev_new_leads} "
+            f"שבוע קודם. כיוון: {leads_dir}.",
+            f"- סגירות WON: {curr_won} השבוע מול {prev_won} "
+            f"שבוע קודם. כיוון: {won_dir}.",
+            f"- זמן תגובה ראשון ממוצע: {curr_hours_text} שעות השבוע מול "
+            f"{prev_hours_text} שעות שבוע קודם. כיוון: {hours_dir}.",
+            f"- מקור מוביל השבוע: {curr_src_text}. שבוע קודם: {prev_src_text}.",
+        ]
+    )
+
+
+# ===== תובנות אסטרטגיות שחושבו מראש (precomputed_insights_block, §4.2) =====
+#
+# החלטות מוצר מאושרות (סבב 2b):
+# 1. conversion-rate + זמן-ממוצע-ל-WON מקובצים לפי service_category (לא subtype),
+#    עם תוויות SERVICE_CATEGORY_HE. (פילוח הלידים-החדשים נשאר subtype.)
+# 2. שורת stuck-ratio הושמטה — לא נמצאת בפורמט §4.2 ולא ב-few-shot.
+
+async def _conversion_by_category_30d(
+    db: AsyncSession, now_utc: datetime
+) -> list[str]:
+    """
+    יחס המרה (WON / (WON+LOST)) לכל service_category, על לידים שנסגרו
+    ב-30 הימים האחרונים. כולל קטגוריות עם מכנה >= 1, top-3 לפי גודל המכנה.
+    פורמט verbatim: "conversion rate ב{תווית}: {אחוז}% ב-30 הימים האחרונים".
+    """
+    window_start = now_utc - timedelta(days=_INSIGHTS_WINDOW_DAYS)
+    won_count = func.count(
+        case((Lead.status == LeadStatus.WON.value, 1))
+    )
+    rows = (
+        await db.execute(
+            select(
+                Lead.service_category,
+                won_count.label("won"),
+                func.count().label("denom"),
+            )
+            .where(
+                Lead.closed_at >= window_start,
+                Lead.closed_at < now_utc,
+                Lead.status.in_(
+                    [LeadStatus.WON.value, LeadStatus.LOST.value]
+                ),
+            )
+            .group_by(Lead.service_category)
+            .order_by(func.count().desc())
+            .limit(_INSIGHTS_TOP_N)
+        )
+    ).all()
+    lines: list[str] = []
+    for category, won, denom in rows:
+        if not denom:
+            continue
+        pct = round(won / denom * 100)
+        label = SERVICE_CATEGORY_HE.get(category or "", "אחר")
+        lines.append(
+            f"- conversion rate ב{label}: {pct}% ב-30 הימים האחרונים"
+        )
+    return lines
+
+
+async def _avg_days_to_won_by_category_30d(
+    db: AsyncSession, now_utc: datetime
+) -> str | None:
+    """
+    זמן ממוצע מליד ל-WON (ימים) עבור הקטגוריה עם הכי הרבה WON ב-30 הימים
+    האחרונים. שורה אחת: "זמן ממוצע מליד ל-WON ב{תווית}: {ימים} ימים".
+    None אם אין WON בחלון.
+    """
+    window_start = now_utc - timedelta(days=_INSIGHTS_WINDOW_DAYS)
+    # קודם בוחרים את הקטגוריה עם הכי הרבה WON:
+    top = (
+        await db.execute(
+            select(Lead.service_category, func.count().label("c"))
+            .where(
+                Lead.status == LeadStatus.WON.value,
+                Lead.closed_at >= window_start,
+                Lead.closed_at < now_utc,
+            )
+            .group_by(Lead.service_category)
+            .order_by(func.count().desc())
+            .limit(1)
+        )
+    ).first()
+    if top is None or not top.c:
+        return None
+    category = top[0]
+    # התאמת קטגוריה: None דורש IS NULL (השוואת == ל-NULL תמיד שקרית ב-SQL).
+    category_match = (
+        Lead.service_category.is_(None)
+        if category is None
+        else Lead.service_category == category
+    )
+    days_seconds = func.extract("epoch", Lead.closed_at - Lead.created_at)
+    avg_days = (
+        await db.execute(
+            select(func.avg(days_seconds / 86400.0)).where(
+                Lead.status == LeadStatus.WON.value,
+                Lead.closed_at >= window_start,
+                Lead.closed_at < now_utc,
+                category_match,
+            )
+        )
+    ).scalar_one()
+    if avg_days is None:
+        return None
+    label = SERVICE_CATEGORY_HE.get(category or "", "אחר")
+    return f"- זמן ממוצע מליד ל-WON ב{label}: {round(avg_days)} ימים"
+
+
+async def _top_source_by_won_30d(db: AsyncSession, now_utc: datetime) -> str | None:
+    """
+    מקור (source_channel) עם הכי הרבה סגירות WON ב-30 הימים האחרונים.
+    שורה אחת. None אם אין WON בחלון.
+    """
+    window_start = now_utc - timedelta(days=_INSIGHTS_WINDOW_DAYS)
+    row = (
+        await db.execute(
+            select(Lead.source_channel, func.count().label("c"))
+            .where(
+                Lead.status == LeadStatus.WON.value,
+                Lead.closed_at >= window_start,
+                Lead.closed_at < now_utc,
+            )
+            .group_by(Lead.source_channel)
+            .order_by(func.count().desc())
+            .limit(1)
+        )
+    ).first()
+    if row is None or not row.c:
+        return None
+    label = SOURCE_CHANNEL_HE.get(row[0] or "", "אחר")
+    return f"- מקור עם הכי הרבה סגירות ב-30 הימים האחרונים: {label}"
+
+
+async def compute_precomputed_insights_block(
+    db: AsyncSession, now_utc: datetime
+) -> str:
+    """
+    בונה את precomputed_insights_block (§4.2) — תובנות מבוססות 30 יום.
+    סדר השורות: conversion-rate (עד 3), אז מקור-מוביל-WON, אז זמן-ממוצע-ל-WON.
+    כל שורה נכללת רק אם יש לה נתון. אם הבלוק כולו ריק → "(ריק - לא מספיק נתונים)".
+    """
+    lines: list[str] = []
+    lines.extend(await _conversion_by_category_30d(db, now_utc))
+
+    top_source = await _top_source_by_won_30d(db, now_utc)
+    if top_source:
+        lines.append(top_source)
+
+    avg_days = await _avg_days_to_won_by_category_30d(db, now_utc)
+    if avg_days:
+        lines.append(avg_days)
+
+    return "\n".join(lines) if lines else "(ריק - לא מספיק נתונים)"
+
+
+# ===== פוקוס מוצע לשבוע הבא (heuristic, §4.2) =====
+
+def compute_next_week_focus_suggestion(
+    db: AsyncSession, now_utc: datetime, open_state: dict
+) -> str | None:
+    """
+    המלצת פוקוס מבוססת-נתון לשבוע הבא — היוריסטיקה אופציונלית (None אם אין
+    בסיס). מבוססת על snapshot המצב (open_state), בלי המצאות. סדר עדיפות:
+    (א) יש לידים תקועים → להמליץ לעבור עליהם ולקבל החלטה.
+    (ב) אחרת יש הצעות תקועות → להמליץ לעשות פולואפ להצעות ישנות.
+    (ג) אחרת None.
+
+    הערה: זו היוריסטיקה — ה-AI רשאי לנסח/לדלג בהתאם ל-system prompt.
+    db מתקבל לעקביות חתימה עם שאר ה-compute_* (לא נדרש כאן — open_state כבר חושב).
+    """
+    stuck = open_state.get("stuck_leads_count", 0)
+    stale = open_state.get("stale_proposals_count", 0)
+    if stuck > 0:
+        return "לעבור על הלידים התקועים ולקבל החלטה לגבי כל אחד מהם"
+    if stale > 0:
+        return "לעשות פולואפ להצעות שנשלחו ולא קיבלו מענה"
+    return None
+
+
+# ===== assembly שבועי =====
+
+async def build_weekly_user_prompt(
+    db: AsyncSession, now_utc: datetime | None = None
+) -> str:
+    """
+    אוסף את כל הקלט המבושל לסיכום השבועי ומרכיב אותו לתוך WEEKLY_USER_TEMPLATE.
+    החלון הוא השבוע הקודם המלא (ראשון→ראשון); מטריקות מצב הן snapshot ל-now.
+    מחזיר את ה-user prompt המוכן ל-generate_weekly_summary_text.
+    """
+    now_utc = now_utc or datetime.now(timezone.utc)
+    week_start, week_end = _last_week_bounds(now_utc)
+
+    # תאריכי תצוגה: התחלה = ראשון; סוף = שבת (יום אחד לפני ה-end הלא-כולל).
+    week_start_date = to_israel_tz(week_start).date()
+    week_end_date = to_israel_tz(week_end).date() - timedelta(days=1)
+    weeks_in_system = compute_weeks_in_system(week_start_date)
+    comparison = has_comparison_data(weeks_in_system)
+
+    # מטריקות חלון-שבועי (שימוש חוזר בעוזרי היומי עם החלון השבועי).
+    activity = await _activity_counts_by_role(db, week_start, week_end)
+    tasks = await _tasks_completed_by_role(db, week_start, week_end)
+    movement = await _lead_movement(db, week_start, week_end)
+    newly_dormant = await _newly_dormant_count(db, week_start, week_end)
+
+    # snapshot מצב ל-now (כמו ביומי).
+    open_state = await _open_state(db, now_utc)
+    dormant_count = await _dormant_with_recommendation_count(db)
+
+    trends = await compute_trends_block(
+        db,
+        week_start,
+        week_end,
+        weeks_in_system,
+        curr_new_leads=movement["new_leads_count"],
+        curr_won=movement["won_count"],
+    )
+    insights = await compute_precomputed_insights_block(db, now_utc)
+    next_week_focus = compute_next_week_focus_suggestion(db, now_utc, open_state)
+
+    return WEEKLY_USER_TEMPLATE.format(
+        week_start=week_start_date.isoformat(),
+        week_end=week_end_date.isoformat(),
+        week_number_in_system=weeks_in_system,
+        has_comparison_data="true" if comparison else "false",
+        noa_calls_week=activity["noa_calls"],
+        noa_outbound_week=activity["noa_outbound"],
+        noa_tasks_week=tasks["noa_tasks"],
+        assistant_calls_week=activity["assistant_calls"],
+        assistant_outbound_week=activity["assistant_outbound"],
+        assistant_tasks_week=tasks["assistant_tasks"],
+        new_leads_week=movement["new_leads_count"],
+        new_leads_by_source_text=movement["new_leads_by_source_text"],
+        # פילוח לפי שירות נשאר ברמת subtype (מה-_lead_movement) — רק התובנות
+        # האסטרטגיות מקובצות לפי category.
+        new_leads_by_category_text=movement["new_leads_by_category_text"],
+        won_week=movement["won_count"],
+        lost_week=movement["lost_count"],
+        inbound_week=movement["inbound_actions_count"],
+        open_leads_end_of_week=open_state["open_leads_total"],
+        stuck_leads_count=open_state["stuck_leads_count"],
+        stale_proposals_count=open_state["stale_proposals_count"],
+        newly_dormant_count=newly_dormant,
+        total_dormant_with_recommendation=dormant_count,
+        trends_block_or_no_comparison=trends,
+        precomputed_insights_block=insights,
+        next_week_focus_suggestion_or_null=(
+            next_week_focus if next_week_focus is not None else "null"
         ),
     )

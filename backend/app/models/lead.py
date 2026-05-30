@@ -103,6 +103,12 @@ class Lead(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     last_outbound_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # זמן ה-outbound הראשון אי-פעם (C.2 §4.2) — מקור ל"זמן תגובה ראשון ממוצע"
+    # בסיכום השבועי. מתעדכן אוטומטית ע"י DB trigger (trg_lead_first_outbound_at)
+    # רק בפעם הראשונה ש-last_outbound_at מקבל ערך, ואז קפוא. ראה migration 0026.
+    first_outbound_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     last_activity_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
     # זמן הפעולה האחרונה מכל מקור (לקוח/נועה) — מקור ל-badge "גיל" (§12.1).
     # מתעדכן מרכזית ב-log_activity בכל יצירת activity. בניגוד ל-last_outbound_at

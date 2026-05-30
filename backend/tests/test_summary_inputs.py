@@ -445,3 +445,291 @@ async def test_build_daily_user_prompt_renders(db):
     assert "פעילות נועה היום:" in prompt
     assert "פגישות" not in prompt  # המטריקה הוסרה
     assert "מצב פתוחים בסוף היום:" in prompt
+
+
+# ===================== בדיקות שבועיות — pure =====================
+
+# יום ראשון בבוקר — מועד ריצת הסיכום השבועי (מסכם את השבוע שהסתיים אתמול).
+_SUNDAY_NOW = datetime(2026, 5, 31, 5, 0, tzinfo=timezone.utc)
+
+
+def test_trend_direction_normal():
+    """כיוון רגיל: עלייה/ירידה/יציב."""
+    assert si._trend_direction(12, 7) == "עלייה"
+    assert si._trend_direction(2, 12) == "ירידה"
+    assert si._trend_direction(5, 5) == "יציב"
+
+
+def test_trend_direction_lower_is_better():
+    """זמן תגובה — נמוך עדיף: שיפור/הרעה/יציב (אומת מול §5.8)."""
+    assert si._trend_direction(2, 4, lower_is_better=True) == "שיפור"
+    assert si._trend_direction(6, 2, lower_is_better=True) == "הרעה"
+    assert si._trend_direction(3, 3, lower_is_better=True) == "יציב"
+
+
+def test_trend_direction_none_is_stable():
+    """ערך None בצד כלשהו → 'יציב' (לא ממציאים כיוון)."""
+    assert si._trend_direction(None, 5) == "יציב"
+    assert si._trend_direction(5, None) == "יציב"
+    assert si._trend_direction(None, None, lower_is_better=True) == "יציב"
+
+
+def test_compute_weeks_in_system_and_comparison_boundary(monkeypatch):
+    """weeks_in_system: שבוע ראשון=1; has_comparison_data בגבול 4 שבועות."""
+
+    class _S:
+        system_start_date = date(2026, 5, 3)  # יום ראשון
+
+    monkeypatch.setattr(si, "get_settings", lambda: _S())
+    # אותו שבוע → 1
+    assert si.compute_weeks_in_system(date(2026, 5, 3)) == 1
+    # שבוע 3 (start + 14 ימים) → <4 → אין השוואה
+    assert si.compute_weeks_in_system(date(2026, 5, 17)) == 3
+    assert si.has_comparison_data(si.compute_weeks_in_system(date(2026, 5, 17))) is False
+    # שבוע 4 (start + 21 ימים) → השוואה
+    assert si.compute_weeks_in_system(date(2026, 5, 24)) == 4
+    assert si.has_comparison_data(si.compute_weeks_in_system(date(2026, 5, 24))) is True
+    # תאריך לפני start → רצפה 1
+    assert si.compute_weeks_in_system(date(2026, 1, 1)) == 1
+
+
+async def test_trends_block_no_comparison_when_young(db, monkeypatch):
+    """פחות מ-4 שבועות → trends_block = 'NO_COMPARISON' (בלי שאילתות השוואה)."""
+    block = await si.compute_trends_block(
+        db,
+        _SUNDAY_NOW - timedelta(days=7),
+        _SUNDAY_NOW,
+        weeks_in_system=2,
+        curr_new_leads=5,
+        curr_won=1,
+    )
+    assert block == "NO_COMPARISON"
+
+
+def test_next_week_focus_heuristic():
+    """היוריסטיקת פוקוס: תקועים → הצעות תקועות → None."""
+    assert si.compute_next_week_focus_suggestion(
+        None, _NOW, {"stuck_leads_count": 2, "stale_proposals_count": 0}
+    ).startswith("לעבור על הלידים התקועים")
+    assert "פולואפ" in si.compute_next_week_focus_suggestion(
+        None, _NOW, {"stuck_leads_count": 0, "stale_proposals_count": 1}
+    )
+    assert si.compute_next_week_focus_suggestion(
+        None, _NOW, {"stuck_leads_count": 0, "stale_proposals_count": 0}
+    ) is None
+
+
+async def test_build_weekly_user_prompt_renders(db):
+    """ה-prompt השבועי נבנה בלי KeyError וכל 24 ה-placeholders מולאו."""
+    import string
+
+    await _mk_lead(db, created_at=_SUNDAY_NOW - timedelta(days=3))
+    prompt = await si.build_weekly_user_prompt(db, now_utc=_SUNDAY_NOW)
+
+    # אין placeholder שנותר לא-ממולא ({...}).
+    placeholders = {
+        fn for _, fn, _, _ in string.Formatter().parse(si.WEEKLY_USER_TEMPLATE) if fn
+    }
+    assert len(placeholders) == 24
+    assert "{" not in prompt.replace("{{", "").replace("}}", "")
+
+    # עוגני סקציה קבועים:
+    assert "פעילות נועה השבוע:" in prompt
+    assert "מצב שבועי כללי:" in prompt
+    assert "תובנות אסטרטגיות שחושבו מראש:" in prompt
+
+
+# ===================== בדיקות שבועיות — integration (DB) =====================
+
+# מקבע system_start_date מוקדם מספיק כך ש-has_comparison_data=true בבדיקות.
+class _EarlyStart:
+    system_start_date = date(2026, 1, 1)
+
+
+def _patch_early_start(monkeypatch):
+    monkeypatch.setattr(si, "get_settings", lambda: _EarlyStart())
+
+
+async def test_last_week_bounds_sunday_to_sunday(db):
+    """גבולות השבוע הקודם: ראשון 00:00 → ראשון הבא 00:00 (זמן ישראל)."""
+    start, end = si._last_week_bounds(_SUNDAY_NOW)
+    from app.utils.work_hours import to_israel_tz
+
+    start_local = to_israel_tz(start)
+    end_local = to_israel_tz(end)
+    # שני הגבולות הם חצות מקומי, יום ראשון, בהפרש 7 ימים:
+    assert start_local.weekday() == 6  # ראשון
+    assert end_local.weekday() == 6
+    assert start_local.hour == 0 and start_local.minute == 0
+    assert (end_local.date() - start_local.date()).days == 7
+    # _SUNDAY_NOW הוא 2026-05-31 (ראשון) → שבוע שעבר 2026-05-24..2026-05-31.
+    assert start_local.date() == date(2026, 5, 24)
+    assert end_local.date() == date(2026, 5, 31)
+
+
+async def test_avg_first_response_hours(db):
+    """AVG(first_outbound_at - created_at) בשעות, על לידים שנוצרו בחלון."""
+    window_start = _SUNDAY_NOW - timedelta(days=7)
+    window_end = _SUNDAY_NOW
+    created = window_start + timedelta(days=1)
+    # ליד עם תגובה אחרי שעתיים:
+    await _mk_lead(
+        db, created_at=created, first_outbound_at=created + timedelta(hours=2)
+    )
+    # ליד עם תגובה אחרי 4 שעות:
+    await _mk_lead(
+        db, created_at=created, first_outbound_at=created + timedelta(hours=4)
+    )
+    # ליד בלי first_outbound_at — לא נספר:
+    await _mk_lead(db, created_at=created, first_outbound_at=None)
+    await db.flush()
+
+    avg = await si._avg_first_response_hours(db, window_start, window_end)
+    assert avg == 3  # ממוצע (2+4)/2
+
+
+async def test_avg_first_response_hours_none_when_empty(db):
+    """אין לידים מתאימים → None."""
+    avg = await si._avg_first_response_hours(
+        db, _SUNDAY_NOW - timedelta(days=7), _SUNDAY_NOW
+    )
+    assert avg is None
+
+
+async def test_newly_dormant_count(db):
+    """סופר משימות DORMANT_SUGGESTION שנוצרו בחלון."""
+    window_start = _SUNDAY_NOW - timedelta(days=7)
+    window_end = _SUNDAY_NOW
+    lead = await _mk_lead(db)
+    db.add_all([
+        Task(
+            lead_id=lead.id, type=TaskType.DORMANT_SUGGESTION.value,
+            status=TaskStatus.OPEN.value, due_at=window_start,
+            created_at=window_start + timedelta(days=1),
+        ),
+        # מחוץ לחלון — לא נספר:
+        Task(
+            lead_id=lead.id, type=TaskType.DORMANT_SUGGESTION.value,
+            status=TaskStatus.OPEN.value, due_at=window_start,
+            created_at=window_start - timedelta(days=2),
+        ),
+        # סוג אחר — לא נספר:
+        Task(
+            lead_id=lead.id, type=TaskType.FOLLOWUP.value,
+            status=TaskStatus.OPEN.value, due_at=window_start,
+            created_at=window_start + timedelta(days=1),
+        ),
+    ])
+    await db.flush()
+
+    count = await si._newly_dormant_count(db, window_start, window_end)
+    assert count == 1
+
+
+async def test_conversion_by_category_30d(db):
+    """יחס המרה לפי service_category ב-30 יום, top-3 לפי מכנה."""
+    closed = _SUNDAY_NOW - timedelta(days=5)
+    # קליניקה: 1 WON, 1 LOST → 50%
+    await _mk_lead(db, service_category="clinic", status=LeadStatus.WON.value, closed_at=closed)
+    await _mk_lead(db, service_category="clinic", status=LeadStatus.LOST.value, closed_at=closed)
+    # סדנאות: 1 WON, 0 LOST → 100%
+    await _mk_lead(
+        db, service_category="workshops", status=LeadStatus.WON.value, closed_at=closed
+    )
+    await db.flush()
+
+    lines = await si._conversion_by_category_30d(db, _SUNDAY_NOW)
+    joined = "\n".join(lines)
+    assert "conversion rate בקליניקה: 50% ב-30 הימים האחרונים" in joined
+    assert "conversion rate בסדנאות והרצאות: 100% ב-30 הימים האחרונים" in joined
+
+
+async def test_avg_days_to_won_by_category_30d(db):
+    """זמן ממוצע מליד ל-WON בקטגוריה עם הכי הרבה WON."""
+    closed = _SUNDAY_NOW - timedelta(days=2)
+    # קליניקה: 2 WON (10 ו-20 ימים → ממוצע 15)
+    await _mk_lead(
+        db, service_category="clinic", status=LeadStatus.WON.value,
+        created_at=closed - timedelta(days=10), closed_at=closed,
+    )
+    await _mk_lead(
+        db, service_category="clinic", status=LeadStatus.WON.value,
+        created_at=closed - timedelta(days=20), closed_at=closed,
+    )
+    await db.flush()
+
+    line = await si._avg_days_to_won_by_category_30d(db, _SUNDAY_NOW)
+    assert line is not None
+    assert "זמן ממוצע מליד ל-WON בקליניקה: 15 ימים" in line
+
+
+async def test_avg_days_to_won_none_when_no_won(db):
+    """אין WON בחלון → None."""
+    line = await si._avg_days_to_won_by_category_30d(db, _SUNDAY_NOW)
+    assert line is None
+
+
+async def test_top_source_by_won_30d(db):
+    """מקור עם הכי הרבה WON ב-30 יום."""
+    closed = _SUNDAY_NOW - timedelta(days=3)
+    await _mk_lead(
+        db, source_channel=SourceChannel.FACEBOOK.value,
+        status=LeadStatus.WON.value, closed_at=closed,
+    )
+    await _mk_lead(
+        db, source_channel=SourceChannel.FACEBOOK.value,
+        status=LeadStatus.WON.value, closed_at=closed,
+    )
+    await _mk_lead(
+        db, source_channel=SourceChannel.INSTAGRAM.value,
+        status=LeadStatus.WON.value, closed_at=closed,
+    )
+    await db.flush()
+
+    line = await si._top_source_by_won_30d(db, _SUNDAY_NOW)
+    assert line == "- מקור עם הכי הרבה סגירות ב-30 הימים האחרונים: פייסבוק"
+
+
+async def test_precomputed_insights_empty(db):
+    """אין נתונים → '(ריק - לא מספיק נתונים)'."""
+    block = await si.compute_precomputed_insights_block(db, _SUNDAY_NOW)
+    assert block == "(ריק - לא מספיק נתונים)"
+
+
+async def test_trends_block_vs_previous_week(db, monkeypatch):
+    """trends_block: השוואת לידים/WON/זמן-תגובה/מקור מול השבוע הקודם."""
+    _patch_early_start(monkeypatch)
+    week_start, week_end = si._last_week_bounds(_SUNDAY_NOW)
+    prev_start, prev_end = si._prev_week_bounds(week_start)
+
+    # שבוע נוכחי: 2 לידים חדשים, מקור instagram, תגובה 2 שעות, 1 WON.
+    c1 = week_start + timedelta(days=1)
+    await _mk_lead(
+        db, created_at=c1, source_channel=SourceChannel.INSTAGRAM.value,
+        first_outbound_at=c1 + timedelta(hours=2),
+    )
+    await _mk_lead(
+        db, created_at=c1, source_channel=SourceChannel.INSTAGRAM.value,
+        first_outbound_at=c1 + timedelta(hours=2),
+    )
+    await _mk_lead(
+        db, created_at=week_start - timedelta(days=40),
+        status=LeadStatus.WON.value, closed_at=c1,
+    )
+    # שבוע קודם: 1 ליד חדש, מקור facebook, תגובה 4 שעות, 0 WON.
+    p1 = prev_start + timedelta(days=1)
+    await _mk_lead(
+        db, created_at=p1, source_channel=SourceChannel.FACEBOOK.value,
+        first_outbound_at=p1 + timedelta(hours=4),
+    )
+    await db.flush()
+
+    movement = await si._lead_movement(db, week_start, week_end)
+    block = await si.compute_trends_block(
+        db, week_start, week_end, weeks_in_system=20,
+        curr_new_leads=movement["new_leads_count"],
+        curr_won=movement["won_count"],
+    )
+    assert "לידים חדשים: 2 השבוע מול 1 שבוע קודם. כיוון: עלייה." in block
+    assert "זמן תגובה ראשון ממוצע: 2 שעות השבוע מול 4 שעות שבוע קודם. כיוון: שיפור." in block
+    assert "מקור מוביל השבוע: אינסטגרם. שבוע קודם: פייסבוק." in block
