@@ -41,8 +41,10 @@ from pydantic import BaseModel, Field, ValidationError
 
 from app.config import get_settings
 from app.prompts import classify_email as classify_prompts
+from app.prompts import daily_summary as daily_summary_prompts
 from app.prompts import dormant_suggestion as dormant_prompts
 from app.prompts import extract_lead as extract_prompts
+from app.prompts import weekly_summary as weekly_summary_prompts
 
 logger = logging.getLogger(__name__)
 
@@ -87,7 +89,7 @@ def resolve_model(purpose: _Purpose) -> str:
     override_map = {
         "classifier": s.ai_model_email_classifier,
         "daily_summary": s.ai_model_daily_summary,
-        "weekly_summary": s.ai_model_daily_summary,  # משתמשים באותו tier
+        "weekly_summary": s.ai_model_weekly_summary,
         "proposal_draft": s.ai_model_proposal_draft,
         "dormant_suggestion": s.ai_model_dormant_suggestion,
     }
@@ -160,16 +162,22 @@ class AIClient:
         user: str,
         max_tokens: int,
         fallback_on_error: bool = False,
+        temperature: float | None = None,
     ) -> tuple[str, dict]:
         """
         קריאה ל-Messages API עם retry על שגיאות רשת זמניות.
         מחזיר (text, usage_dict).
+
+        temperature: None = ברירת המחדל של ה-SDK (משמש את הסיווג/חילוץ הקיימים).
+        סיכומים (C.1/C.2) מעבירים 0.5 לגיוון ניסוח מבוקר (§6.1).
         """
         last_error: Exception | None = None
 
         for attempt in range(1, _MAX_ATTEMPTS + 1):
             try:
-                return await self._call_once(model, system, user, max_tokens)
+                return await self._call_once(
+                    model, system, user, max_tokens, temperature
+                )
             except RateLimitError as e:
                 # אסור retry על rate limit. raise מיד.
                 logger.warning(
@@ -218,7 +226,9 @@ class AIClient:
             if fast != model:  # נמנע fallback ל-אותו model
                 logger.info("AI falling back to %s after retries", fast)
                 try:
-                    return await self._call_once(fast, system, user, max_tokens)
+                    return await self._call_once(
+                        fast, system, user, max_tokens, temperature
+                    )
                 except RateLimitError as e:
                     # גם ב-fallback — rate limit חייב להיות AIRateLimitError
                     # כדי שcaller ידע לסמן pending_classification (לא לרצף
@@ -242,7 +252,12 @@ class AIClient:
         ) from last_error
 
     async def _call_once(
-        self, model: str, system: str, user: str, max_tokens: int
+        self,
+        model: str,
+        system: str,
+        user: str,
+        max_tokens: int,
+        temperature: float | None = None,
     ) -> tuple[str, dict]:
         """ניסיון בודד. לא תופס חריגות — _complete אחראית על הretry.
 
@@ -250,10 +265,17 @@ class AIClient:
         Anthropic prompt caching, ~90% חיסכון על system tokens בקריאות
         חוזרות (cache hit חי כ-5 דקות אחרי כל קריאה). ל-classifier
         שרץ מאות פעמים ביום זה משמעותי.
+
+        temperature מועבר ל-API רק אם הוגדר (None = ברירת SDK) — שומר על
+        התנהגות זהה ל-callers הקיימים שלא מעבירים temperature.
         """
+        extra: dict = {}
+        if temperature is not None:
+            extra["temperature"] = temperature
         message = await self._client.messages.create(
             model=model,
             max_tokens=max_tokens,
+            **extra,
             system=[
                 {
                     "type": "text",
@@ -357,6 +379,30 @@ class DormantSuggestionResult(BaseModel):
 
     action: Literal["gentle_followup", "archive", "call", "no_action"]
     reasoning: str = Field(min_length=1, max_length=220)
+
+
+class DailySummaryResult(BaseModel):
+    """תוצאת סיכום יומי (C.1, §5.3). max_length תואם ל-output schema באפיון.
+    omitted_sections — סקציות שה-AI השמיט (ה-UI לא מרנדר אותן)."""
+
+    bottom_line: str = Field(min_length=1, max_length=280)
+    today: str = Field(min_length=1, max_length=560)
+    highlights: list[str] = Field(default_factory=list, max_length=3)
+    needs_attention: list[str] = Field(default_factory=list, max_length=3)
+    tomorrow: str | None = Field(default=None, max_length=350)
+    omitted_sections: list[str] = Field(default_factory=list)
+
+
+class WeeklySummaryResult(BaseModel):
+    """תוצאת סיכום שבועי (C.2, §5.7). max_length תואם ל-output schema באפיון."""
+
+    bottom_line: str = Field(min_length=1, max_length=320)
+    week_overview: str = Field(min_length=1, max_length=700)
+    trends_vs_last_week: str | None = Field(default=None, max_length=800)
+    what_worked: list[str] = Field(default_factory=list, max_length=3)
+    what_stuck: list[str] = Field(default_factory=list, max_length=3)
+    next_week_focus: str | None = Field(default=None, max_length=400)
+    omitted_sections: list[str] = Field(default_factory=list)
 
 
 # ===== JSON parsing =====
@@ -513,3 +559,56 @@ async def suggest_action_for_dormant(
         usage.get("cache_read_input_tokens", 0),
     )
     return _parse_json_response(text, DormantSuggestionResult)
+
+
+# ===== Summaries — C.1 / C.2 =====
+#
+# שתי הפונקציות מקבלות user prompt *מבושל* (ה-caller — summaries service —
+# בונה אותו מנתונים שהקוד חישב, "AI מפרש לא מחשב"). מחזירות (result, usage)
+# כדי שה-caller יוכל לשמור model/tokens ב-ai_summaries (§6.5). temperature 0.5
+# ו-max_tokens מ-config (§6.1). fallback_on_error=True — אם Sonnet נכשל ברשת,
+# ניסיון אחד ב-FAST עדיף על "סיכום לא זמין".
+
+
+async def generate_daily_summary_text(user_prompt: str) -> tuple[DailySummaryResult, dict]:
+    """מנסח סיכום יומי (C.1) מקלט מבושל. raise AIError/AIRateLimitError בכשל."""
+    s = get_settings()
+    client = get_ai_client()
+    text, usage = await client._complete(
+        model=resolve_model("daily_summary"),
+        system=daily_summary_prompts.SYSTEM_PROMPT,
+        user=user_prompt,
+        max_tokens=s.ai_max_output_tokens_summaries,
+        temperature=s.ai_temperature_summaries,
+        fallback_on_error=True,
+    )
+    logger.info(
+        "daily_summary usage: model=%s input=%d output=%d cache_read=%d",
+        usage.get("model"),
+        usage["input_tokens"],
+        usage["output_tokens"],
+        usage.get("cache_read_input_tokens", 0),
+    )
+    return _parse_json_response(text, DailySummaryResult), usage
+
+
+async def generate_weekly_summary_text(user_prompt: str) -> tuple[WeeklySummaryResult, dict]:
+    """מנסח סיכום שבועי (C.2) מקלט מבושל. raise AIError/AIRateLimitError בכשל."""
+    s = get_settings()
+    client = get_ai_client()
+    text, usage = await client._complete(
+        model=resolve_model("weekly_summary"),
+        system=weekly_summary_prompts.SYSTEM_PROMPT,
+        user=user_prompt,
+        max_tokens=s.ai_max_output_tokens_summaries,
+        temperature=s.ai_temperature_summaries,
+        fallback_on_error=True,
+    )
+    logger.info(
+        "weekly_summary usage: model=%s input=%d output=%d cache_read=%d",
+        usage.get("model"),
+        usage["input_tokens"],
+        usage["output_tokens"],
+        usage.get("cache_read_input_tokens", 0),
+    )
+    return _parse_json_response(text, WeeklySummaryResult), usage
