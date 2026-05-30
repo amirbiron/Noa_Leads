@@ -372,6 +372,102 @@ async def test_open_state_stuck_uses_created_at_not_due_at(db):
     assert state["stuck_leads_count"] - baseline["stuck_leads_count"] == 1
 
 
+async def test_stale_proposals_includes_lead_closed_after_as_of(db):
+    """Regression cursor bugbot Finding 1: ליד שהיה PROPOSAL_SENT ב-as_of
+    ושינה סטטוס *אחרי* (נסגר / BOOKED / IN_PROGRESS) — חייב להיות בספירה.
+
+    הקוד הישן דרש `Lead.status == PROPOSAL_SENT` נוכחי — ולכן פספס את
+    הקטגוריה הזו. הגרסה החדשה (`_lead_was_proposal_sent_at_predicate`)
+    יש לה OR-branch ל-`status_changed_at > as_of + proposal_sent_at <= as_of`.
+    """
+    as_of = _NOW
+    before = as_of - timedelta(days=10)
+    proposal_sent = as_of - timedelta(days=5)
+    after = as_of + timedelta(hours=6)
+
+    baseline = await si._open_state(db, as_of)
+
+    # ליד 1: היה PROPOSAL_SENT ב-as_of, נסגר WON אחרי as_of.
+    await _mk_lead(
+        db, full_name="נסגר אחרי",
+        created_at=before,
+        status=LeadStatus.WON.value,
+        status_changed_at=after,
+        closed_at=after,
+        proposal_sent_at=proposal_sent,
+    )
+    # ליד 2: היה PROPOSAL_SENT ב-as_of, עבר ל-IN_PROGRESS אחרי as_of.
+    await _mk_lead(
+        db, full_name="שינה סטטוס אחרי",
+        created_at=before,
+        status=LeadStatus.IN_PROGRESS.value,
+        status_changed_at=after,
+        proposal_sent_at=proposal_sent,
+    )
+    # ליד control: עדיין PROPOSAL_SENT, status_changed_at לפני as_of.
+    await _mk_lead(
+        db, full_name="עדיין הצעה",
+        created_at=before,
+        status=LeadStatus.PROPOSAL_SENT.value,
+        status_changed_at=proposal_sent,
+        proposal_sent_at=proposal_sent,
+    )
+    await db.flush()
+
+    state = await si._open_state(db, as_of)
+    # שלושת הלידים נספרים: 2 שעברו סטטוס אחרי + 1 שעדיין PROPOSAL_SENT.
+    assert (
+        state["stale_proposals_count"] - baseline["stale_proposals_count"] == 3
+    )
+
+
+async def test_open_state_stuck_count_matches_attention_list(db):
+    """Regression cursor bugbot Finding 2: ה-count וה-list של "תקוע" חייבים
+    להשתמש באותו predicate.
+
+    הקוד הישן: count השתמש ב-`created_at + status != CANCELED`, list השתמש
+    ב-`due_at + status IN OPEN/SNOOZED`. תרחיש שלם: task נוצר לפני 10 ימים,
+    נסנז (due_at בעתיד). count אמר 1, list לא הציגה את הליד → סתירה.
+    התיקון: שניהם משתמשים ב-`_task_stuck_at_predicate` המשותף.
+    """
+    as_of = _NOW
+    ten_days_ago = as_of - timedelta(days=10)
+    nine_days_ago = as_of - timedelta(days=9)
+
+    baseline = await si._open_state(db, as_of)
+    baseline_lines, _ = await si._collect_attention_items(db, as_of)
+    baseline_stuck_lines = sum(
+        1 for line in baseline_lines if "ליד תקוע" in line
+    )
+
+    # ליד תקוע עם task שנסנז (due_at בעתיד) — מאתגר את הסתירה הישנה.
+    snoozed_lead = await _mk_lead(
+        db, full_name="תקוע סנוז",
+        created_at=ten_days_ago,
+        status_changed_at=nine_days_ago,
+    )
+    db.add(Task(
+        lead_id=snoozed_lead.id, type=TaskType.FOLLOWUP.value,
+        status=TaskStatus.SNOOZED.value,
+        created_at=ten_days_ago,
+        due_at=as_of + timedelta(days=5),  # snooze דחף לעתיד
+        snoozed_until=as_of + timedelta(days=5),
+    ))
+    await db.flush()
+
+    state = await si._open_state(db, as_of)
+    lines, _ = await si._collect_attention_items(db, as_of)
+    stuck_lines = sum(1 for line in lines if "ליד תקוע" in line)
+
+    count_delta = state["stuck_leads_count"] - baseline["stuck_leads_count"]
+    list_delta = stuck_lines - baseline_stuck_lines
+
+    # consistency: count ו-list הסכימו על אותו ליד.
+    assert count_delta == 1
+    assert list_delta == 1
+    assert any("תקוע סנוז" in line for line in lines)
+
+
 async def test_highlighted_leads_block_silence_break(db):
     """ליד שענה אחרי 10 ימי שתיקה (outbound לפני 10 ימים → inbound בחלון)."""
     lead = await _mk_lead(db, full_name="מירב כהן", service_subtype="voice_rehab")
@@ -485,14 +581,25 @@ async def test_silence_break_reset_by_recent_call(db):
 
 
 async def test_attention_block_dedups_same_lead(db):
-    """ליד שהוא גם הצעה תקועה וגם תקוע → מופיע פעם אחת בלבד."""
+    """ליד שהוא גם הצעה תקועה וגם תקוע → מופיע פעם אחת בלבד.
+
+    `created_at` ו-`status_changed_at` מפורשים — אחרת ה-DB מציב NOW
+    אמיתי שגדול מ-`_NOW` הקבוע, וה-predicates של as-of-snapshot נכשלים.
+    """
+    ten_days_ago = _NOW - timedelta(days=10)
+    five_days_ago = _NOW - timedelta(days=5)
     lead = await _mk_lead(
-        db, full_name="כפול", status=LeadStatus.PROPOSAL_SENT.value,
-        proposal_sent_at=_NOW - timedelta(days=5),
+        db, full_name="כפול",
+        created_at=ten_days_ago,
+        status=LeadStatus.PROPOSAL_SENT.value,
+        status_changed_at=five_days_ago,
+        proposal_sent_at=five_days_ago,
     )
     db.add(Task(
         lead_id=lead.id, type=TaskType.PROPOSAL_FOLLOWUP.value,
-        status=TaskStatus.OPEN.value, due_at=_NOW - timedelta(days=10),
+        status=TaskStatus.OPEN.value,
+        created_at=ten_days_ago,
+        due_at=ten_days_ago,
     ))
     await db.flush()
 
@@ -504,9 +611,13 @@ async def test_attention_block_dedups_same_lead(db):
 
 async def test_attention_items_block_stale_proposal(db):
     """הצעה תקועה מופיעה ב-block עם מספר הימים."""
+    five_days_ago = _NOW - timedelta(days=5)
     await _mk_lead(
-        db, full_name="דניאל", status=LeadStatus.PROPOSAL_SENT.value,
-        proposal_sent_at=_NOW - timedelta(days=5),
+        db, full_name="דניאל",
+        created_at=_NOW - timedelta(days=10),
+        status=LeadStatus.PROPOSAL_SENT.value,
+        status_changed_at=five_days_ago,
+        proposal_sent_at=five_days_ago,
     )
     block = await si.compute_attention_items_block(db, _NOW)
     assert "הצעה ללא מענה" in block
@@ -514,20 +625,28 @@ async def test_attention_items_block_stale_proposal(db):
 
 
 async def test_attention_stuck_days_from_status_changed_at(db):
-    """תיקון #3: 'ימים בסטטוס נוכחי' מחושב מ-status_changed_at (לא מ-due_at)."""
+    """תיקון #3: 'ימים בסטטוס נוכחי' מחושב מ-status_changed_at (לא מ-due_at).
+
+    כעת ה-task מזוהה כתקוע לפי `created_at <= as_of - 7d` (snooze דורס due_at).
+    """
+    ten_days_ago = _NOW - timedelta(days=10)
     lead = await _mk_lead(
-        db, full_name="תקוע", status_changed_at=_NOW - timedelta(days=9),
+        db, full_name="תקוע",
+        created_at=ten_days_ago,
+        status_changed_at=_NOW - timedelta(days=9),
     )
-    # task תקוע (due לפני 10 ימים) — מזהה את הליד כתקוע:
+    # task תקוע שנוצר לפני 10 ימים — מזהה את הליד כתקוע:
     db.add(Task(
         lead_id=lead.id, type=TaskType.FOLLOWUP.value,
-        status=TaskStatus.OPEN.value, due_at=_NOW - timedelta(days=10),
+        status=TaskStatus.OPEN.value,
+        created_at=ten_days_ago,
+        due_at=ten_days_ago,
     ))
     await db.flush()
 
     block = await si.compute_attention_items_block(db, _NOW)
     assert "ליד תקוע" in block
-    # 9 ימים מ-status_changed_at — לא 10 (שזה due_at של ה-task):
+    # 9 ימים מ-status_changed_at:
     assert "ימים בסטטוס נוכחי: 9" in block
 
 
@@ -536,14 +655,22 @@ async def test_tomorrow_focus_vip_plus_attention_pointer(db):
     תיקון #6 (מזוקק): tomorrow_focus כולל ליד VIP/ארגון שהכדור אצלנו +
     שורת מצביע לעומס ה-attention, *בלי* לשכפל את שורות ה-attention עצמן.
     """
+    five_days_ago = _NOW - timedelta(days=5)
+    one_hour_ago = _NOW - timedelta(hours=1)
     # ליד עם הצעה תקועה → ייכנס ל-attention (לא ל-tomorrow verbatim):
     await _mk_lead(
-        db, full_name="דניאל", status=LeadStatus.PROPOSAL_SENT.value,
-        proposal_sent_at=_NOW - timedelta(days=5), waiting_on=WaitingOn.NOAH.value,
+        db, full_name="דניאל",
+        created_at=_NOW - timedelta(days=10),
+        status=LeadStatus.PROPOSAL_SENT.value,
+        status_changed_at=five_days_ago,
+        proposal_sent_at=five_days_ago,
+        waiting_on=WaitingOn.NOAH.value,
     )
     # ליד VIP פתוח שהכדור אצל נועה (לא ב-attention) → תוספת ב-tomorrow:
     await _mk_lead(
-        db, full_name="שרון", priority_level=PriorityLevel.VIP.value,
+        db, full_name="שרון",
+        created_at=one_hour_ago,
+        priority_level=PriorityLevel.VIP.value,
         waiting_on=WaitingOn.NOAH.value,
     )
     lines, seen = await si._collect_attention_items(db, _NOW)
@@ -561,10 +688,15 @@ async def test_tomorrow_focus_none_when_only_attention(db):
     אין ליד VIP/ארגון — גם אם יש פריט attention, tomorrow מושמט (None).
     (משחזר את תקפות few-shot דוגמה 2: tomorrow=null למרות attention קיים.)
     """
+    five_days_ago = _NOW - timedelta(days=5)
     # הצעה תקועה (attention) אך הליד אינו VIP ואינו ארגוני:
     await _mk_lead(
-        db, full_name="רגיל", status=LeadStatus.PROPOSAL_SENT.value,
-        proposal_sent_at=_NOW - timedelta(days=5), waiting_on=WaitingOn.NOAH.value,
+        db, full_name="רגיל",
+        created_at=_NOW - timedelta(days=10),
+        status=LeadStatus.PROPOSAL_SENT.value,
+        status_changed_at=five_days_ago,
+        proposal_sent_at=five_days_ago,
+        waiting_on=WaitingOn.NOAH.value,
     )
     lines, seen = await si._collect_attention_items(db, _NOW)
     assert lines  # יש פריט attention
