@@ -218,6 +218,7 @@ export interface LeadCreate {
   source_detail?: string | null;
   preferred_contact?: PreferredContact;
   priority_level?: PriorityLevel;
+  is_returning_customer?: boolean;  // §7.2 — default false ב-backend
   personal_note?: string | null;
   lead_message: string;  // תוכן הפנייה — חובה בטופס הידני
 }

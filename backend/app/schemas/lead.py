@@ -69,6 +69,11 @@ class LeadCreate(BaseModel):
     owner_id: UUID | None = None
     personal_note: str | None = None
 
+    # §7.2: לקוח שכבר עבד עם נועה בעבר. ברירת מחדל False (חדש). על המודל
+    # יש default=False; אם לא נשלח בקריאה, ה-DB יקבע False. נחשף כ-checkbox
+    # ב-NewLeadModal expand section.
+    is_returning_customer: bool = False
+
     # תוכן הפנייה — ההודעה שהגיעה בוואטסאפ / תיאור מה הלקוח רצה. אופציונלי
     # ב-base כדי לא לשבור קליטה אוטומטית (טופס/וואטסאפ/מייל ממלאים מהתוכן
     # הקיים שלהם). חובה נאכפת רק במסלול הידני דרך LeadCreateManual. §7.1.

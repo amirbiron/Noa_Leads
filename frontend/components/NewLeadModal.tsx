@@ -2,12 +2,25 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { X } from "lucide-react";
+import { ChevronDown, ChevronUp, X } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
-import type { ServiceCategory, SourceChannel } from "@/lib/types";
+import {
+  PREFERRED_CONTACT_LABELS,
+  PRIORITY_LABELS,
+  SERVICE_SUBTYPE_LABELS,
+} from "@/lib/hebrew";
+import { SUBTYPES_BY_CATEGORY } from "@/lib/serviceCategories";
+import type {
+  PreferredContact,
+  PriorityLevel,
+  ServiceCategory,
+  SourceChannel,
+} from "@/lib/types";
 
-// טופס מהיר 3 שדות לפי האפיון: שם, טלפון, מקור.
-// שאר הפרטים אפשר למלא אחר כך מכרטיס הליד.
+// טופס יצירת ליד. שדות חובה לפי §7.1 (שם, טלפון, מקור, תוכן הפנייה) +
+// קטגוריה אופציונלית מוצגים תמיד. כפתור "הוסף פרטים נוספים" חושף את
+// שדות §7.2 (subtype, מייל, ארגון, ערוץ מועדף, עדיפות, חדש/חוזר, הערה
+// אישית) כך שאפשר למלא הכל בפתיחה במקום להיכנס לעריכה אחרי יצירה.
 export function NewLeadModal({
   open,
   onClose,
@@ -16,6 +29,7 @@ export function NewLeadModal({
   onClose: () => void;
 }) {
   const router = useRouter();
+  // ===== שדות בסיס (תמיד גלויים) =====
   const [fullName, setFullName] = useState("");
   const [phone, setPhone] = useState("");
   // אופציונלי לפי Spec §7.1 — ברירת מחדל "ללא קטגוריה". נועה תסווג
@@ -24,21 +38,52 @@ export function NewLeadModal({
   const [source, setSource] = useState<SourceChannel>("manual");
   // תוכן הפנייה — חובה. בלי זה אין הקשר לליד. §7.1.
   const [leadMessage, setLeadMessage] = useState("");
+
+  // ===== שדות expand (§7.2) =====
+  const [expanded, setExpanded] = useState(false);
+  const [email, setEmail] = useState("");
+  const [organization, setOrganization] = useState("");
+  const [subtype, setSubtype] = useState("");
+  const [preferredContact, setPreferredContact] =
+    useState<PreferredContact>("whatsapp");
+  const [priority, setPriority] = useState<PriorityLevel>("normal");
+  const [isReturning, setIsReturning] = useState(false);
+  const [personalNote, setPersonalNote] = useState("");
+
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   if (!open) return null;
+
+  // שינוי קטגוריה מאפס subtype אם הוא לא תואם — חסכון מהמשתמש שגיאת
+  // backend (subtype לא תואם לקטגוריה). אותה לוגיקה כמו EditLeadModal.
+  function handleCategoryChange(c: ServiceCategory | "") {
+    setCategory(c);
+    if (c === "" || !SUBTYPES_BY_CATEGORY[c]?.includes(subtype)) {
+      setSubtype("");
+    }
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
     setSubmitting(true);
     try {
+      // כל שדות ה-expand נשלחים גם אם ה-section מקופל — ה-state נשמר
+      // כשהמשתמש פותח/סוגר ושומר. ריקים → null (חוץ מ-boolean ו-enums
+      // עם default).
       const lead = await api.createLead({
         full_name: fullName.trim(),
         phone: phone.trim() || null,
+        email: email.trim() || null,
+        organization_name: organization.trim() || null,
         service_category: category || null,
+        service_subtype: subtype || null,
         source_channel: source,
+        preferred_contact: preferredContact,
+        priority_level: priority,
+        is_returning_customer: isReturning,
+        personal_note: personalNote.trim() || null,
         lead_message: leadMessage.trim(),
       });
       onClose();
@@ -49,6 +94,8 @@ export function NewLeadModal({
       setSubmitting(false);
     }
   }
+
+  const subtypeOptions = category ? SUBTYPES_BY_CATEGORY[category] : [];
 
   return (
     // dvh + flex-col + sticky header/footer — מבטיח שהכותרת והכפתורים
@@ -97,7 +144,7 @@ export function NewLeadModal({
             <select
               value={category}
               onChange={(e) =>
-                setCategory(e.target.value as ServiceCategory | "")
+                handleCategoryChange(e.target.value as ServiceCategory | "")
               }
               className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-base focus:border-gray-900 focus:outline-none"
             >
@@ -136,6 +183,126 @@ export function NewLeadModal({
               placeholder="הדבק כאן את ההודעה שהגיעה בוואטסאפ / תאר במילים שלך מה הלקוח רצה"
             />
           </Field>
+
+          {/* כפתור הרחבה — חושף את שדות §7.2 שאינם חובה ליצירה. */}
+          <button
+            type="button"
+            onClick={() => setExpanded((e) => !e)}
+            className="w-full flex items-center justify-center gap-1.5 text-sm text-gray-600 hover:text-gray-900 py-2 border-t border-gray-100"
+            aria-expanded={expanded}
+            aria-controls="new-lead-expand-section"
+          >
+            {expanded ? (
+              <ChevronUp size={16} aria-hidden />
+            ) : (
+              <ChevronDown size={16} aria-hidden />
+            )}
+            <span>
+              {expanded ? "הסתר פרטים נוספים" : "הוסף פרטים נוספים"}
+            </span>
+          </button>
+
+          {expanded && (
+            <div id="new-lead-expand-section" className="space-y-4">
+              <Field label="מייל">
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-base focus:border-gray-900 focus:outline-none"
+                  placeholder="name@example.com"
+                  dir="ltr"
+                />
+              </Field>
+
+              <Field label="ארגון (אם רלוונטי)">
+                <input
+                  value={organization}
+                  onChange={(e) => setOrganization(e.target.value)}
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-base focus:border-gray-900 focus:outline-none"
+                  placeholder="לדוגמה: עיריית רעננה"
+                />
+              </Field>
+
+              {/* sub-type מותנה ב-category — כמו ב-EditLeadModal. */}
+              {category && subtypeOptions.length > 0 && (
+                <Field label="סוג שירות">
+                  <select
+                    value={subtype}
+                    onChange={(e) => setSubtype(e.target.value)}
+                    className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-base focus:border-gray-900 focus:outline-none bg-white"
+                  >
+                    <option value="">— ללא סוג —</option>
+                    {subtypeOptions.map((s) => (
+                      <option key={s} value={s}>
+                        {SERVICE_SUBTYPE_LABELS[s] ?? s}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+              )}
+
+              <Field label="ערוץ תקשורת מועדף">
+                <select
+                  value={preferredContact}
+                  onChange={(e) =>
+                    setPreferredContact(e.target.value as PreferredContact)
+                  }
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-base focus:border-gray-900 focus:outline-none bg-white"
+                >
+                  {(
+                    Object.keys(PREFERRED_CONTACT_LABELS) as PreferredContact[]
+                  ).map((c) => (
+                    <option key={c} value={c}>
+                      {PREFERRED_CONTACT_LABELS[c]}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+
+              <Field label="עדיפות">
+                <select
+                  value={priority}
+                  onChange={(e) =>
+                    setPriority(e.target.value as PriorityLevel)
+                  }
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-base focus:border-gray-900 focus:outline-none bg-white"
+                >
+                  {(Object.keys(PRIORITY_LABELS) as PriorityLevel[]).map(
+                    (p) => (
+                      <option key={p} value={p}>
+                        {PRIORITY_LABELS[p]}
+                      </option>
+                    ),
+                  )}
+                </select>
+              </Field>
+
+              {/* checkbox יחיד במקום radio של 2 אופציות — קומפקטי, default
+                  unchecked = חדש (תואם default False ב-backend). */}
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={isReturning}
+                  onChange={(e) => setIsReturning(e.target.checked)}
+                  className="w-4 h-4 rounded border-gray-300 text-gray-900 focus:ring-gray-900"
+                />
+                <span className="text-sm text-gray-700">
+                  לקוח חוזר (עבד עם נועה בעבר)
+                </span>
+              </label>
+
+              <Field label="הערה אישית (לא נשלחת ללקוח)">
+                <textarea
+                  value={personalNote}
+                  onChange={(e) => setPersonalNote(e.target.value)}
+                  rows={3}
+                  placeholder="פרט שכדאי לזכור — שם בן הזוג, העדפה, וכו'"
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-gray-900 focus:outline-none"
+                />
+              </Field>
+            </div>
+          )}
 
           {error && (
             <div className="text-sm text-state-red bg-state-red/10 rounded-lg px-3 py-2">
