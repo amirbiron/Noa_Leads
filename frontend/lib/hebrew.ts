@@ -58,6 +58,7 @@ export const TASK_TYPE_LABELS: Record<string, string> = {
   warm_followup: "פולואפ חם",
   proposal_followup: "פולואפ הצעה",
   dormant_check: "בדיקת חידוש קשר",
+  dormant_suggestion: "הצעת פעולה לליד רדום",
   lecture_inquiry: "פנייה לארגון בנושא הרצאה",
   // סוגים שצ'יפים יוצרים (Spec §16.4) ושאר המערכת
   followup: "פולואפ",
@@ -67,6 +68,18 @@ export const TASK_TYPE_LABELS: Record<string, string> = {
   program_end: "סיום תוכנית",
   after_hours_reply: "מענה אחרי שעות",
 };
+
+// §19 D.1 — תווית עברית לפעולה המומלצת ע"י ה-AI לליד רדום.
+export const DORMANT_ACTION_LABELS: Record<string, string> = {
+  gentle_followup: "חידוש קשר עדין",
+  call: "להתקשר",
+  archive: "לארכב",
+  no_action: "אין פעולה כרגע",
+};
+
+export function labelDormantAction(s: string): string {
+  return DORMANT_ACTION_LABELS[s] ?? s;
+}
 
 export const ACTIVITY_TYPE_LABELS: Record<string, string> = {
   lead_created: "ליד נוצר",

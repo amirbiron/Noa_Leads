@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.constants import CLOSED_LEAD_STATUSES, LeadStatus, TaskStatus, TaskType
 from app.models.lead import Lead
 from app.models.task import Task
+from app.services.tasks import surfaceable_task_condition
 from app.schemas.dashboard import (
     LeadCard,
     ProfitableServiceInsight,
@@ -220,6 +221,9 @@ async def get_today_actions(db: AsyncSession) -> list[TodayActionItem]:
             # סינון לידים סגורים — defense in depth. close_lead מבטל
             # tasks פתוחים שלהם, אבל אם משהו פספס (race / cron) זה תופס.
             Lead.status.notin_(closed),
+            # §19 D.1: dormant_suggestion פסיבי (archive/no_action) לא מוקפץ
+            # ל-/today — נשמר בכרטיס בלבד.
+            surfaceable_task_condition(),
         )
         # מיון: overdue קודם (לפי הביטוי per-type), אדום קודם, ואז לפי due_at
         .order_by(
@@ -237,6 +241,7 @@ async def get_today_actions(db: AsyncSession) -> list[TodayActionItem]:
     result = await db.execute(stmt)
     items: list[TodayActionItem] = []
     for task, lead in result.all():
+        meta = task.task_metadata or {}
         items.append(
             TodayActionItem(
                 task_id=task.id,
@@ -255,6 +260,10 @@ async def get_today_actions(db: AsyncSession) -> list[TodayActionItem]:
                 last_outbound_at=lead.last_outbound_at,
                 last_activity_at=lead.last_activity_at,
                 created_at=lead.created_at,
+                # §19 D.1 — רלוונטי רק ל-dormant_suggestion (אקטיבי, כי פסיבי
+                # סונן למעלה). None לשאר.
+                ai_action=meta.get("ai_action"),
+                ai_reasoning=meta.get("ai_reasoning"),
             )
         )
     return items
@@ -377,6 +386,8 @@ async def get_pending(
                 [TaskStatus.OPEN.value, TaskStatus.SNOOZED.value]
             ),
             Task.due_at <= stuck_threshold,
+            # §19 D.1: ליד שמומלץ לארכב/no_action לא נחשב "תקוע" — לא מוקפץ.
+            surfaceable_task_condition(),
         )
         .correlate(Lead)
         .exists()
@@ -529,6 +540,9 @@ async def get_weekly_insights(db: AsyncSession) -> WeeklyInsights:
                 [TaskStatus.OPEN.value, TaskStatus.SNOOZED.value]
             ),
             Task.due_at <= now_utc,
+            # §19 D.1: dormant_suggestion פסיבי (archive/no_action) לא נספר
+            # כ"לא טופל בזמן" — הוא המלצה מכוונת, לא עבודה שנדחתה.
+            surfaceable_task_condition(),
         )
         .correlate(Lead)
         .exists()

@@ -1117,6 +1117,8 @@ singleton (אין `user_id` — נועה היחידה). מאוכלסת ע"י cro
 - `proposal_followup`: due = `add_business_days(last_outbound_at, 3)` (ניתן לשינוי ל-5)
 - `dormant_check`: due = `last_activity_at + 60d`
 
+> **`dormant_check` מול `dormant_suggestion` (§19.3):** `dormant_check` נוצר ע"י chip "לא רלוונטי כרגע" (§16.4) כתזכורת ידנית. בנוסף, ה-cron היומי `suggest_dormant_actions` יוצר `dormant_suggestion` עם המלצת AI לכל ליד רדום (החליף את יצירת ה-`dormant_check` שהיתה ב-`detect_dormant`). ההבדל: `dormant_suggestion` נושא `metadata.ai_action`, ולידים פסיביים (archive/no_action) אינם מוקפצים. שני ה-types נסגרים על touchpoint (AUTO_CLOSE).
+
 ### 17.3 פונקציות זמן נדרשות
 
 יש לממש:
@@ -1182,6 +1184,20 @@ singleton (אין `user_id` — נועה היחידה). מאוכלסת ע"י cro
 **חלוקת אחריות:** מקורות 1–2 דורשים הבנת שפה ומבוצעים ב-AI prompt של `extract_lead_from_email` (מחזיר `null` אם לא נמצא). מקורות 3–4 דטרמיניסטיים ומבוצעים בקוד (`gmail_intake._resolve_name_from_address`), כי כותרת ה-From אינה מועברת ל-AI. `"ללא שם"` נשאר רק כמשמר הגנתי כשאין כתובת שולח כלל.
 
 **verification:** `/admin/classifier-test` (OwnerOnly) — שליחת טקסט גולמי דרך כל ה-pipeline ובדיקה ש-`full_name` מתמלא נכון לכל מקור.
+
+### 19.3 הצעת פעולה לליד רדום (D.1)
+
+שכבת AI שממליצה פעולה אחת לכל ליד רדום לפי ההיסטוריה שלו, ושומרת אותה כמשימת `dormant_suggestion` (עם `metadata`).
+
+**הגדרת "ליד רדום" לפיצ'ר זה (מדויקת):** סטטוס `IN_PROGRESS` או `PROPOSAL_SENT`; עברו 60+ ימים מאז ה-outbound האחרון; ואין inbound מאז (הלקוח לא הגיב). (צרה יותר מ-`dormant_flag` הכללי — לידים `NEW`/בלי outbound מטופלים ע"י `first_response`.)
+
+**4 פעולות אפשריות:** `gentle_followup` (חידוש קשר עדין בהודעה), `call` (להתקשר — מגע אישי), `archive` (לארכב — אין טעם להמשיך), `no_action` (אין מספיק מידע / אין פעולה בעלת ערך).
+
+**"תמיד להציג, לא תמיד להקפיץ":** ההמלצה **תמיד** נשמרת ומוצגת בכרטיס הליד. אבל רק `gentle_followup`/`call` (אקטיביות) מקפיצים את הליד ל-/today; `archive`/`no_action` (פסיביות) **לא** מוקפצות בשום מסלול push (/today, "ממתין לטיפול", צבע כתום) — נועה רואה אותן רק אם נכנסת לכרטיס. זה מונע "להעיר את נועה לסמן צ'קבוקס ארכב" תוך שמירה על שקיפות מלאה.
+
+**שורט-קאט 120 יום:** ליד שעבר 120+ ימים — `action=archive` אוטומטי **ללא קריאת AI** (`model_used=auto_shortcut_120d`), חוסך עלות ומשמר עקביות.
+
+**מודל:** `claude-opus-4-7` (החלטה אסטרטגית דורשת איכות; env `AI_MODEL_DORMANT_SUGGESTION`). **רענון:** המלצה ישנה מ-7 ימים מחושבת מחדש. **תדירות:** cron יומי (`suggest_dormant_actions`) אחרי `detect_dormant`. **Fallback (§20.13):** כשל AI → `no_action` + `manual_review`; `RateLimitError` → לא נוצרת משימה, ריצה חוזרת מחר.
 
 ---
 
@@ -1647,7 +1663,7 @@ PATCH  /settings/service-rates
 - ניהול טוקנים ב-AI (סעיף 20)
 - סיכום יומי אוטומטי
 - סיכום שבועי אוטומטי
-- זיהוי לידים רדומים
+- זיהוי לידים רדומים — **בוצע** (§19.3, D.1): המלצת פעולה AI (Opus) פר ליד רדום, "תמיד להציג לא תמיד להקפיץ", שורט-קאט 120 יום
 - עזרה בניסוח הצעות לארגונים
 - תזכורת חוזרת על פולואפים (פיצ'ר שנדחה מ-MVP)
 - UI לעריכת settings/followup-rules

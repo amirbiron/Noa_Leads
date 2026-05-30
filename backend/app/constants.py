@@ -163,6 +163,7 @@ class TaskType(StrEnum):
     WARM_FOLLOWUP = "warm_followup"              # לקוח חם שלא סגר — 48h (§17.1)
     PROPOSAL_FOLLOWUP = "proposal_followup"      # פולואפ אחרי הצעת מחיר — 3 ימי עסקים
     DORMANT_CHECK = "dormant_check"              # ליד שלא חזר — 60d (§17.1; היה dormant_reachout)
+    DORMANT_SUGGESTION = "dormant_suggestion"    # הצעת פעולה AI לליד רדום (§19 D.1) — מחליף DORMANT_CHECK ב-detect_dormant
     LECTURE_INQUIRY = "lecture_inquiry"          # ארגון התעניין בהרצאה — 24h (§17.1)
 
     # סוגים נוספים שמופיעים ב-§16.4 (chips) ובגזירות מערכת

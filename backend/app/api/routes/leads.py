@@ -11,6 +11,7 @@ from app.schemas.activity import ActionRequest, ActivityRead
 from app.schemas.common import PaginatedResponse
 from app.schemas.email_message import EmailMessageRead
 from app.schemas.lead import (
+    DormantSuggestionRead,
     LeadCloseRequest,
     LeadCreateManual,
     LeadListItem,
@@ -167,3 +168,22 @@ async def get_lead_emails(
     """מיילים נכנסים שקושרו לליד (Spec §20.10). מהחדש לישן."""
     emails = await leads_service.get_lead_emails(db, lead_id)
     return [EmailMessageRead.model_validate(e) for e in emails]
+
+
+@router.get(
+    "/{lead_id}/dormant-suggestion", response_model=DormantSuggestionRead | None
+)
+async def read_dormant_suggestion(
+    lead_id: UUID, db: DbSession, user: CurrentUser
+) -> DormantSuggestionRead | None:
+    """המלצת פעולה AI לליד רדום (§19 D.1), או null אם אין המלצה פתוחה."""
+    task = await leads_service.get_dormant_suggestion(db, lead_id)
+    if task is None or not task.task_metadata:
+        return None
+    meta = task.task_metadata
+    return DormantSuggestionRead(
+        action=meta.get("ai_action", "no_action"),
+        reasoning=meta.get("ai_reasoning", ""),
+        generated_at=meta.get("ai_generated_at"),
+        model_used=meta.get("model_used"),
+    )

@@ -282,6 +282,7 @@ AUTO_CLOSE_TASK_TYPES = (
     TaskType.FOLLOWUP.value,
     TaskType.AFTER_HOURS_REPLY.value,
     TaskType.DORMANT_CHECK.value,    # היה DORMANT_REACHOUT — שונה לפי Spec §17.1
+    TaskType.DORMANT_SUGGESTION.value,  # touchpoint סוגר גם המלצת AI לליד רדום (§19 D.1)
     TaskType.WARM_FOLLOWUP.value,    # touchpoint סוגר גם פולואפ חם (§17.1)
     TaskType.RETRY_CALL.value,       # אחרי שיחה מוצלחת — אין יותר צורך לנסות שוב
     # SEND_PROPOSAL לא בכאן: הוא נסגר רק על mark_proposal_sent הספציפי

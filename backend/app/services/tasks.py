@@ -6,7 +6,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import and_, or_, select, update
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
@@ -127,6 +127,26 @@ async def create_first_response_task(
     return task
 
 
+def surfaceable_task_condition():
+    """
+    Condition: task ראוי ל"הקפצה" (push) — /today, /pending, ו-next_action cache.
+
+    מחריג dormant_suggestion *פסיבי* (ai_action ∈ {archive, no_action}): ההמלצה
+    נשמרת ומוצגת בכרטיס הליד, אבל לא מקפיצה את הליד לשום מסלול push (§19 D.1,
+    "תמיד להציג לא תמיד להקפיץ"). dormant_suggestion אקטיבי (gentle_followup/
+    call) וכל שאר ה-types — נחשפים כרגיל.
+
+    coalesce ל-'' : dormant_suggestion ללא metadata (edge תאורטי — תמיד נכתב
+    עם ai_action) נחשב אקטיבי ונחשף, כדי לא להעלים ליד בטעות.
+    """
+    return or_(
+        Task.type != TaskType.DORMANT_SUGGESTION.value,
+        func.coalesce(Task.task_metadata["ai_action"].astext, "").notin_(
+            ["archive", "no_action"]
+        ),
+    )
+
+
 async def sync_lead_next_action_cache(
     db: AsyncSession, lead_id: UUID
 ) -> None:
@@ -153,6 +173,9 @@ async def sync_lead_next_action_cache(
                 Task.status.in_(
                     [TaskStatus.OPEN.value, TaskStatus.SNOOZED.value]
                 ),
+                # dormant_suggestion פסיבי לא קובע next_action (אחרת ליד שמומלץ
+                # לארכב היה מואר כתום ב-/leads). §19 D.1.
+                surfaceable_task_condition(),
             )
             .order_by(Task.due_at.asc())
             .limit(1)
@@ -395,6 +418,10 @@ async def list_stuck_tasks(db: AsyncSession) -> list[tuple[Task, Lead]]:
             ),
             Task.due_at <= stuck_threshold,
             Lead.status.notin_([s.value for s in CLOSED_LEAD_STATUSES]),
+            # §19 D.1: dormant_suggestion פסיבי (archive/no_action) לא נחשב
+            # "תקוע" — נוצר עם due_at=now ולכן הופך 7+ ימים תוך שבוע, אבל
+            # "תמיד להציג לא תמיד להקפיץ" חל גם כאן (מסלול push רביעי).
+            surfaceable_task_condition(),
         )
         .order_by(Task.due_at.asc())
     )

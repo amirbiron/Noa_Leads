@@ -34,6 +34,7 @@ export type TaskType =
   | "warm_followup"
   | "proposal_followup"
   | "dormant_check"
+  | "dormant_suggestion"
   | "lecture_inquiry"
   | "followup"
   | "retry_call"
@@ -338,6 +339,17 @@ export interface TodayActionItem {
   // ל-badge "גיל" (§12.1) — מקור: last_activity_at→created_at של הליד.
   last_activity_at: string | null;
   created_at: string;
+  // §19 D.1 — לפריט dormant_suggestion בלבד: ההמלצה + הנימוק.
+  ai_action: string | null;
+  ai_reasoning: string | null;
+}
+
+// §19 D.1 — המלצת פעולה AI לליד רדום (מוצגת בכרטיס הליד).
+export interface DormantSuggestion {
+  action: "gentle_followup" | "archive" | "call" | "no_action";
+  reasoning: string;
+  generated_at: string | null;
+  model_used: string | null;
 }
 
 export interface ProfitableServiceInsight {

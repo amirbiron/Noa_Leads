@@ -41,6 +41,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from app.config import get_settings
 from app.prompts import classify_email as classify_prompts
+from app.prompts import dormant_suggestion as dormant_prompts
 from app.prompts import extract_lead as extract_prompts
 
 logger = logging.getLogger(__name__)
@@ -70,7 +71,7 @@ _Purpose = Literal[
     "daily_summary",
     "weekly_summary",
     "proposal_draft",
-    "dormant_detection",
+    "dormant_suggestion",
 ]
 
 
@@ -88,7 +89,7 @@ def resolve_model(purpose: _Purpose) -> str:
         "daily_summary": s.ai_model_daily_summary,
         "weekly_summary": s.ai_model_daily_summary,  # משתמשים באותו tier
         "proposal_draft": s.ai_model_proposal_draft,
-        "dormant_detection": s.ai_model_dormant_detection,
+        "dormant_suggestion": s.ai_model_dormant_suggestion,
     }
     override = override_map.get(purpose)
     # explicit check: גם None וגם "" מטופלים כ-"לא מוגדר → tier default".
@@ -99,7 +100,12 @@ def resolve_model(purpose: _Purpose) -> str:
         return override
 
     # fallback ל-tier
-    quality_purposes = {"daily_summary", "weekly_summary", "proposal_draft"}
+    quality_purposes = {
+        "daily_summary",
+        "weekly_summary",
+        "proposal_draft",
+        "dormant_suggestion",  # החלטה אסטרטגית — quality tier (§19.3)
+    }
     if purpose in quality_purposes:
         return s.ai_model_quality
     return s.ai_model_fast
@@ -345,6 +351,14 @@ class LeadDraft(BaseModel):
     subject_summary: str = Field(max_length=200)
 
 
+class DormantSuggestionResult(BaseModel):
+    """תוצאת suggest_action_for_dormant (§19 D.1). action מתוך 4 ערכים סגורים;
+    reasoning משפט-שניים בעברית (caller שומר ב-task_metadata, מציג בכרטיס)."""
+
+    action: Literal["gentle_followup", "archive", "call", "no_action"]
+    reasoning: str = Field(min_length=1, max_length=220)
+
+
 # ===== JSON parsing =====
 
 
@@ -454,3 +468,48 @@ async def extract_lead_from_email(
         usage.get("cache_read_input_tokens", 0),
     )
     return _parse_json_response(text, LeadDraft)
+
+
+async def suggest_action_for_dormant(
+    *,
+    lead_name: str,
+    organization_name: str | None,
+    service_subtype: str | None,
+    service_category: str | None,
+    days_since_last_activity: int,
+    activities_text: str,
+) -> DormantSuggestionResult:
+    """
+    ממליץ על פעולה אחת לליד רדום (§19 D.1) לפי ההיסטוריה שלו.
+    מודל Opus (resolve_model("dormant_suggestion")) — החלטה אסטרטגית דורשת
+    איכות. fallback_on_error=False: כשל → caller (cron) מטפל ב-no_action +
+    manual_review. AIRateLimitError → caller משאיר pending לריצה הבאה.
+
+    הקלט הוא היסטוריית activities (טקסט שכבר מובנה), לא HTML — אין צורך
+    ב-clean_email_body_for_ai; ה-caller אחראי להגביל אורך לפני הקריאה.
+    """
+    client = get_ai_client()
+    text, usage = await client._complete(
+        model=resolve_model("dormant_suggestion"),
+        system=dormant_prompts.SYSTEM_PROMPT,
+        user=dormant_prompts.USER_TEMPLATE.format(
+            lead_name=lead_name,
+            # null — עקבי עם המוסכמה בפרומפט (שם ארגון יכול להיות null).
+            organization_name=organization_name if organization_name else "null",
+            # ה-caller מתרגם לעברית; "null" כ-fallback אם השדה ריק (עקבי עם
+            # הפרומפט, לא תווית גנרית שמבלבלת).
+            service_subtype=service_subtype or "null",
+            service_category=service_category or "null",
+            days_since_last_activity=days_since_last_activity,
+            activities_bulleted_list=activities_text,
+        ),
+        max_tokens=400,
+        fallback_on_error=False,
+    )
+    logger.info(
+        "suggest_action_for_dormant usage: input=%d output=%d cache_read=%d",
+        usage["input_tokens"],
+        usage["output_tokens"],
+        usage.get("cache_read_input_tokens", 0),
+    )
+    return _parse_json_response(text, DormantSuggestionResult)

@@ -8,6 +8,7 @@ import {
   FileText,
   Mail,
   MessageCircle,
+  MoonStar,
   Pencil,
   Phone,
   Plus,
@@ -34,6 +35,7 @@ import { toWhatsAppDigits } from "@/lib/phone";
 import {
   labelCategory,
   labelContact,
+  labelDormantAction,
   labelPriority,
   labelStatus,
   labelSubtype,
@@ -42,6 +44,7 @@ import {
 import type {
   Activity,
   BookingRead,
+  DormantSuggestion,
   EmailMessage,
   Lead,
   Program,
@@ -73,6 +76,9 @@ export default function LeadDetailPage() {
   const [programs, setPrograms] = useState<Program[]>([]);
   const [activeBooking, setActiveBooking] = useState<BookingRead | null>(null);
   const [emails, setEmails] = useState<EmailMessage[]>([]);
+  // §19 D.1 — המלצת AI לליד רדום (null אם אין).
+  const [dormantSuggestion, setDormantSuggestion] =
+    useState<DormantSuggestion | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [templateOpen, setTemplateOpen] = useState(false);
@@ -87,7 +93,7 @@ export default function LeadDetailPage() {
   async function load() {
     setError(null);
     try {
-      const [l, t, p, b, e] = await Promise.all([
+      const [l, t, p, b, e, ds] = await Promise.all([
         api.getLead(id),
         api.getTimeline(id),
         api.listProgramsForLead(id),
@@ -97,12 +103,15 @@ export default function LeadDetailPage() {
         api.getActiveBookingForLead(id),
         // מיילים נכנסים — Spec §20.10. ריק לליד שלא נקלט ממייל.
         api.getLeadEmails(id),
+        // המלצת AI לליד רדום (§19 D.1). null לרוב הלידים.
+        api.getDormantSuggestion(id),
       ]);
       setLead(l);
       setActivities(t);
       setPrograms(p);
       setActiveBooking(b);
       setEmails(e);
+      setDormantSuggestion(ds);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "שגיאה בטעינה");
     } finally {
@@ -283,6 +292,45 @@ export default function LeadDetailPage() {
               activeBooking={activeBooking}
               onActionDone={load}
             />
+          )}
+
+          {/* §19 D.1 — הצעת פעולה AI לליד רדום. מוצגת תמיד כשקיימת (כולל
+              archive/no_action שלא מוקפצים ל-/today), כדי לשמור שקיפות. */}
+          {dormantSuggestion && (
+            <div className="bg-purple-50 border border-purple-200 rounded-xl p-3.5">
+              <div className="flex items-center gap-1.5 text-sm font-medium text-purple-900">
+                <MoonStar size={15} aria-hidden />
+                הצעת פעולה: {labelDormantAction(dormantSuggestion.action)}
+              </div>
+              <p className="mt-1 text-xs text-purple-800 leading-relaxed">
+                {dormantSuggestion.reasoning}
+              </p>
+              {dormantSuggestion.action === "gentle_followup" && (
+                <button
+                  onClick={() => setTemplateOpen(true)}
+                  className="mt-2.5 w-full rounded-lg bg-purple-700 text-white py-2 text-sm font-medium"
+                >
+                  פתח תבנית חידוש קשר
+                </button>
+              )}
+              {dormantSuggestion.action === "call" && lead.phone && (
+                <a
+                  href={`tel:${lead.phone}`}
+                  className="mt-2.5 w-full rounded-lg bg-purple-700 text-white py-2 text-sm font-medium flex items-center justify-center gap-1.5"
+                >
+                  <Phone size={15} aria-hidden />
+                  התקשרי
+                </a>
+              )}
+              {dormantSuggestion.action === "archive" && (
+                <button
+                  onClick={() => setCloseOpen(true)}
+                  className="mt-2.5 w-full rounded-lg bg-white border border-purple-300 text-purple-900 py-2 text-sm font-medium"
+                >
+                  ארכב את הליד
+                </button>
+              )}
+            </div>
           )}
 
           {/* כפתורי תבנית + העברה — רק לליד פתוח */}
