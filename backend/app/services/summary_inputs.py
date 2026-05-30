@@ -676,14 +676,16 @@ async def compute_tomorrow_focus_block(
     attention_seen: set,
 ) -> str | None:
     """
-    פוקוס למחר (§6.3.3, מורחב) — מחזיר block או None ("מחר" מושמט אם ריק):
-    א. כל פריטי attention_items (עד 3, אותו סדר דחיפות).
-    ב. בנוסף, לידים שדורשים פוקוס: סטטוס פתוח, הכדור אצלנו
-       (waiting_on ∈ NOAH/ASSISTANT/ASSISTANT_PENDING_NOAH), VIP או ארגוני,
-       ושלא כבר מופיעים ב-attention (dedup לפי lead.id).
+    פוקוס למחר (§6.3.3, מזוקק) — מחזיר block או None ("מחר" מושמט):
+    - לידים שדורשים פוקוס: סטטוס פתוח, הכדור אצלנו (waiting_on ∈
+      NOAH/ASSISTANT/ASSISTANT_PENDING_NOAH), VIP או ארגוני, ושלא כבר
+      מופיעים ב-attention (dedup לפי lead.id).
+    - אם יש כאלה *וגם* יש פריטי attention — שורת מצביע קצרה לכמותם, **בלי**
+      לשכפל את שורות ה-attention עצמן (הן כבר בסקציית "דורש תשומת לב").
+    - אם אין לידי VIP/ארגון → None, גם אם יש פריטי attention (הם מוצגים
+      בסקציה שלהם; "מחר" נשאר אופציונלי, תואם few-shot דוגמה 2).
     """
-    lines = list(attention_lines)
-
+    lines: list[str] = []
     rows = (
         await db.execute(
             select(Lead)
@@ -709,17 +711,25 @@ async def compute_tomorrow_focus_block(
         )
     ).scalars().all()
 
-    added = 0
     for lead in rows:
         if lead.id in attention_seen:
             continue  # כבר מופיע ב-attention — לא לכפול.
         kind = "VIP" if lead.priority_level == PriorityLevel.VIP.value else "ארגוני"
         lines.append(f"- ליד שדורש פוקוס: {_lead_display_name(lead)} ({kind})")
-        added += 1
-        if added >= _BLOCK_LIMIT:
+        if len(lines) >= _BLOCK_LIMIT:
             break
 
-    return "\n".join(lines) if lines else None
+    if not lines:
+        return None  # אין מה להבליט ספציפית למחר → הסקציה מושמטת.
+
+    # מצביע קצר לעומס ה-attention — בלי לשכפל את הפריטים (הם בסקציה נפרדת).
+    n = len(attention_lines)
+    if n == 1:
+        lines.append("- בנוסף, פריט אחד דורש מעקב (ראה 'דורש תשומת לב')")
+    elif n > 1:
+        lines.append(f"- בנוסף, {n} פריטים דורשים מעקב (ראה 'דורש תשומת לב')")
+
+    return "\n".join(lines)
 
 
 # ===== assembly =====

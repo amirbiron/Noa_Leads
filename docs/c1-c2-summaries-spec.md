@@ -886,7 +886,14 @@ AI_MAX_OUTPUT_TOKENS_SUMMARIES=2000
    - לידים תקועים מעל 7 ימים
    - משימות שלא הושלמו
 
-3. **`compute_tomorrow_focus_suggestion()`** - הצעה אחת בלבד, או None.
+3. **`compute_tomorrow_focus_block()`** - פוקוס למחר, או None (מזוקק):
+   - לידים שדורשים פוקוס מחר: סטטוס פתוח, הכדור אצלנו (`waiting_on` ∈
+     NOAH/ASSISTANT/ASSISTANT_PENDING_NOAH), VIP (`priority_level=vip`) או
+     ארגוני (`organization_name` לא ריק), **ולא** כבר ב-attention_items (dedup).
+   - אם יש כאלה וגם יש פריטי attention — שורת מצביע קצרה לכמותם, **בלי**
+     לשכפל את שורות ה-attention עצמן (מוצגות בסקציית "דורש תשומת לב").
+   - אם אין לידי VIP/ארגון → None (גם אם יש attention; "מחר" אופציונלי).
+     כך נמנעת כפילות טקסט בין "מחר" ל"דורש תשומת לב".
 
 **לשבועי - ליצור `weekly_summary.py` (או להרחיב קיים):**
 

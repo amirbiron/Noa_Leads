@@ -357,12 +357,12 @@ async def test_attention_stuck_days_from_status_changed_at(db):
     assert "ימים בסטטוס נוכחי: 9" in block
 
 
-async def test_tomorrow_focus_includes_attention_and_vip(db):
+async def test_tomorrow_focus_vip_plus_attention_pointer(db):
     """
-    תיקון #6: tomorrow_focus כולל את פריטי attention + ליד VIP/ארגון שהכדור
-    אצלנו, בלי לכפול ליד שכבר ב-attention.
+    תיקון #6 (מזוקק): tomorrow_focus כולל ליד VIP/ארגון שהכדור אצלנו +
+    שורת מצביע לעומס ה-attention, *בלי* לשכפל את שורות ה-attention עצמן.
     """
-    # ליד עם הצעה תקועה → ייכנס ל-attention:
+    # ליד עם הצעה תקועה → ייכנס ל-attention (לא ל-tomorrow verbatim):
     await _mk_lead(
         db, full_name="דניאל", status=LeadStatus.PROPOSAL_SENT.value,
         proposal_sent_at=_NOW - timedelta(days=5), waiting_on=WaitingOn.NOAH.value,
@@ -376,10 +376,26 @@ async def test_tomorrow_focus_includes_attention_and_vip(db):
     tomorrow = await si.compute_tomorrow_focus_block(db, _NOW, lines, seen)
 
     assert tomorrow is not None
-    assert "דניאל" in tomorrow            # פריט ה-attention
     assert "שרון" in tomorrow             # תוספת ה-VIP
     assert "(VIP)" in tomorrow
-    assert tomorrow.count("דניאל") == 1   # בלי כפילות
+    assert "דניאל" not in tomorrow        # לא משוכפל — הוא בסקציית attention
+    assert "דורש מעקב" in tomorrow        # שורת המצביע לעומס ה-attention
+
+
+async def test_tomorrow_focus_none_when_only_attention(db):
+    """
+    אין ליד VIP/ארגון — גם אם יש פריט attention, tomorrow מושמט (None).
+    (משחזר את תקפות few-shot דוגמה 2: tomorrow=null למרות attention קיים.)
+    """
+    # הצעה תקועה (attention) אך הליד אינו VIP ואינו ארגוני:
+    await _mk_lead(
+        db, full_name="רגיל", status=LeadStatus.PROPOSAL_SENT.value,
+        proposal_sent_at=_NOW - timedelta(days=5), waiting_on=WaitingOn.NOAH.value,
+    )
+    lines, seen = await si._collect_attention_items(db, _NOW)
+    assert lines  # יש פריט attention
+    tomorrow = await si.compute_tomorrow_focus_block(db, _NOW, lines, seen)
+    assert tomorrow is None
 
 
 async def test_tomorrow_focus_none_when_empty(db):
