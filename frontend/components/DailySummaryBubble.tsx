@@ -1,18 +1,20 @@
 "use client";
 
-import { useState } from "react";
-import { ChevronDown, ChevronUp, Moon } from "lucide-react";
+import { Moon } from "lucide-react";
 import { computeDailySummaryStaleness } from "@/lib/date";
+import { useLocalStorageState } from "@/lib/useLocalStorage";
 import type { DailySummary } from "@/lib/types";
+import { CollapseToggleButton } from "./CollapseToggleButton";
 
 // F-07 (Spec §16.3 + Changelog v2.1): סיכום יומי סטטיסטי מ-`daily_summaries`
 // מוצג כ-bubble בדשבורד. *לא* נשלח לטלגרם — הדשבורד הוא הערוץ היחיד.
 // חלון התצוגה מנוהל מבחוץ (`shouldShowDailySummary`) — הקומפוננטה רק
 // מציגה את הנתונים שניתנו לה.
 //
-// `collapsible` (C.1/C.2 §6.8 — UI מעודכן): במובייל מאפשר לקפל את הכרטיס
-// (להציג רק את הכותרת) ולפנות מקום לרשימת המשימות. בדסקטוп הכפתור מוסתר
-// כי יש מקום לשני הכרטיסים זה לצד זה.
+// `collapsible` (C.1/C.2 §6.8): כפתור chevron בכל הbreakpoints (גם
+// דסקטופ). מצב הקיפול נשמר ב-localStorage תחת
+// `noa:summary:daily:collapsed` — אותו key של AiSummaryCard עם type=daily,
+// כי שני הקומפוננטות מציגות את אותו Daily slot שמתחלף לפי toggle.
 export function DailySummaryBubble({
   summary,
   collapsible = false,
@@ -20,7 +22,12 @@ export function DailySummaryBubble({
   summary: DailySummary;
   collapsible?: boolean;
 }) {
-  const [collapsed, setCollapsed] = useState(false);
+  // hardcoded ל-"daily" — slot זה תמיד יומי, וה-key חולק עם AiSummaryCard
+  // (type=daily) כדי שמצב הקיפול יישמר בעת toggle statistical↔AI.
+  const [collapsed, setCollapsed] = useLocalStorageState(
+    "noa:summary:daily:collapsed",
+    false,
+  );
 
   // summary_date מגיע כ-"YYYY-MM-DD" (date-only). Date(string) מפרסר אותו
   // כ-UTC midnight, מה שגורם להזזת יום כשמשתמש נמצא ב-TZ שלילי. נוסיף
@@ -61,19 +68,10 @@ export function DailySummaryBubble({
               {titlePrefix} · {dateLabel}
             </div>
             {collapsible && (
-              <button
-                type="button"
-                onClick={() => setCollapsed((c) => !c)}
-                aria-label={collapsed ? "הרחב סיכום" : "קפל סיכום"}
-                aria-expanded={!collapsed}
-                className="lg:hidden p-1 -m-1 text-gray-500 hover:text-gray-800"
-              >
-                {collapsed ? (
-                  <ChevronDown size={16} aria-hidden />
-                ) : (
-                  <ChevronUp size={16} aria-hidden />
-                )}
-              </button>
+              <CollapseToggleButton
+                collapsed={collapsed}
+                onToggle={() => setCollapsed(!collapsed)}
+              />
             )}
           </div>
           {!collapsed && (
