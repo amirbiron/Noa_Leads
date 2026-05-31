@@ -28,6 +28,9 @@ export function DailySummaryBubble({
     "noa:summary:daily:collapsed",
     false,
   );
+  // אם collapsible=false, ה-localStorage לא חוסם את ה-body (אחרת אין
+  // כפתור לפתיחה). ה-state עדיין נשמר לפעם הבאה ש-collapsible=true.
+  const isCollapsed = collapsible && collapsed;
 
   // summary_date מגיע כ-"YYYY-MM-DD" (date-only). Date(string) מפרסר אותו
   // כ-UTC midnight, מה שגורם להזזת יום כשמשתמש נמצא ב-TZ שלילי. נוסיף
@@ -69,12 +72,12 @@ export function DailySummaryBubble({
             </div>
             {collapsible && (
               <CollapseToggleButton
-                collapsed={collapsed}
-                onToggle={() => setCollapsed(!collapsed)}
+                collapsed={isCollapsed}
+                onToggle={() => setCollapsed(!isCollapsed)}
               />
             )}
           </div>
-          {!collapsed && (
+          {!isCollapsed && (
             <div className="grid grid-cols-2 gap-2 mt-2">
               <SummaryStat value={summary.new_leads_today} label="פניות חדשות" />
               <SummaryStat

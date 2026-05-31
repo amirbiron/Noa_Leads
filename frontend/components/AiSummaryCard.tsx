@@ -43,6 +43,10 @@ export function AiSummaryCard({
     `noa:summary:${summary.type}:collapsed`,
     false,
   );
+  // אם collapsible=false, אסור לערך השמור ב-localStorage לחסום את ה-body —
+  // הכפתור מוסתר וה-משתמשת לא יכולה לפתוח. ה-state עדיין נשמר ל-mode
+  // הבא בו collapsible=true.
+  const isCollapsed = collapsible && collapsed;
   const [submitState, setSubmitState] = useState<SubmitState>("idle");
 
   const isDaily = summary.type === "daily";
@@ -83,8 +87,8 @@ export function AiSummaryCard({
             <div className="text-xs text-gray-600">{titlePrefix}</div>
             {collapsible && (
               <CollapseToggleButton
-                collapsed={collapsed}
-                onToggle={() => setCollapsed(!collapsed)}
+                collapsed={isCollapsed}
+                onToggle={() => setCollapsed(!isCollapsed)}
               />
             )}
           </div>
@@ -94,7 +98,7 @@ export function AiSummaryCard({
             {summary.output.bottom_line}
           </div>
 
-          {!collapsed && (
+          {!isCollapsed && (
             <>
               {isDaily ? (
                 <DailyBody output={summary.output as AiSummaryOutputDaily} />
