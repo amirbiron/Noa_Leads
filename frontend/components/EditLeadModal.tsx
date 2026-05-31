@@ -9,6 +9,7 @@ import {
   SERVICE_CATEGORY_LABELS,
   SERVICE_SUBTYPE_LABELS,
 } from "@/lib/hebrew";
+import { SUBTYPES_BY_CATEGORY } from "@/lib/serviceCategories";
 import type {
   Lead,
   PreferredContact,
@@ -16,27 +17,15 @@ import type {
   ServiceCategory,
 } from "@/lib/types";
 
-// עריכת שדות אופציונליים של ליד אחרי יצירה. הטופס המהיר ב-NewLeadModal
-// קולט רק 3 שדות חובה (שם, טלפון, מקור) + קטגוריה אופציונלית; עורך כל
-// שאר ה-fields כאן, חוץ ממה שמנוהל ע"י flows ייעודיים:
+// עריכת שדות אופציונליים של ליד אחרי יצירה. ה-NewLeadModal המורחב כבר
+// תומך באותם שדות בעת יצירה (כפתור "הוסף פרטים נוספים"); כאן עורכים
+// אחרי יצירה, חוץ ממה שמנוהל ע"י flows ייעודיים:
 // - source_channel: נקבע ב-intake, לא משתנה אחרי.
 // - waiting_on: מנוהל ע"י chips / actions / transfer.
 // - owner_id: transfer flow ייעודי.
 // - utm_*: intake metadata, לא לעריכה ידנית.
-
-// subtypes לכל קטגוריה — מקביל ל-SERVICE_CATEGORIES ב-backend/app/constants.py.
-// שינוי שם של subtype או הוספה דורש עדכון בשני המקומות.
-const SUBTYPES_BY_CATEGORY: Record<ServiceCategory, string[]> = {
-  clinic: ["voice_development", "public_speaking", "voice_rehab"],
-  workshops: [
-    "workshop_speaking",
-    "stage_arts",
-    "lecture_organization",
-    "lecture_academic",
-  ],
-  production: ["production_guidance", "production_directing"],
-  digital_course: ["digital_course"],
-};
+// - is_returning_customer: בעת היצירה בלבד דרך NewLeadModal (LeadUpdate
+//   לא תומך כרגע; אם בעתיד נרצה לערוך — להוסיף ל-LeadUpdate schema).
 
 interface Props {
   lead: Lead;

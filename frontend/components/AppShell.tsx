@@ -8,13 +8,18 @@ import { FloatingNewLeadButton } from "./FloatingNewLeadButton";
 
 // עוטף עמוד מאומת: AuthGuard + תוכן + ניווט תחתון + כפתור צף.
 // בכותרת — גלגל שיניים שמוביל ל-/settings (כניסה לתפריט הגדרות+logout).
+//
+// `headerActions` — slot אופציונלי לתוכן נוסף בהדר משמאל לגלגל הגדרות
+// (למשל הבועה של טוגל הסיכום היומי ב-`/` — C.1/C.2 §6.8).
 export function AppShell({
   title,
   hideSettings = false,
+  headerActions,
   children,
 }: {
   title?: string;
   hideSettings?: boolean;
+  headerActions?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
@@ -24,15 +29,18 @@ export function AppShell({
           <header className="bg-white border-b border-gray-200 sticky top-0 z-20">
             <div className="max-w-2xl mx-auto px-4 py-3.5 flex items-center justify-between">
               <h1 className="text-lg font-semibold">{title}</h1>
-              {!hideSettings && (
-                <Link
-                  href="/settings"
-                  aria-label="הגדרות"
-                  className="text-gray-400 hover:text-gray-700 p-1.5 -m-1.5"
-                >
-                  <SettingsIcon size={20} aria-hidden />
-                </Link>
-              )}
+              <div className="flex items-center gap-2">
+                {headerActions}
+                {!hideSettings && (
+                  <Link
+                    href="/settings"
+                    aria-label="הגדרות"
+                    className="text-gray-400 hover:text-gray-700 p-1.5 -m-1.5"
+                  >
+                    <SettingsIcon size={20} aria-hidden />
+                  </Link>
+                )}
+              </div>
             </div>
           </header>
         )}

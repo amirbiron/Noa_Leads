@@ -2,22 +2,30 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Moon, Sparkles, TrendingUp } from "lucide-react";
+import { Sparkles, TrendingUp } from "lucide-react";
+import { AiSummaryCard } from "@/components/AiSummaryCard";
 import { AppShell } from "@/components/AppShell";
+import { DailySummaryBubble } from "@/components/DailySummaryBubble";
 import { useDashboardPollContext } from "@/components/DashboardPollProvider";
 import { EmptyState } from "@/components/EmptyState";
 import { LeadCardRow } from "@/components/LeadCardRow";
 import { SectionHeader } from "@/components/SectionHeader";
 import { TodayActionRow } from "@/components/TodayActionRow";
 import { api, ApiError } from "@/lib/api";
-import { israelHour, plusOneIsoDate, toIsraelISODate } from "@/lib/date";
+import { shouldShowAiWeeklySummary, shouldShowDailySummary } from "@/lib/date";
 import { labelCategory } from "@/lib/hebrew";
-import type { DailySummary, HomeDashboard } from "@/lib/types";
+import type { HomeDashboard } from "@/lib/types";
+
+// טוגל סיכום יומי — סטטיסטי (ברירת מחדל) או AI נרטיבי (C.1/C.2 §6.8).
+// שני המצבים חולקים את אותו slot (לא מקבילים), והבועה ב-navbar מציגה
+// תמיד לאן הלחיצה תוביל.
+type DailyView = "statistical" | "ai";
 
 export default function HomePage() {
   const [data, setData] = useState<HomeDashboard | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [dailyView, setDailyView] = useState<DailyView>("statistical");
   // הערך לא בשימוש — רק מאלץ re-render דקתי כדי שבועת הסיכום תיעלם
   // אוטומטית ב-07:00 (§12.4), ראה ה-useEffect של הטיימר למטה.
   const [, setMinuteTick] = useState(0);
@@ -55,8 +63,38 @@ export default function HomePage() {
     return () => clearInterval(id);
   }, []);
 
+  // C.1/C.2 §6.8: הטוגל אפשרי רק כששני הסיכומים זמינים ובחלון תצוגה.
+  // אם רק אחד זמין, אין הצדקה לבועה (התצוגה קבועה ממילא).
+  const hasStatsInWindow =
+    !!data?.daily_summary &&
+    shouldShowDailySummary(data.daily_summary.summary_date);
+  const hasAiDailyInWindow =
+    !!data?.ai_daily_summary &&
+    shouldShowDailySummary(data.ai_daily_summary.date_range_end);
+  const canToggleDaily = hasStatsInWindow && hasAiDailyInWindow;
+  const hasWeeklyInWindow =
+    !!data?.ai_weekly_summary &&
+    shouldShowAiWeeklySummary(data.ai_weekly_summary.date_range_end);
+
+  // הבועה מציגה תמיד **לאן הלחיצה תוביל** (לא איפה אתה עכשיו).
+  const dailyTogglePill = canToggleDaily ? (
+    <button
+      type="button"
+      onClick={() =>
+        setDailyView((v) => (v === "statistical" ? "ai" : "statistical"))
+      }
+      aria-label="החלף תצוגת סיכום יומי"
+      className="rounded-full bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-medium px-3 py-1 flex items-center gap-1"
+    >
+      <Sparkles size={12} aria-hidden />
+      <span>
+        {dailyView === "statistical" ? "סיכום יומי" : "סיכום סטטיסטי"}
+      </span>
+    </button>
+  ) : null;
+
   return (
-    <AppShell title="בית">
+    <AppShell title="בית" headerActions={dailyTogglePill}>
       {loading && (
         <div className="text-center text-gray-400 py-10 text-sm">טוען…</div>
       )}
@@ -69,13 +107,38 @@ export default function HomePage() {
 
       {data && (
         <>
-          {/* F-07: סיכום יומי — bubble. נשמר ב-daily_summaries ע"י cron 19:00.
-              לפי Spec §16.2: לא נשלח לטלגרם — מוצג רק בדשבורד.
-              חלון תצוגה (§12.4): 19:00 → 07:00 למחרת (ראה shouldShowDailySummary). */}
-          {data.daily_summary &&
-            shouldShowDailySummary(data.daily_summary.summary_date) && (
-              <DailySummaryBubble summary={data.daily_summary} />
-            )}
+          {/* C.1/C.2 §6.8: סיכומי הבית.
+              - Daily slot: סטטיסטי (F-07) או AI (C.1), לפי הטוגל. אחד בכל רגע.
+                שניהם בחלון 19:00→07:00 (`shouldShowDailySummary`).
+              - Weekly slot: AI נרטיבי בלבד, חלון ראשון 08:00→שני 07:00.
+              Mobile: stacked (flex-col), daily מעל weekly.
+              Desktop (lg+): side-by-side (flex-row). */}
+
+          {(hasStatsInWindow || hasAiDailyInWindow || hasWeeklyInWindow) && (
+            <div className="flex flex-col lg:flex-row lg:gap-4 lg:items-stretch gap-3 mb-3">
+              {/* Daily slot — display whichever is available */}
+              {(dailyView === "statistical" || !hasAiDailyInWindow) && hasStatsInWindow && (
+                <DailySummaryBubble
+                  summary={data.daily_summary!}
+                  collapsible
+                />
+              )}
+              {(dailyView === "ai" || !hasStatsInWindow) && hasAiDailyInWindow && (
+                <AiSummaryCard
+                  summary={data.ai_daily_summary!}
+                  collapsible
+                />
+              )}
+
+              {/* Weekly slot — בלי טוגל */}
+              {hasWeeklyInWindow && (
+                <AiSummaryCard
+                  summary={data.ai_weekly_summary!}
+                  collapsible
+                />
+              )}
+            </div>
+          )}
 
           {/* פעולות היום */}
           <SectionHeader
@@ -214,114 +277,6 @@ export default function HomePage() {
         </>
       )}
     </AppShell>
-  );
-}
-
-function DailySummaryBubble({ summary }: { summary: DailySummary }) {
-  // summary_date מגיע כ-"YYYY-MM-DD" (date-only). Date(string) מפרסר אותו
-  // כ-UTC midnight, מה שגורם להזזת יום כשמשתמש נמצא ב-TZ שלילי. נוסיף
-  // T00:00 ונציין timeZone="Asia/Jerusalem" כדי שהיום/חודש/שם-יום יהיו
-  // יציבים בכל סביבה.
-  const dateLabel = new Date(`${summary.summary_date}T00:00:00`).toLocaleDateString(
-    "he-IL",
-    {
-      weekday: "long",
-      day: "numeric",
-      month: "long",
-      timeZone: "Asia/Jerusalem",
-    },
-  );
-
-  // ה-cron של 19:00 IL רץ פעם ביום. בבוקר שאחרי (לפני 19:00 הבא),
-  // get_latest_daily_summary מחזיר את הסיכום של אתמול. בלי label דינמי
-  // המשתמש רואה "סיכום יומי · יום שני 25 במאי" ביום שלישי בבוקר וחושב
-  // שזה היום (בלבול שדווח). מציינים מפורשות "אתמול" / "היום" / תאריך מלא.
-  // השוואת תאריכים ב-Asia/Jerusalem TZ כדי שלא תהיה הזזה בלילה.
-  const isStale = computeIsStale(summary.summary_date);
-  const titlePrefix = isStale === "today"
-    ? "סיכום היום"
-    : isStale === "yesterday"
-      ? "סיכום אתמול"
-      : "סיכום";
-  return (
-    <div className="bg-gradient-to-bl from-indigo-500/10 to-indigo-500/5 border border-indigo-300/40 rounded-xl p-4">
-      <div className="flex items-start gap-3">
-        <Moon
-          size={20}
-          className="text-indigo-500 shrink-0 mt-0.5"
-          aria-hidden
-        />
-        <div className="min-w-0 w-full">
-          <div className="text-xs text-gray-600 mb-1">
-            {titlePrefix} · {dateLabel}
-          </div>
-          <div className="grid grid-cols-2 gap-2 mt-2">
-            <SummaryStat
-              value={summary.new_leads_today}
-              label="פניות חדשות"
-            />
-            <SummaryStat
-              value={summary.tasks_done_today}
-              label="משימות שבוצעו"
-            />
-            <SummaryStat
-              value={summary.tasks_for_tomorrow}
-              label="משימות ליום שאחרי"
-            />
-            <SummaryStat
-              value={summary.urgent_open}
-              label="לידים דחופים פתוחים"
-              tone={summary.urgent_open > 0 ? "red" : "gray"}
-            />
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// משווה summary_date (YYYY-MM-DD מ-Israel TZ ב-backend) לתאריך הנוכחי
-// ב-Asia/Jerusalem. שני העזר (toIsraelISODate, plusOneIsoDate) ב-
-// `lib/date.ts` — מתועדים שם, כולל ההיגיון מאחורי options מפורשות
-// ו-UTC arithmetic.
-function computeIsStale(
-  summaryDate: string,
-): "today" | "yesterday" | "older" {
-  const todayIsrael = toIsraelISODate();
-  if (summaryDate === todayIsrael) return "today";
-  if (plusOneIsoDate(summaryDate) === todayIsrael) return "yesterday";
-  return "older";
-}
-
-// חלון תצוגה לסיכום היומי (§12.4): מ-19:00 עד 07:00 למחרת. סיכום של היום
-// מוצג תמיד; סיכום של אתמול מוצג רק לפני 07:00 (חלון סקירה לילי של 12 שעות);
-// מ-07:00 ואילך — מוסתר עד הסיכום הבא ב-19:00. ישן מאתמול — מוסתר תמיד.
-const DAILY_SUMMARY_HIDE_HOUR = 7;
-function shouldShowDailySummary(summaryDate: string): boolean {
-  const staleness = computeIsStale(summaryDate);
-  if (staleness === "today") return true;
-  if (staleness === "yesterday") return israelHour() < DAILY_SUMMARY_HIDE_HOUR;
-  return false;
-}
-
-function SummaryStat({
-  value,
-  label,
-  tone = "gray",
-}: {
-  value: number;
-  label: string;
-  tone?: "gray" | "red";
-}) {
-  return (
-    <div className="bg-white/60 rounded-lg px-3 py-2">
-      <div
-        className={`text-xl font-semibold tabular-nums ${tone === "red" ? "text-state-red" : "text-gray-900"}`}
-      >
-        {value}
-      </div>
-      <div className="text-[11px] text-gray-500 mt-0.5">{label}</div>
-    </div>
   );
 }
 

@@ -100,8 +100,9 @@ export default function LeadsPage() {
           <option value="PROPOSAL_SENT">נשלחה הצעה</option>
           <option value="BOOKING_PENDING">ממתין לאישור תור</option>
           <option value="BOOKED">פגישה מאושרת</option>
-          <option value="WON">נסגרה עסקה</option>
-          <option value="LOST">סגור ללא עסקה</option>
+          {/* WON/LOST/ARCHIVED הוסרו: לידים סגורים בטאב הארכיון בלבד
+              לפי §12.12. שמירתם כאופציות הייתה מציגה "לא נמצאו תוצאות"
+              מבלבל (ה-backend ב-/leads ממילא חוסם). */}
         </select>
       </div>
 

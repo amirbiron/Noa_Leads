@@ -104,10 +104,17 @@
 - **מקור:** `backend/app/config.py:93`
 
 ### `BACKEND_URL`
-- **סטטוס:** **חובה אם משתמשים ב-Google Calendar sync.**
+- **סטטוס:** **חובה בפרודקשן — incident-grade.** הגדר תמיד, גם אם
+  הלקוח לא מתחבר ל-Google Calendar ביום הראשון. ברגע שמחברים, בלי
+  ה-var האינטגרציה תישבר אחרי 7 ימים בשקט.
 - **תיאור:** כתובת ציבורית של ה-backend (HTTPS). נדרשת לרישום Google
-  Calendar watch channels (Google שולח אליו push notifications). אם
-  לא מוגדר → watch channel לא נוצר ו-sync הפוך כבוי.
+  Calendar watch channels (Google שולח push notifications ל-
+  `<BACKEND_URL>/webhooks/google-calendar`). cron `renew_calendar_watch`
+  מחדש את ה-channel יומית; אם `BACKEND_URL` לא מוגדר → ה-cron
+  מדלג בשקט, ה-watch הקיים פג תוקף תוך ~7 ימים → sync הפוך
+  (Google → DB) נשבר ללא error הנראה למשתמש.
+- **incident report:** קרה בפרודקשן — sync הפסיק לעבוד בשבוע השני,
+  לקח זמן לאתר כי אין error log קולני.
 - **ערך לדוגמה:** `https://noa-leads-backend.onrender.com`
 - **Default:** `None`
 - **מקור:** `backend/app/config.py:99`
@@ -344,6 +351,28 @@
 - **ערך לדוגמה:** `https://noa-leads-backend.onrender.com`
 - **Default:** `http://localhost:8000`
 - **מקור:** `frontend/lib/api.ts:45`, `frontend/.env.example:2`
+
+---
+
+## 11. (?) לעתיד — לא ממומש כיום
+
+סעיף זה מתעד env vars שיתווספו כשפיצ'רים עתידיים ייכנסו למימוש.
+**אין צורך להגדיר אותם ב-deploy הנוכחי** — להוסיף רק כשהפיצ'ר נכנס לקוד.
+
+### `OPENAI_API_KEY`
+- **סטטוס:** **(?) לעתיד — לא קיים בקוד הנוכחי.**
+- **תיאור:** API key ל-OpenAI לצורך תמלול קולי (`gpt-4o-transcribe` —
+  המודל הנבחר לעברית). מתואר ב-`docs/tech-spec.md:457` ("מודל:
+  gpt-4o-transcribe (הכי מדויק לעברית)") וב-`docs/SpecV2.1.md:132`
+  בטבלת ספקים ("OpenAI Whisper (gpt-4o-transcribe) — תיעוד קולי -
+  אופציונלי").
+- **איפה משיגים:** `platform.openai.com` → API Keys.
+- **ערך לדוגמה:** `sk-proj-...`
+- **Default:** N/A — השדה לא קיים ב-`backend/app/config.py` כיום.
+- **כשנכנס למימוש:** להוסיף ל-`config.py` (Settings field
+  אופציונלי), `requirements.txt` (`openai`), `ENV-VARS-REFERENCE.md`
+  (להעביר מסעיף 11 למיקום קבוע), ו-`SETUP-CHECKLIST.md` (להעביר
+  מ-3.C ל-3.A.2 או סעיף נפרד).
 
 ---
 

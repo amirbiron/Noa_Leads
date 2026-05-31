@@ -218,6 +218,7 @@ export interface LeadCreate {
   source_detail?: string | null;
   preferred_contact?: PreferredContact;
   priority_level?: PriorityLevel;
+  is_returning_customer?: boolean;  // §7.2 — default false ב-backend
   personal_note?: string | null;
   lead_message: string;  // תוכן הפנייה — חובה בטופס הידני
 }
@@ -405,12 +406,53 @@ export interface DailySummary {
   generated_at: string;
 }
 
+// C.1/C.2 §6.8: סיכומי AI נרטיביים. ה-output הוא JSON מבני עם סקציות
+// קבועות + רשימת סקציות מושמטות (omitted_sections). לפי האפיון, סקציה
+// שהושמטה לא מוצגת ב-UI.
+
+export interface AiSummaryOutputDaily {
+  bottom_line: string;
+  today: string;
+  highlights: string[];
+  needs_attention: string[];
+  tomorrow: string | null;
+  omitted_sections: ("highlights" | "needs_attention" | "tomorrow")[];
+}
+
+export interface AiSummaryOutputWeekly {
+  bottom_line: string;
+  week_overview: string;
+  trends_vs_last_week: string | null;
+  what_worked: string[];
+  what_stuck: string[];
+  next_week_focus: string | null;
+  omitted_sections: (
+    | "trends_vs_last_week"
+    | "what_worked"
+    | "what_stuck"
+    | "next_week_focus"
+  )[];
+}
+
+export interface AiSummary {
+  id: string;
+  type: "daily" | "weekly";
+  date_range_start: string; // YYYY-MM-DD
+  date_range_end: string; // YYYY-MM-DD
+  output: AiSummaryOutputDaily | AiSummaryOutputWeekly;
+  inaccurate_count: number;
+  created_at: string;
+}
+
 export interface HomeDashboard {
   today_actions: TodayActionItem[];
   new_leads: LeadCard[];
   pending: LeadCard[];
   weekly_insights: WeeklyInsights;
   daily_summary: DailySummary | null;
+  // C.1/C.2 §6.8 — null אם ה-cron של אותו טווח עוד לא רץ או נכשל ב-AI.
+  ai_daily_summary: AiSummary | null;
+  ai_weekly_summary: AiSummary | null;
 }
 
 // תוצאת GET /dashboard/poll — delta מאז ה-poll הקודם.
