@@ -97,6 +97,7 @@ function EditableRuleCard({
   const title = FOLLOWUP_RULE_LABELS[rule.rule_key] ?? rule.rule_key;
 
   // local draft state — נטען מחדש בכל שינוי של ה-rule prop (אחרי save).
+
   const [intervalValue, setIntervalValue] = useState(String(rule.interval_value));
   const [intervalUnit, setIntervalUnit] = useState<FollowupTimeUnit>(
     rule.interval_unit,
@@ -108,6 +109,15 @@ function EditableRuleCard({
   const [repeatIntervalUnit, setRepeatIntervalUnit] = useState<FollowupTimeUnit>(
     rule.repeat_interval_unit,
   );
+
+  useEffect(() => {
+    setIntervalValue(String(rule.interval_value));
+    setIntervalUnit(rule.interval_unit);
+    setRepeatCount(String(rule.repeat_count));
+    setRepeatIntervalValue(String(rule.repeat_interval_value));
+    setRepeatIntervalUnit(rule.repeat_interval_unit);
+  }, [rule]);
+
 
   const [saving, setSaving] = useState(false);
   const [feedback, setFeedback] = useState<"saved" | "error" | null>(null);
