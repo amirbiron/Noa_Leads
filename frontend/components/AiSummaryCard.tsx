@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { CalendarRange, Sparkles, ThumbsDown } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
+import { parseSummaryText } from "@/lib/parseSummaryText";
 import { useLocalStorageState } from "@/lib/useLocalStorage";
 import type {
   AiSummary,
@@ -93,9 +94,10 @@ export function AiSummaryCard({
             )}
           </div>
 
-          {/* bottom_line (תמיד) — headline מודגש */}
+          {/* bottom_line (תמיד) — headline מודגש. parseSummaryText מהפך
+              markers `[[lead:<uuid>|<text>]]` ל-<Link> ל-/leads/<uuid>. */}
           <div className="text-sm font-semibold text-gray-900 mt-1.5">
-            {summary.output.bottom_line}
+            {parseSummaryText(summary.output.bottom_line)}
           </div>
 
           {!isCollapsed && (
@@ -172,7 +174,7 @@ function Section({ label, children }: { label: string; children: string }) {
       <div className="text-[11px] uppercase tracking-wide text-gray-500 mb-1">
         {label}
       </div>
-      <div className="leading-relaxed">{children}</div>
+      <div className="leading-relaxed">{parseSummaryText(children)}</div>
     </div>
   );
 }
@@ -185,7 +187,7 @@ function ListSection({ label, items }: { label: string; items: string[] }) {
       </div>
       <ul className="space-y-1 list-disc ps-5 leading-relaxed">
         {items.map((item, i) => (
-          <li key={i}>{item}</li>
+          <li key={i}>{parseSummaryText(item)}</li>
         ))}
       </ul>
     </div>
