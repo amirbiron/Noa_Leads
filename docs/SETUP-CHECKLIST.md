@@ -55,8 +55,17 @@
 
 > רק חובה. לכל variable + שינויים אופציונליים → ראה
 > [`ENV-VARS-REFERENCE.md`](ENV-VARS-REFERENCE.md).
+>
+> **⚠ קריטי:** ה-env vars מחולקים בין **שני services נפרדים ב-Render**
+> (`noa-leads-backend` ו-`noa-leads-frontend`). הגדרת הכל ב-service אחד
+> בלבד היא תקלה נפוצה שתוצאתה — חצי מהמערכת לא עובדת. סעיף 3.A הוא
+> לבeckend, סעיף 3.B הוא ל-frontend.
 
-### 3.1 ליבה (חובה אבסולוטית — בלי זה השרת לא מתפקד)
+### 3.A — Backend (`noa-leads-backend` service)
+
+ב-Render UI: Dashboard → `noa-leads-backend` → Environment.
+
+#### 3.A.1 ליבה (חובה אבסולוטית — בלי זה השרת לא מתפקד)
 
 - [ ] `DATABASE_URL` — auto-provided ע"י Render (`fromDatabase` ב-render.yaml).
   לוודא רק שה-binding ל-`noa-leads-db` תקין.
@@ -65,18 +74,24 @@
 - [ ] `CORS_ORIGINS` — URL של ה-frontend (Section 2). דוגמה:
   `https://noa-leads-frontend-<hash>.onrender.com`
 - [ ] `FRONTEND_URL` — אותו URL של ה-frontend.
-- [ ] `BACKEND_URL` — URL של ה-backend (Section 2). דוגמה:
-  `https://noa-leads-backend-<hash>.onrender.com`
-- [ ] `NEXT_PUBLIC_API_BASE_URL` (ב-frontend service) — URL של ה-backend.
+- [ ] `BACKEND_URL` — URL של ה-backend עצמו (Section 2). דוגמה:
+  `https://noa-leads-backend-<hash>.onrender.com`.
+  **⚠ חובה גם אם נראה אופציונלי במבט ראשון — incident-grade, קרה
+  בפרודקשן.** בלעדיו `renew_calendar_watch` cron נכשל (משתמש ב-
+  `BACKEND_URL/webhooks/google-calendar` לרישום watch channels);
+  ה-watch channel של Google Calendar פג תוקף תוך ~7 ימים →
+  סנכרון הפוך של היומן (Google → DB) נשבר **בשקט**, ללא error
+  הנראה למשתמש. הגדר תמיד, גם אם הלקוח לא מתחבר ל-Calendar
+  ביום הראשון.
 
-### 3.2 AI (חובה אם הלקוח מפעיל סיכומים יומיים/שבועיים או Gmail intake)
+#### 3.A.2 AI (חובה אם הלקוח מפעיל סיכומים יומיים/שבועיים או Gmail intake)
 
 - [ ] `ANTHROPIC_API_KEY` — מ-`console.anthropic.com` → Settings → API Keys.
 - [ ] `SYSTEM_START_DATE` — תאריך go-live של הלקוח, פורמט ISO
   (`YYYY-MM-DD`). דוגמה: `2026-09-01`. **חשוב** — בלי לעדכן ה-default
   הוא תאריך migration ישן (2026-05-23) שיתן אנליטיקות שגויות.
 
-### 3.3 Google integration (חובה אם הלקוח מפעיל Calendar / Gmail intake)
+#### 3.A.3 Google integration (חובה אם הלקוח מפעיל Calendar / Gmail intake)
 
 - [ ] `GOOGLE_CLIENT_ID` — מ-Google Cloud Console (ראה Section 4.1).
 - [ ] `GOOGLE_CLIENT_SECRET` — אותו מקום.
@@ -91,10 +106,36 @@
   פלט: 44 תווים base64. **חובה** ייצור ידני — Render `generateValue` לא יוצר
   ערך תקף ל-Fernet (האלגוריתם דורש פורמט ספציפי).
 
-### 3.4 אופציונלי לפי צורך
+#### 3.A.4 אופציונלי לפי צורך
 
 - [ ] `TELEGRAM_BOT_TOKEN` — אם הלקוח רוצה פוש על ליד חדש. ראה Section 4.3.
 - [ ] `TELEGRAM_OWNER_CHAT_ID` — אם `TELEGRAM_BOT_TOKEN` מוגדר.
+
+### 3.B — Frontend (`noa-leads-frontend` service)
+
+> **⚠ הגדר ב-service של ה-frontend בנפרד — לא ב-backend.**
+> ב-Render UI: Dashboard → `noa-leads-frontend` → Environment.
+> אם תגדיר רק ב-backend, ה-frontend לא יוכל לפנות ל-API.
+
+- [ ] `NEXT_PUBLIC_API_BASE_URL` — URL ציבורי של ה-backend (Section 2).
+  - דוגמה: `https://noa-leads-backend-<hash>.onrender.com`
+  - **חובה בפרודקשן.** ה-default ב-`lib/api.ts` הוא `http://localhost:8000`;
+    בלי override, ה-frontend בפרודקשן ינסה לפנות ל-localhost ויקבל
+    `ERR_CONNECTION_REFUSED` על כל בקשה.
+  - הקידומת `NEXT_PUBLIC_` נדרשת כדי שה-var תיחשף ל-bundle של ה-browser
+    בזמן build. שינוי דורש redeploy של ה-frontend (לא רק restart).
+
+### 3.C — לעתיד (?) — לא ממומש כיום
+
+> סעיף זה משמש כתזכורת ל-vars שיתווספו כשפיצ'רים עתידיים ייכנסו
+> למימוש. **אין צורך להגדיר אותם עכשיו.**
+
+- [ ] **(?)** `OPENAI_API_KEY` — לתמלול קולי (`gpt-4o-transcribe` לפי
+  `docs/tech-spec.md:457` ו-`docs/SpecV2.1.md:132`). הפיצ'ר מתועד
+  ב-spec כ"תיעוד קולי - אופציונלי" אך **לא קיים בקוד כיום**. כשהתמלול
+  ייכנס, יידרשו: הוספת השדה ל-`backend/app/config.py`, הוספת `openai`
+  ל-`requirements.txt`, והזנה ב-Render UI עם הערך מ-`platform.openai.com`
+  → API Keys.
 
 ---
 

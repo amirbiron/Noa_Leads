@@ -73,7 +73,8 @@ export default function HomePage() {
     shouldShowDailySummary(data.ai_daily_summary.date_range_end);
   const canToggleDaily = hasStatsInWindow && hasAiDailyInWindow;
   const hasWeeklyInWindow =
-    !!data?.ai_weekly_summary && shouldShowAiWeeklySummary();
+    !!data?.ai_weekly_summary &&
+    shouldShowAiWeeklySummary(data.ai_weekly_summary.date_range_end);
 
   // הבועה מציגה תמיד **לאן הלחיצה תוביל** (לא איפה אתה עכשיו).
   const dailyTogglePill = canToggleDaily ? (

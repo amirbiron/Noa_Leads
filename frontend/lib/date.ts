@@ -37,6 +37,17 @@ export function plusOneIsoDate(iso: string): string {
 }
 
 /**
+ * "YYYY-MM-DD" → "YYYY-MM-(DD - N)" — UTC arithmetic, מטפל ב-rollover.
+ * משמש לחישוב "השבת האחרונה בישראל" (1-2 ימים אחורה ב-
+ * `shouldShowAiWeeklySummary`).
+ */
+export function isoMinusDays(iso: string, days: number): string {
+  const [y, m, d] = iso.split("-").map(Number);
+  const target = new Date(Date.UTC(y, m - 1, d - days));
+  return target.toISOString().slice(0, 10);
+}
+
+/**
  * השעה הנוכחית (0-23) בשעון ישראל. ל-gating של תצוגה תלוית-שעה
  * (למשל הסתרת בועת הסיכום היומי אחרי 07:00 — §12.4).
  */
@@ -73,13 +84,30 @@ export function israelWeekday(d: Date = new Date()): number {
 /**
  * §6.8 — חלון תצוגה לסיכום השבועי: ראשון 08:00 → שני 07:00 (כ-23 שעות).
  * נקרא ב-`/` כדי להחליט אם להציג את כרטיס ה-`ai_weekly_summary`.
+ *
+ * cursor bugbot: בנוסף לחלון הזמן, מאמת ש-`summaryWeekEnd` (השבת של
+ * השבוע שהסיכום מכסה, מתוך `date_range_end` של ה-row) תואם לשבת
+ * האחרונה בישראל. אחרת — סיכום ישן (cron דילג בחג לפי §6.7, או נכשל)
+ * יוצג כאילו הוא של השבוע. אותו דפוס בדיוק כמו `shouldShowDailySummary`
+ * שמאמת את תאריך הסיכום היומי.
  */
-export function shouldShowAiWeeklySummary(now: Date = new Date()): boolean {
+export function shouldShowAiWeeklySummary(
+  summaryWeekEnd: string,
+  now: Date = new Date(),
+): boolean {
   const day = israelWeekday(now);
   const hour = israelHour(now);
-  if (day === 0 && hour >= 8) return true; // ראשון אחרי 08:00
-  if (day === 1 && hour < 7) return true; // שני לפני 07:00
-  return false;
+  const inWindow =
+    (day === 0 && hour >= 8) || (day === 1 && hour < 7);
+  if (!inWindow) return false;
+
+  // "השבת האחרונה בישראל" — Sun→1 day back, Mon→2 days back.
+  // (day + 1) % 7: Sun(0)→1, Mon(1)→2, ..., Sat(6)→0. הפונקציה רק
+  // נקראת בחלון Sun/Mon, אז מספיק לטפל בשני המקרים האלה — אבל
+  // הנוסחה הכללית עובדת בכל יום, ל-defense-in-depth.
+  const daysBack = (day + 1) % 7;
+  const expectedWeekEnd = isoMinusDays(toIsraelISODate(now), daysBack);
+  return summaryWeekEnd === expectedWeekEnd;
 }
 
 /**
