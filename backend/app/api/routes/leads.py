@@ -4,9 +4,14 @@ Leads routes — CRUD, actions, close, reopen, timeline.
 
 from uuid import UUID
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, File, Query, UploadFile
 
 from app.api.deps import CurrentUser, DbSession
+from app.core.exceptions import (
+    ExternalServiceError,
+    ServiceUnavailableError,
+    ValidationError,
+)
 from app.schemas.activity import ActionRequest, ActivityRead
 from app.schemas.common import PaginatedResponse
 from app.schemas.email_message import EmailMessageRead
@@ -19,9 +24,16 @@ from app.schemas.lead import (
     LeadTransferRequest,
     LeadUpdate,
 )
+from app.schemas.transcription import TranscriptionResponse
 from app.services import leads as leads_service
 from app.services import lead_actions as actions_service
 from app.services import quick_action_chips as chips_service
+from app.services.transcription import (
+    MAX_AUDIO_BYTES,
+    TranscriptionError,
+    TranscriptionUnavailable,
+    transcribe_uploaded,
+)
 
 router = APIRouter(prefix="/leads", tags=["leads"])
 
@@ -187,3 +199,53 @@ async def read_dormant_suggestion(
         generated_at=meta.get("ai_generated_at"),
         model_used=meta.get("model_used"),
     )
+
+
+@router.post(
+    "/{lead_id}/transcribe-note", response_model=TranscriptionResponse
+)
+async def transcribe_note(
+    lead_id: UUID,
+    db: DbSession,
+    user: CurrentUser,
+    audio_file: UploadFile = File(...),
+) -> TranscriptionResponse:
+    """תיעוד קולי (§13.3) — תמלול אודיו לטקסט עברי בהקשר של הליד.
+
+    **לא נוגע ב-DB:** מחזיר רק את הטקסט. ה-UI מציג אותו ל-נועה ב-textarea,
+    היא יכולה לערוך ולשמור דרך PATCH /leads/{id} הרגיל. בכוונה — תמלול
+    עברי לא מושלם, מצריך בדיקה לפני התחייבות.
+
+    **פרטיות:** קובץ האודיו לא נשמר ב-DB ולא ב-FS קבוע — temp file
+    נמחק מיד אחרי קריאה ל-OpenAI.
+
+    Errors:
+    - 422: mime לא נתמך / קובץ ריק / גדול מ-10MB.
+    - 502: כשל ב-OpenAI / רשת.
+    - 503: OPENAI_API_KEY לא מוגדר ב-server.
+    """
+    # ולידציית קיום ליד לפני קריאת bytes — נכשל מהר אם 404.
+    lead = await leads_service.get_lead_or_404(db, lead_id)
+
+    # streaming read עם size guard. UploadFile.read() מעמיס לזיכרון —
+    # 10MB סביר לאיפון אבל לא רוצים לקרוא יותר אם משהו תקול.
+    audio_bytes = await audio_file.read(MAX_AUDIO_BYTES + 1)
+    if len(audio_bytes) > MAX_AUDIO_BYTES:
+        raise ValidationError("הקובץ גדול מדי. הקלטה מקסימלית ~5 דקות.")
+
+    try:
+        text = await transcribe_uploaded(
+            audio_bytes, audio_file.content_type, lead
+        )
+    except TranscriptionUnavailable as exc:
+        # 503 — OPENAI_API_KEY חסר. ה-UI יכול להציג "תיעוד קולי לא זמין".
+        raise ServiceUnavailableError(
+            "שירות התמלול לא זמין כרגע."
+        ) from exc
+    except TranscriptionError as exc:
+        # 502 — נכשל ב-API / רשת. ה-UI יציע ניסיון חוזר / הקלדה ידנית.
+        raise ExternalServiceError(
+            "התמלול נכשל. נסי שוב או הקלידי ידנית."
+        ) from exc
+
+    return TranscriptionResponse(text=text)

@@ -14,11 +14,13 @@ delete=True ב-endpoint).
 """
 
 import logging
+import tempfile
 from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from app.config import get_settings
+from app.core.exceptions import ValidationError
 from app.models.lead import Lead
 from app.utils.labels import SERVICE_CATEGORY_HE, SERVICE_SUBTYPE_HE
 
@@ -33,6 +35,21 @@ _USD_PER_SECOND = 0.0001
 
 # placeholders של שם שאינם שמות אמיתיים — לא נכניס ל-prompt context.
 _NAME_PLACEHOLDERS = {"ללא שם", "ללא"}
+
+# Content-Type allowed list (base; codec params מותרים — אנו מתעלמים
+# מהם בהשוואה). מבוסס על MediaRecorder יעדים נפוצים:
+# - audio/webm — Chrome/Firefox (opus).
+# - audio/mp4 — iOS Safari (critical, נועה באייפון).
+# - audio/mpeg — mp3 (פחות נפוץ אבל gpt-4o-transcribe תומך).
+# - audio/wav — fallback אוניברסלי.
+# - audio/ogg — Firefox לעתים.
+ALLOWED_AUDIO_MIME = frozenset(
+    {"audio/webm", "audio/mp4", "audio/mpeg", "audio/wav", "audio/ogg"}
+)
+
+# 10MB ~= 5 דקות אודיו ב-webm/opus voice. מקסימום הקלטה סבירה לתמלול
+# הערה אישית; מעל זה — סביר שמשהו תקול ב-recording (loop).
+MAX_AUDIO_BYTES = 10 * 1024 * 1024
 
 
 class TranscriptionError(Exception):
@@ -155,3 +172,55 @@ async def transcribe_audio(audio_path: Path, lead: Lead) -> str:
     )
 
     return text
+
+
+def _normalize_mime(content_type: str | None) -> str:
+    """Content-Type עשוי לבוא עם codec params — `audio/webm;codecs=opus`.
+    חותך את ה-params ומחזיר את ה-base type ב-lowercase."""
+    if not content_type:
+        return ""
+    return content_type.lower().split(";")[0].strip()
+
+
+async def transcribe_uploaded(
+    audio_bytes: bytes, content_type: str | None, lead: Lead
+) -> str:
+    """Validation + temp file + transcribe_audio. הופרד מ-endpoint כדי
+    שניתן יהיה לבדוק את הזרימה (validation + error mapping) בלי FastAPI
+    TestClient.
+
+    Args:
+        audio_bytes: raw bytes של הקובץ. ה-endpoint כבר קרא אותם מ-
+            UploadFile (streaming עד גבול MAX_AUDIO_BYTES).
+        content_type: ה-MIME מה-request. עשוי להיות None אם הדפדפן
+            לא שלח — נחסם כ-422.
+        lead: ה-Lead כפי שנשלף ב-endpoint (לבניית prompt).
+
+    Returns:
+        טקסט מתומלל (אותו ערך כמו `transcribe_audio`).
+
+    Raises:
+        ValidationError: mime לא נתמך / קובץ ריק / גדול מ-MAX_AUDIO_BYTES.
+        TranscriptionUnavailable: OPENAI_API_KEY לא מוגדר (propagated).
+        TranscriptionError: כשל OpenAI / רשת (propagated).
+    """
+    mime = _normalize_mime(content_type)
+    if mime not in ALLOWED_AUDIO_MIME:
+        # לא חושפים את ה-mime המקורי ב-response כדי לא להחזיר input
+        # שעלול להיות מתקפה (כלל 3) — רק רשימת מותרים בכלליות.
+        raise ValidationError(
+            "סוג קובץ אודיו לא נתמך. השתמשי בהקלטה מהדפדפן."
+        )
+    if not audio_bytes:
+        raise ValidationError("הקובץ ריק — לא הוקלט שום דבר.")
+    if len(audio_bytes) > MAX_AUDIO_BYTES:
+        raise ValidationError("הקובץ גדול מדי. הקלטה מקסימלית ~5 דקות.")
+
+    # suffix תקין לכל types המותרים — חשוב ל-OpenAI שמזהה codec מה-extension.
+    suffix = "." + mime.split("/")[-1]
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=True) as tmp:
+        tmp.write(audio_bytes)
+        tmp.flush()
+        # transcribe_audio סוגר את הקובץ פעם נוספת (open("rb")) — זה
+        # OK ב-Linux גם כש-NamedTemporaryFile עדיין מחזיק handle.
+        return await transcribe_audio(Path(tmp.name), lead)
