@@ -84,9 +84,17 @@
   הנראה למשתמש. הגדר תמיד, גם אם הלקוח לא מתחבר ל-Calendar
   ביום הראשון.
 
-#### 3.A.2 AI (חובה אם הלקוח מפעיל סיכומים יומיים/שבועיים או Gmail intake)
+#### 3.A.2 AI (חובה אם הלקוח מפעיל סיכומים/Gmail intake/תמלול קולי)
 
-- [ ] `ANTHROPIC_API_KEY` — מ-`console.anthropic.com` → Settings → API Keys.
+המערכת משתמשת ב-**שני ספקי AI**: Anthropic לכל הניסוח/סיווג, OpenAI
+רק לתמלול קולי (§13.3). שני מפתחות נפרדים.
+
+- [ ] `ANTHROPIC_API_KEY` — מ-`console.anthropic.com` → Settings → API Keys
+  (Claude — סיכומים יומיים/שבועיים, סיווג מיילים, ניסוח, הצעות לרדומים).
+- [ ] `OPENAI_API_KEY` — מ-`platform.openai.com` → API Keys → Create new
+  secret key. **ספק AI שני, נפרד מ-Anthropic** — בלעדי לתמלול קולי
+  (gpt-4o-transcribe, §13.3). אם לא מוגדר → כפתור התמלול ב-UI מחזיר
+  שגיאה ידידותית; שאר ה-app עובד תקין.
 - [ ] `SYSTEM_START_DATE` — תאריך go-live של הלקוח, פורמט ISO
   (`YYYY-MM-DD`). דוגמה: `2026-09-01`. **חשוב** — בלי לעדכן ה-default
   הוא תאריך migration ישן (2026-05-23) שיתן אנליטיקות שגויות.
@@ -129,13 +137,8 @@
 
 > סעיף זה משמש כתזכורת ל-vars שיתווספו כשפיצ'רים עתידיים ייכנסו
 > למימוש. **אין צורך להגדיר אותם עכשיו.**
-
-- [ ] **(?)** `OPENAI_API_KEY` — לתמלול קולי (`gpt-4o-transcribe` לפי
-  `docs/tech-spec.md:457` ו-`docs/SpecV2.1.md:132`). הפיצ'ר מתועד
-  ב-spec כ"תיעוד קולי - אופציונלי" אך **לא קיים בקוד כיום**. כשהתמלול
-  ייכנס, יידרשו: הוספת השדה ל-`backend/app/config.py`, הוספת `openai`
-  ל-`requirements.txt`, והזנה ב-Render UI עם הערך מ-`platform.openai.com`
-  → API Keys.
+>
+> (כרגע ריק — `OPENAI_API_KEY` הועבר ל-3.A.2 כשהתמלול הקולי נכנס למימוש.)
 
 ---
 

@@ -297,6 +297,34 @@
 
 ---
 
+## 7.5 OpenAI (תמלול קולי — ספק AI שני)
+
+המערכת משתמשת ב-**שני ספקי AI נפרדים**: Anthropic (כל הניסוח/סיווג —
+סעיף 7) ו-OpenAI (תמלול קולי בלבד, §13.3). כל ספק עם מפתח נפרד, billing
+נפרד, ולוג עלות נפרד.
+
+### `OPENAI_API_KEY`
+- **סטטוס:** חובה אם הלקוח מפעיל תמלול קולי (§13.3).
+- **תיאור:** API key ל-OpenAI לתמלול קולי דרך `gpt-4o-transcribe`
+  (המודל הכי מדויק לעברית). **ספק AI שני — נפרד מ-Anthropic, רק לתמלול.**
+- **איפה משיגים:** `platform.openai.com` → API Keys → Create new
+  secret key. שמור בצד את המחרוזת — היא לא תוצג שוב.
+- **ערך לדוגמה:** `sk-proj-...`
+- **Default:** `None` — בלעדיו ה-endpoint `/leads/{id}/transcribe-note`
+  יחזיר 503 ו-UI יציג הודעת שגיאה. שאר ה-app עובד תקין (לא קריטי
+  למצב running).
+- **עלות:** $0.006/דקה (≈ $0.002 לתמלול ממוצע של 20 שניות). מאוד נמוך
+  לעומת קריאות Claude.
+- **מעקב עלות:** לוג per-call ב-`backend/app/services/transcription.py`
+  עם `lead_id`, `duration_sec`, `cost_usd`. **נפרד ממעקב Anthropic**
+  ב-`services/ai.py` — `grep "transcription usage:"` מבודד את עלויות
+  OpenAI בלבד.
+- **פרטיות:** קובץ האודיו נמחק מיד אחרי תמלול. לא נשמר ב-R2/DB/FS קבוע.
+  רק הטקסט המתומלל נכנס ל-`personal_note` של הליד.
+- **מקור:** `backend/app/config.py:43`
+
+---
+
 ## 8. Telegram
 
 ### `TELEGRAM_BOT_TOKEN`
@@ -359,20 +387,7 @@
 סעיף זה מתעד env vars שיתווספו כשפיצ'רים עתידיים ייכנסו למימוש.
 **אין צורך להגדיר אותם ב-deploy הנוכחי** — להוסיף רק כשהפיצ'ר נכנס לקוד.
 
-### `OPENAI_API_KEY`
-- **סטטוס:** **(?) לעתיד — לא קיים בקוד הנוכחי.**
-- **תיאור:** API key ל-OpenAI לצורך תמלול קולי (`gpt-4o-transcribe` —
-  המודל הנבחר לעברית). מתואר ב-`docs/tech-spec.md:457` ("מודל:
-  gpt-4o-transcribe (הכי מדויק לעברית)") וב-`docs/SpecV2.1.md:132`
-  בטבלת ספקים ("OpenAI Whisper (gpt-4o-transcribe) — תיעוד קולי -
-  אופציונלי").
-- **איפה משיגים:** `platform.openai.com` → API Keys.
-- **ערך לדוגמה:** `sk-proj-...`
-- **Default:** N/A — השדה לא קיים ב-`backend/app/config.py` כיום.
-- **כשנכנס למימוש:** להוסיף ל-`config.py` (Settings field
-  אופציונלי), `requirements.txt` (`openai`), `ENV-VARS-REFERENCE.md`
-  (להעביר מסעיף 11 למיקום קבוע), ו-`SETUP-CHECKLIST.md` (להעביר
-  מ-3.C ל-3.A.2 או סעיף נפרד).
+_(כרגע ריק — `OPENAI_API_KEY` הועבר לסעיף 7.5 כשהתמלול הקולי נכנס למימוש.)_
 
 ---
 
