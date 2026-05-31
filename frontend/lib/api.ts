@@ -64,7 +64,11 @@ async function fetcher<T>(path: string, opts: FetcherOpts = {}): Promise<T> {
   const { body, retryAuth = true, ...rest } = opts;
   const headers = new Headers(rest.headers);
   headers.set("Accept", "application/json");
-  if (body !== undefined) headers.set("Content-Type", "application/json");
+  // FormData (multipart/form-data) — לא קובעים Content-Type ידנית כי
+  // הדפדפן חייב להגדיר אותו עם boundary אוטומטי. JSON — קובעים.
+  const isFormData =
+    typeof FormData !== "undefined" && body instanceof FormData;
+  if (body !== undefined && !isFormData) headers.set("Content-Type", "application/json");
 
   const token = getAccessToken();
   if (token) headers.set("Authorization", `Bearer ${token}`);
@@ -72,7 +76,12 @@ async function fetcher<T>(path: string, opts: FetcherOpts = {}): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     ...rest,
     headers,
-    body: body !== undefined ? JSON.stringify(body) : undefined,
+    body:
+      body === undefined
+        ? undefined
+        : isFormData
+          ? (body as FormData)
+          : JSON.stringify(body),
     // אין credentials כי אנחנו ב-cross-origin (subdomains שונים ב-Render).
     // auth ב-Bearer header, OAuth state ב-URL (לא cookies) — ראה
     // app/services/google_calendar.py:encode_oauth_state.
@@ -202,6 +211,20 @@ export const api = {
 
   updateLead: (id: string, payload: Partial<Lead>) =>
     fetcher<Lead>(`/leads/${id}`, { method: "PATCH", body: payload }),
+
+  // תמלול קולי (§13.3) — שולח blob אודיו, מקבל טקסט עברי. ה-endpoint
+  // לא כותב ל-DB; ה-UI שולח את הטקסט ב-updateLead הרגיל אם נועה
+  // מאשרת. שם השדה ב-FormData חייב להיות "audio_file" כדי לתאום ל-
+  // FastAPI UploadFile parameter name.
+  transcribeNote: (leadId: string, audioBlob: Blob, mimeType: string) => {
+    const form = new FormData();
+    const ext = mimeType.split("/")[1]?.split(";")[0] ?? "webm";
+    form.append("audio_file", audioBlob, `recording.${ext}`);
+    return fetcher<{ text: string }>(`/leads/${leadId}/transcribe-note`, {
+      method: "POST",
+      body: form,
+    });
+  },
 
   getTimeline: (id: string) =>
     fetcher<Activity[]>(`/leads/${id}/timeline`),

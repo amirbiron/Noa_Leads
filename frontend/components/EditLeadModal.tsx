@@ -16,6 +16,7 @@ import type {
   PriorityLevel,
   ServiceCategory,
 } from "@/lib/types";
+import { VoiceRecorderButton } from "./VoiceRecorderButton";
 
 // עריכת שדות אופציונליים של ליד אחרי יצירה. ה-NewLeadModal המורחב כבר
 // תומך באותם שדות בעת יצירה (כפתור "הוסף פרטים נוספים"); כאן עורכים
@@ -253,6 +254,20 @@ export function EditLeadModal({ lead, open, onClose, onSaved }: Props) {
               placeholder="פרט שכדאי לזכור — שם בן הזוג, העדפה, וכו'"
               className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-gray-900 focus:outline-none"
             />
+            {/* תיעוד קולי (§13.3) — appen, לא דורס. נועה רואה את הטקסט
+                ב-textarea ויכולה לערוך לפני שמירה. אם MediaRecorder לא
+                נתמך (iOS Safari < 14.5), הכפתור מסתיר את עצמו. */}
+            <div className="mt-2">
+              <VoiceRecorderButton
+                leadId={lead.id}
+                disabled={busy}
+                onTranscribed={(text) =>
+                  setPersonalNote((prev) =>
+                    prev.trim() ? `${prev.trimEnd()}\n${text}` : text,
+                  )
+                }
+              />
+            </div>
           </Field>
 
           {error && (
