@@ -154,18 +154,31 @@ async def list_leads(
 ) -> tuple[list[Lead], int]:
     """מחזיר (items, total).
 
-    closed=True → רק לידים סגורים (WON/LOST/ARCHIVED) ממוינים לפי closed_at
-    יורד (תצוגת הארכיון). אחרת המיון הרגיל לפי updated_at יורד.
+    `closed`:
+    - **True** → רק לידים סגורים (WON/LOST/ARCHIVED), ממוינים לפי
+      `closed_at` יורד. תצוגת טאב הארכיון (§12.12).
+    - **None / False** → רק לידים **פתוחים**. לידים סגורים לעולם לא
+      מופיעים ברשימה הראשית (§12.12 — "סגורים בארכיון בלבד"). cursor
+      bugbot: הגרסה הישנה `if closed:` החזירה הכל כש-closed=None וגרמה
+      ל-WON/LOST/ARCHIVED להיחשף ב-/leads.
+
+    סינון לפי `status` מופעל בנפרד מעל ה-default — אם user שולח
+    `status=WON` ב-main list, התוצאה ריקה (closed תמיד נחסם).
     """
     from sqlalchemy import or_
 
     base = select(Lead)
     if status:
         base = base.where(Lead.status == status)
-    if closed:
+    if closed is True:
         # טאב הארכיון — שלושת הסטטוסים הסגורים יחד (status יחיד לא מספיק).
         base = base.where(
             Lead.status.in_([s.value for s in CLOSED_LEAD_STATUSES])
+        )
+    else:
+        # רשימה ראשית — closed=None ו-False כאחד מוציאים סגורים (§12.12).
+        base = base.where(
+            Lead.status.notin_([s.value for s in CLOSED_LEAD_STATUSES])
         )
     if waiting_on:
         base = base.where(Lead.waiting_on == waiting_on)
