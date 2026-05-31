@@ -14,16 +14,22 @@ delete=True ב-endpoint).
 """
 
 import logging
+import os
+import tempfile
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 from app.config import get_settings
-from app.models.lead import Lead
+from app.core.exceptions import ValidationError
 from app.utils.labels import SERVICE_CATEGORY_HE, SERVICE_SUBTYPE_HE
 
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
+
+    from app.models.lead import Lead
 
 logger = logging.getLogger("services.transcription")
 
@@ -34,6 +40,21 @@ _USD_PER_SECOND = 0.0001
 # placeholders של שם שאינם שמות אמיתיים — לא נכניס ל-prompt context.
 _NAME_PLACEHOLDERS = {"ללא שם", "ללא"}
 
+# Content-Type allowed list (base; codec params מותרים — אנו מתעלמים
+# מהם בהשוואה). מבוסס על MediaRecorder יעדים נפוצים:
+# - audio/webm — Chrome/Firefox (opus).
+# - audio/mp4 — iOS Safari (critical, נועה באייפון).
+# - audio/mpeg — mp3 (פחות נפוץ אבל gpt-4o-transcribe תומך).
+# - audio/wav — fallback אוניברסלי.
+# - audio/ogg — Firefox לעתים.
+ALLOWED_AUDIO_MIME = frozenset(
+    {"audio/webm", "audio/mp4", "audio/mpeg", "audio/wav", "audio/ogg"}
+)
+
+# 10MB ~= 5 דקות אודיו ב-webm/opus voice. מקסימום הקלטה סבירה לתמלול
+# הערה אישית; מעל זה — סביר שמשהו תקול ב-recording (loop).
+MAX_AUDIO_BYTES = 10 * 1024 * 1024
+
 
 class TranscriptionError(Exception):
     """כשל בתמלול. caller יחזיר 502 ויודיע למשתמש 'נסי שוב או הקלידי'."""
@@ -41,6 +62,33 @@ class TranscriptionError(Exception):
 
 class TranscriptionUnavailable(TranscriptionError):
     """OPENAI_API_KEY לא מוגדר. caller יחזיר 503 (פיצ'ר לא זמין)."""
+
+
+@dataclass(frozen=True)
+class LeadTranscriptionContext:
+    """Snapshot של שדות Lead שנחוצים לתמלול. נקרא פעם אחת ב-endpoint
+    מ-`from_lead()`, מאפשר ל-endpoint לסגור את ה-DB session לפני
+    הקריאה הארוכה ל-OpenAI (5-30 שניות) — אחרת ה-connection מ-pool
+    נשאר תפוס בלי צורך, ותחת העלאות במקביל ה-pool הקטן (pool_size=5)
+    מתיש את עצמו.
+
+    סיבה משנית: detached ORM access אחרי close הוא fragile (DetachedInstance);
+    snapshot עוקף את הסיכון. שדות frozen — שלא נטעה ונכתוב חזרה.
+    """
+
+    id: UUID
+    full_name: str | None
+    service_category: str | None
+    service_subtype: str | None
+
+    @classmethod
+    def from_lead(cls, lead: "Lead") -> "LeadTranscriptionContext":
+        return cls(
+            id=lead.id,
+            full_name=lead.full_name,
+            service_category=lead.service_category,
+            service_subtype=lead.service_subtype,
+        )
 
 
 @lru_cache(maxsize=1)
@@ -57,7 +105,7 @@ def _get_openai_client() -> "AsyncOpenAI":
     return AsyncOpenAI(api_key=settings.openai_api_key)
 
 
-def build_transcription_prompt(lead: Lead) -> str:
+def build_transcription_prompt(ctx: LeadTranscriptionContext) -> str:
     """בונה prompt-context ל-gpt-4o-transcribe מנתוני הליד.
 
     המנוע מקבל שדה `prompt` ייעודי שמסייע לזהות שמות וביטויים שאחרת
@@ -68,16 +116,17 @@ def build_transcription_prompt(lead: Lead) -> str:
 
     אם כלום לא קיים → מחרוזת ריקה (יישלח prompt=None ל-API).
 
-    **אפס קריאות DB נוספות** — מקבלים את ה-Lead כפי שכבר נטען בכרטיס.
+    **אפס תלות ב-DB session** — `ctx` הוא snapshot של ערכים פרימיטיביים,
+    ניתן להעביר אחרי סגירת ה-session.
     """
     parts: list[str] = []
-    name = (lead.full_name or "").strip()
+    name = (ctx.full_name or "").strip()
     if name and name not in _NAME_PLACEHOLDERS:
         parts.append(f"שם הליד: {name}")
-    category_he = SERVICE_CATEGORY_HE.get(lead.service_category or "")
+    category_he = SERVICE_CATEGORY_HE.get(ctx.service_category or "")
     if category_he:
         parts.append(f"קטגוריה: {category_he}")
-    subtype_he = SERVICE_SUBTYPE_HE.get(lead.service_subtype or "")
+    subtype_he = SERVICE_SUBTYPE_HE.get(ctx.service_subtype or "")
     if subtype_he:
         parts.append(f"סוג שירות: {subtype_he}")
     return ". ".join(parts)
@@ -98,15 +147,17 @@ def _audio_duration_seconds(path: Path) -> float:
     return bits / bits_per_second
 
 
-async def transcribe_audio(audio_path: Path, lead: Lead) -> str:
+async def transcribe_audio(
+    audio_path: Path, ctx: LeadTranscriptionContext
+) -> str:
     """מתמלל קובץ אודיו של נועה לטקסט עברי, בהקשר של הליד.
 
     Args:
-        audio_path: קובץ זמני שה-caller יצר ויחזיק delete-on-exit.
-            אנו לא מוחקים כאן — caller responsibility (NamedTemporaryFile
-            ב-endpoint).
-        lead: ה-Lead כפי שנטען בכרטיס. משמש לבניית prompt בלבד,
-            אפס קריאות DB מצידנו.
+        audio_path: קובץ זמני שה-caller יצר. אנו לא מוחקים כאן —
+            caller responsibility (ב-`transcribe_uploaded`).
+        ctx: snapshot של ערכי הליד הנדרשים לבניית prompt. ה-endpoint
+            יוצר אותו לפני סגירת ה-DB session, כך שהקריאה הזו לא דורשת
+            connection פתוח.
 
     Returns:
         הטקסט המתומלל (str, trimmed).
@@ -121,7 +172,7 @@ async def transcribe_audio(audio_path: Path, lead: Lead) -> str:
         מבודד.
     """
     client = _get_openai_client()
-    prompt = build_transcription_prompt(lead)
+    prompt = build_transcription_prompt(ctx)
 
     try:
         with audio_path.open("rb") as audio_file:
@@ -148,10 +199,74 @@ async def transcribe_audio(audio_path: Path, lead: Lead) -> str:
     logger.info(
         "transcription usage: model=gpt-4o-transcribe lead_id=%s "
         "duration_sec=%.2f cost_usd=%.5f chars=%d",
-        lead.id,
+        ctx.id,
         duration_sec if duration_sec is not None else -1,
         cost_usd if cost_usd is not None else 0,
         len(text),
     )
 
     return text
+
+
+def _normalize_mime(content_type: str | None) -> str:
+    """Content-Type עשוי לבוא עם codec params — `audio/webm;codecs=opus`.
+    חותך את ה-params ומחזיר את ה-base type ב-lowercase."""
+    if not content_type:
+        return ""
+    return content_type.lower().split(";")[0].strip()
+
+
+async def transcribe_uploaded(
+    audio_bytes: bytes,
+    content_type: str | None,
+    ctx: LeadTranscriptionContext,
+) -> str:
+    """Validation + temp file + transcribe_audio. הופרד מ-endpoint כדי
+    שניתן יהיה לבדוק את הזרימה (validation + error mapping) בלי FastAPI
+    TestClient.
+
+    Args:
+        audio_bytes: raw bytes של הקובץ. ה-endpoint כבר קרא אותם מ-
+            UploadFile (streaming עד גבול MAX_AUDIO_BYTES).
+        content_type: ה-MIME מה-request. עשוי להיות None אם הדפדפן
+            לא שלח — נחסם כ-422.
+        ctx: snapshot של נתוני הליד (אחרי סגירת DB session ב-endpoint).
+
+    Returns:
+        טקסט מתומלל (אותו ערך כמו `transcribe_audio`).
+
+    Raises:
+        ValidationError: mime לא נתמך / קובץ ריק / גדול מ-MAX_AUDIO_BYTES.
+        TranscriptionUnavailable: OPENAI_API_KEY לא מוגדר (propagated).
+        TranscriptionError: כשל OpenAI / רשת (propagated).
+    """
+    mime = _normalize_mime(content_type)
+    if mime not in ALLOWED_AUDIO_MIME:
+        # לא חושפים את ה-mime המקורי ב-response כדי לא להחזיר input
+        # שעלול להיות מתקפה (כלל 3) — רק רשימת מותרים בכלליות.
+        raise ValidationError(
+            "סוג קובץ אודיו לא נתמך. השתמשי בהקלטה מהדפדפן."
+        )
+    if not audio_bytes:
+        raise ValidationError("הקובץ ריק — לא הוקלט שום דבר.")
+    if len(audio_bytes) > MAX_AUDIO_BYTES:
+        raise ValidationError("הקובץ גדול מדי. הקלטה מקסימלית ~5 דקות.")
+
+    # suffix תקין לכל types המותרים — חשוב ל-OpenAI שמזהה codec מה-extension.
+    suffix = "." + mime.split("/")[-1]
+    # Windows compat: `delete=True` ב-NamedTemporaryFile משאיר את ה-handle
+    # פתוח, ו-transcribe_audio שפותח את אותו path שוב נכשל ב-Windows
+    # (share mode). פתרון נייטרלי: delete=False + סגירת handle + cleanup
+    # ב-finally. עובד זהה ב-Linux/Mac/Windows.
+    tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
+    tmp_path = tmp.name
+    try:
+        tmp.write(audio_bytes)
+        tmp.flush()
+        tmp.close()  # release the handle לפני transcribe_audio.open
+        return await transcribe_audio(Path(tmp_path), ctx)
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass  # missing_ok / race

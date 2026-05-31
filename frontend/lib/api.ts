@@ -55,16 +55,41 @@ export class ApiError extends Error {
 
 interface FetcherOpts extends Omit<RequestInit, "body"> {
   body?: unknown;
+  // factory ל-body — נקרא מחדש בכל ניסיון, כולל retry אחרי 401.
+  // נחוץ ל-FormData/Blob ש-stream consume שלהם חד-פעמי: ה-fetch
+  // הראשון "אוכל" את הbody, ובלי factory ה-retry שולח בקשה ריקה.
+  // עדיפות: `bodyFactory` קודם ל-`body` אם שניהם נשלחו.
+  bodyFactory?: () => BodyInit;
   // האם לנסות refresh אם מקבלים 401 (מנוטרל בקריאה ל-/auth/refresh כדי
   // למנוע לולאה אינסופית)
   retryAuth?: boolean;
 }
 
 async function fetcher<T>(path: string, opts: FetcherOpts = {}): Promise<T> {
-  const { body, retryAuth = true, ...rest } = opts;
+  const { body, bodyFactory, retryAuth = true, ...rest } = opts;
   const headers = new Headers(rest.headers);
   headers.set("Accept", "application/json");
-  if (body !== undefined) headers.set("Content-Type", "application/json");
+
+  // קביעת ה-body לבקשה הזו. factory נקרא כאן (לא בעת בניית opts) —
+  // ה-retry מקבל את אותו opts ונקרא שוב, מה שמייצר body טרי.
+  let actualBody: BodyInit | undefined;
+  let isFormDataLike = false;
+  if (bodyFactory) {
+    actualBody = bodyFactory();
+    isFormDataLike =
+      typeof FormData !== "undefined" && actualBody instanceof FormData;
+  } else if (body !== undefined) {
+    const isFormData =
+      typeof FormData !== "undefined" && body instanceof FormData;
+    isFormDataLike = isFormData;
+    actualBody = isFormData ? (body as FormData) : JSON.stringify(body);
+  }
+
+  // FormData (multipart/form-data) — לא קובעים Content-Type ידנית כי
+  // הדפדפן חייב להגדיר אותו עם boundary אוטומטי. JSON — קובעים.
+  if (actualBody !== undefined && !isFormDataLike) {
+    headers.set("Content-Type", "application/json");
+  }
 
   const token = getAccessToken();
   if (token) headers.set("Authorization", `Bearer ${token}`);
@@ -72,7 +97,7 @@ async function fetcher<T>(path: string, opts: FetcherOpts = {}): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     ...rest,
     headers,
-    body: body !== undefined ? JSON.stringify(body) : undefined,
+    body: actualBody,
     // אין credentials כי אנחנו ב-cross-origin (subdomains שונים ב-Render).
     // auth ב-Bearer header, OAuth state ב-URL (לא cookies) — ראה
     // app/services/google_calendar.py:encode_oauth_state.
@@ -202,6 +227,35 @@ export const api = {
 
   updateLead: (id: string, payload: Partial<Lead>) =>
     fetcher<Lead>(`/leads/${id}`, { method: "PATCH", body: payload }),
+
+  // תמלול קולי (§13.3) — שולח blob אודיו, מקבל טקסט עברי. ה-endpoint
+  // לא כותב ל-DB; ה-UI שולח את הטקסט ב-updateLead הרגיל אם נועה
+  // מאשרת. שם השדה ב-FormData חייב להיות "audio_file" כדי לתאום ל-
+  // FastAPI UploadFile parameter name.
+  //
+  // `bodyFactory` (ולא `body`) — FormData הוא stream חד-פעמי. אם token
+  // פג והגיע 401, ה-fetcher יבנה FormData חדש ל-retry במקום לשלוח את
+  // הקודם שכבר consumed. ה-Blob עצמו נשאר חי בזיכרון; rebuild זול.
+  //
+  // `signal` (אופציונלי) — מאפשר ל-caller לבטל את הבקשה אם הקומפוננטה
+  // unmounts תוך כדי upload. בלי זה, ה-fetch ממשיך עד OpenAI ומכלה
+  // bytes/חיוב לחינם.
+  transcribeNote: (
+    leadId: string,
+    audioBlob: Blob,
+    mimeType: string,
+    signal?: AbortSignal,
+  ) =>
+    fetcher<{ text: string }>(`/leads/${leadId}/transcribe-note`, {
+      method: "POST",
+      signal,
+      bodyFactory: () => {
+        const form = new FormData();
+        const ext = mimeType.split("/")[1]?.split(";")[0] ?? "webm";
+        form.append("audio_file", audioBlob, `recording.${ext}`);
+        return form;
+      },
+    }),
 
   getTimeline: (id: string) =>
     fetcher<Activity[]>(`/leads/${id}/timeline`),
