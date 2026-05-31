@@ -24,14 +24,16 @@ export function useLocalStorageState<T>(
   const [value, setValue] = useState<T>(defaultValue);
 
   // hydrate אחרי mount — `window` לא קיים ב-SSR.
+
   useEffect(() => {
     try {
       const raw = window.localStorage.getItem(key);
-      if (raw !== null) setValue(JSON.parse(raw) as T);
+      setValue(raw !== null ? (JSON.parse(raw) as T) : defaultValue);
     } catch {
-      // private browsing / quota / parse error — נשאר ב-default
+      setValue(defaultValue);
     }
-  }, [key]);
+  }, [key, defaultValue]);
+
 
   const update = useCallback(
     (next: T) => {
