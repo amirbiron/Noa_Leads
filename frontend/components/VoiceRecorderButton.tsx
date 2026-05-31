@@ -285,12 +285,20 @@ export function VoiceRecorderButton({
   const Icon =
     isRecording ? Square : isStarting || isTranscribing ? Loader2 : Mic;
 
+  // ב-recording: הכפתור הוא "עצור" — לעולם לא חוסמים אותו, גם אם
+  // הטופס busy (cursor finding). אחרת submit תוך כדי הקלטה היה משאיר
+  // את ה-mic פתוח עד סיום השמירה / unmount, בלי דרך לעצור מה-UI.
+  // ב-states אחרים (idle/starting/transcribing) — `disabled` החיצוני חל.
+  const buttonDisabled = isRecording
+    ? false
+    : disabled || isStarting || isTranscribing;
+
   return (
     <div className="space-y-1.5">
       <button
         type="button"
         onClick={isRecording ? stopRecording : startRecording}
-        disabled={disabled || isStarting || isTranscribing}
+        disabled={buttonDisabled}
         className={`inline-flex items-center gap-2 rounded-lg border px-3 py-1.5 text-sm font-medium transition-colors disabled:opacity-50 ${
           isRecording
             ? "border-state-red/40 bg-state-red/10 text-state-red"
