@@ -35,6 +35,11 @@ type RecState = "idle" | "starting" | "recording" | "transcribing";
 
 type RecordingSession = {
   cancelled: boolean;
+  // idempotent guard ל-handleStop — onstop callback של MediaRecorder לא
+  // תמיד נורה (iOS Safari edge), אז stopRecording קוראת ל-handleStop
+  // ידנית כ-fallback. ה-flag מבטיח ש-handleStop ירוץ בדיוק פעם אחת,
+  // גם אם onstop כן רץ במקביל.
+  uploadStarted: boolean;
   // abort signal לכל async ב-session — בעיקר ה-upload ל-/transcribe-note.
   // disposeSession() קורא abort() → ה-fetch ב-handleStop נעצר אם
   // ה-modal נסגר תוך כדי upload (אחרת ה-OpenAI call היה מתבצע לחינם).
@@ -144,6 +149,7 @@ export function VoiceRecorderButton({
     // (לרוב audio/mp4), כך שה-Blob והבקשה מסומנים נכון (Bug 6).
     const session: RecordingSession = {
       cancelled: false,
+      uploadStarted: false,
       abortController: new AbortController(),
       stream,
       recorder,
@@ -197,18 +203,42 @@ export function VoiceRecorderButton({
   function stopRecording() {
     const session = sessionRef.current;
     if (!session || session.cancelled || !session.recorder) return;
-    if (session.recorder.state === "inactive") return;
     // visual feedback מיידי — onstop async; בלי setState כאן הכפתור
     // היה נראה "recording" עוד שבריר שנייה אחרי שהמשתמש לחץ.
     setState("transcribing");
-    try {
-      session.recorder.stop();
-    } catch {
-      // recorder.stop() עלול לזרוק (InvalidStateError וכו'). בלי תפיסה
-      // — handleStop לא רץ, ה-mic נשאר פתוח, הכפתור תקוע ב"מתמללת…".
-      disposeSession(session);
-      finishSession(session, "שגיאה בעצירת ההקלטה.");
+
+    const recorder = session.recorder;
+
+    // Safari/iOS edge: recorder כבר inactive (timeout פנימי, mic
+    // disconnect וכו') — onstop כבר לא יורה. נקרא ל-handleStop ידנית.
+    // בלי זה הכפתור תקוע ב"מתמללת…" עם mic חי.
+    if (recorder.state === "inactive") {
+      void handleStop(session);
+      return;
     }
+
+    try {
+      recorder.stop();
+    } catch {
+      // stop() נכשל (InvalidStateError וכו') → onstop בטח לא ירוץ.
+      // נקרא ל-handleStop ידנית. ה-finally של handleStop משחרר tracks
+      // ומציג feedback.
+      void handleStop(session);
+      return;
+    }
+
+    // Watchdog ל-iOS Safari: onstop לא תמיד נורה גם אחרי stop() מוצלח.
+    // אם handleStop לא רץ תוך 2 שניות → נקרא ידני. ה-uploadStarted guard
+    // מבטיח ש-handleStop ירוץ exactly once גם אם onstop כן ירוץ אחר כך.
+    setTimeout(() => {
+      if (
+        sessionRef.current === session &&
+        !session.cancelled &&
+        !session.uploadStarted
+      ) {
+        void handleStop(session);
+      }
+    }, 2000);
   }
 
   // helper יחיד לסיום session — מאחד את ה-cleanup ומוודא שמסלולי
@@ -232,6 +262,11 @@ export function VoiceRecorderButton({
     // Bug 2/3 (מהסבב הקודם): session בוטל ב-unmount/onerror — disposeSession
     // כבר ניתק את ה-stream וקרא cleanup. יוצאים שקט בכוונה.
     if (session.cancelled) return;
+    // Idempotent guard: stopRecording קוראת ל-handleStop כ-fallback אם
+    // onstop לא יורה (iOS Safari). אם onstop כן יורה אחר כך — נכנס לכאן
+    // וייצא מיד. ה-set לפני ה-await מבטיח race-safety.
+    if (session.uploadStarted) return;
+    session.uploadStarted = true;
 
     // משחררים את ה-stream מיד, עוד לפני העלאה. אם ה-upload נכשל,
     // ה-mic כבר חופשי.
