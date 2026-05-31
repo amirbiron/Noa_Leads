@@ -65,3 +65,24 @@ async def update_rule(
         setattr(rule, field, value)
     await db.flush()
     return rule
+
+
+async def get_rule_interval_seconds(
+    db: AsyncSession,
+    rule_key: str,
+    default_seconds: int,
+) -> int:
+    """Live lookup של interval_value × interval_unit לשניות.
+
+    משמש בכל אתר יצירת task פולואף (first-response, warm, proposal,
+    dormant, lecture-inquiry) — כדי שעריכת נועה ב-UI תשפיע מיידית על
+    תזכורות שייווצרו מעכשיו.
+
+    fallback ל-`default_seconds` אם ה-rule לא נמצא (e.g., migration
+    0029 לא רץ, או row נמחק בטעות). זה defensive: לא לשבור יצירת
+    task בגלל row חסר.
+    """
+    rule = await db.get(FollowupRule, rule_key)
+    if rule is None:
+        return default_seconds
+    return rule_interval_seconds(rule.interval_value, rule.interval_unit)
