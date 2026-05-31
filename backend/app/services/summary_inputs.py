@@ -542,8 +542,11 @@ async def compute_highlighted_leads_block(
         org = (lead.organization_name or "").strip()
         org_part = f"ארגון: {org} | " if org else ""
         name = (lead.full_name or "").strip() or "ללא"
+        # `lead_id` בפורמט — ל-AI לעטוף ב-marker `[[lead:<uuid>|<טקסט>]]`
+        # כך שה-frontend יציג את שם הליד כקישור (§13.X). ה-id כבר נמצא
+        # ב-context (היה ב-seen set), פשוט מוסיפים אותו לטקסט שעובר ל-AI.
         lines.append(
-            f"- שם: {name} | {org_part}קטגוריה: {_subtype_label(lead)} | "
+            f"- שם: {name} | lead_id: {lead.id} | {org_part}קטגוריה: {_subtype_label(lead)} | "
             f"אירוע: {event} | בוצע ע\"י: {_role_label(role)}"
         )
         return len(lines) >= _BLOCK_LIMIT
@@ -705,7 +708,7 @@ async def _collect_attention_items(
         if _add(
             lead,
             f"- סוג: הצעה ללא מענה | ליד: {_lead_display_name(lead)} | "
-            f"ימים מאז שליחה: {days}",
+            f"lead_id: {lead.id} | ימים מאז שליחה: {days}",
         ):
             return lines, seen
 
@@ -733,7 +736,7 @@ async def _collect_attention_items(
         if _add(
             lead,
             f"- סוג: ליד תקוע | ליד: {_lead_display_name(lead)} | "
-            f"ימים בסטטוס נוכחי: {days}",
+            f"lead_id: {lead.id} | ימים בסטטוס נוכחי: {days}",
         ):
             return lines, seen
 
@@ -759,7 +762,7 @@ async def _collect_attention_items(
         if _add(
             lead,
             f"- סוג: משימה שלא בוצעה | ליד: {_lead_display_name(lead)} | "
-            f"תיאור: {desc}",
+            f"lead_id: {lead.id} | תיאור: {desc}",
         ):
             return lines, seen
 
@@ -835,7 +838,10 @@ async def compute_tomorrow_focus_block(
         if lead.id in attention_seen:
             continue  # כבר מופיע ב-attention — לא לכפול.
         kind = "VIP" if lead.priority_level == PriorityLevel.VIP.value else "ארגוני"
-        lines.append(f"- ליד שדורש פוקוס: {_lead_display_name(lead)} ({kind})")
+        lines.append(
+            f"- ליד שדורש פוקוס: {_lead_display_name(lead)} | "
+            f"lead_id: {lead.id} | ({kind})"
+        )
         if len(lines) >= _BLOCK_LIMIT:
             break
 
