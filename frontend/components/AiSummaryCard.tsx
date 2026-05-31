@@ -1,19 +1,15 @@
 "use client";
 
 import { useState } from "react";
-import {
-  CalendarRange,
-  ChevronDown,
-  ChevronUp,
-  Sparkles,
-  ThumbsDown,
-} from "lucide-react";
+import { CalendarRange, Sparkles, ThumbsDown } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
+import { useLocalStorageState } from "@/lib/useLocalStorage";
 import type {
   AiSummary,
   AiSummaryOutputDaily,
   AiSummaryOutputWeekly,
 } from "@/lib/types";
+import { CollapseToggleButton } from "./CollapseToggleButton";
 
 // C.1/C.2 §6.8: כרטיס סיכום AI נרטיבי (יומי/שבועי). מתנהג זהה לשני הסוגים,
 // אבל מציג סקציות שונות לפי `summary.type`.
@@ -26,8 +22,10 @@ import type {
 // **כפתור "לא מדויק" (§3.7)**: לחיצה → POST ל-endpoint שמעלה
 // inaccurate_count ב-1. feedback ויזואלי קצר. counter פנימי (לא מוצג).
 //
-// **collapsible**: כפתור chevron במובייל בלבד שמסתיר את הגוף ומפנה מקום
-// לרשימת המשימות. בדסקטוп אין צורך (יש מקום לשני הכרטיסים).
+// **collapsible**: כפתור chevron בכל הbreakpoints (גם דסקטופ). מצב
+// הקיפול נשמר ב-localStorage תחת `noa:summary:{type}:collapsed` —
+// לפי slot, חולק עם DailySummaryBubble (Daily slot) ועם רענונים/
+// breakpoints.
 
 type SubmitState = "idle" | "submitting" | "done" | "error";
 
@@ -38,7 +36,17 @@ export function AiSummaryCard({
   summary: AiSummary;
   collapsible?: boolean;
 }) {
-  const [collapsed, setCollapsed] = useState(false);
+  // key נגזר מ-summary.type — `noa:summary:daily:collapsed` או
+  // `noa:summary:weekly:collapsed`. Daily slot חולק את ה-key עם
+  // DailySummaryBubble (שני קומפוננטות, אותו slot, אותה החלטת קיפול).
+  const [collapsed, setCollapsed] = useLocalStorageState(
+    `noa:summary:${summary.type}:collapsed`,
+    false,
+  );
+  // אם collapsible=false, אסור לערך השמור ב-localStorage לחסום את ה-body —
+  // הכפתור מוסתר וה-משתמשת לא יכולה לפתוח. ה-state עדיין נשמר ל-mode
+  // הבא בו collapsible=true.
+  const isCollapsed = collapsible && collapsed;
   const [submitState, setSubmitState] = useState<SubmitState>("idle");
 
   const isDaily = summary.type === "daily";
@@ -78,19 +86,10 @@ export function AiSummaryCard({
           <div className="flex items-center justify-between gap-2">
             <div className="text-xs text-gray-600">{titlePrefix}</div>
             {collapsible && (
-              <button
-                type="button"
-                onClick={() => setCollapsed((c) => !c)}
-                aria-label={collapsed ? "הרחב סיכום" : "קפל סיכום"}
-                aria-expanded={!collapsed}
-                className="lg:hidden p-1 -m-1 text-gray-500 hover:text-gray-800"
-              >
-                {collapsed ? (
-                  <ChevronDown size={16} aria-hidden />
-                ) : (
-                  <ChevronUp size={16} aria-hidden />
-                )}
-              </button>
+              <CollapseToggleButton
+                collapsed={isCollapsed}
+                onToggle={() => setCollapsed(!isCollapsed)}
+              />
             )}
           </div>
 
@@ -99,7 +98,7 @@ export function AiSummaryCard({
             {summary.output.bottom_line}
           </div>
 
-          {!collapsed && (
+          {!isCollapsed && (
             <>
               {isDaily ? (
                 <DailyBody output={summary.output as AiSummaryOutputDaily} />
