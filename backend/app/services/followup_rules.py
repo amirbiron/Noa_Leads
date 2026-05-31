@@ -1,7 +1,7 @@
 """Service של הגדרות פולואפ (§17.1).
 
-list_rules / update_rule בלבד. אין create/delete — הכללים מוגדרים בקוד
-(TaskType) ו-seeded ב-migration 0029.
+list_rules / update_rule + helper rule_interval_seconds. אין create/delete
+— הכללים מוגדרים בקוד (TaskType) ו-seeded ב-migration 0029.
 
 flush בלבד; commit באחריות ה-route (כלל 15).
 """
@@ -12,6 +12,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.exceptions import NotFoundError
 from app.models.followup_rule import FollowupRule
 from app.schemas.followup_rule import FollowupRuleUpdate
+
+
+def rule_interval_seconds(value: int, unit: str) -> int:
+    """ערך + יחידה ('hours' / 'days') → שניות. helper ל-cron
+    `mark_overdue` שמתזמן את החזרה הבאה אחרי iteration. ה-CHECK
+    constraints במודל מבטיחים unit חוקי, אבל ValueError defensive
+    אם מישהו עוקף את ה-validation."""
+    if unit == "hours":
+        return value * 3600
+    if unit == "days":
+        return value * 86400
+    raise ValueError(f"Unknown followup rule unit: {unit!r}")
 
 # סדר תצוגה ל-UI: לפי הסדר ב-§17.1. שמירה על list מקובע מונעת
 # drift אם פעם נוסיף/נסיר כלל ולא נעדכן את ה-UI.

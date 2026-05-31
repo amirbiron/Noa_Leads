@@ -270,3 +270,18 @@ export function formatDateTimeHebrew(iso: string | null): string {
     timeZone: "Asia/Jerusalem",
   });
 }
+
+// תוויות UI ל-5 כללי הפולואף של §17.1. השמות המדויקים מהאפיון —
+// למשתמש (נועה) יותר טבעי מאשר ה-rule_key הטכני (first_response וכו').
+export const FOLLOWUP_RULE_LABELS: Record<string, string> = {
+  first_response: "ליד חדש שלא טופל",
+  lecture_inquiry: "ארגון שהתעניין בהרצאה",
+  warm_followup: "לקוח חם שלא סגר",
+  proposal_followup: "פולואפ אחרי הצעת מחיר",
+  dormant_check: "לקוח שלא חזר",
+};
+
+export const FOLLOWUP_UNIT_LABELS: Record<string, string> = {
+  hours: "שעות",
+  days: "ימים",
+};

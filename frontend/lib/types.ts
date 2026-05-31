@@ -584,3 +584,27 @@ export interface PaginatedResponse<T> {
   page: number;
   page_size: number;
 }
+
+// ===== Followup rules (§17.1) =====
+// rule_key מתאים ל-TaskType value (first_response/lecture_inquiry/
+// warm_followup/proposal_followup/dormant_check). הוספה/מחיקה אסורה
+// דרך ה-API — רק עריכת ערכים.
+
+export type FollowupTimeUnit = "hours" | "days";
+
+export interface FollowupRule {
+  rule_key: string;
+  interval_value: number;
+  interval_unit: FollowupTimeUnit;
+  repeat_count: number;
+  repeat_interval_value: number;
+  repeat_interval_unit: FollowupTimeUnit;
+}
+
+export interface FollowupRuleUpdate {
+  interval_value?: number;
+  interval_unit?: FollowupTimeUnit;
+  repeat_count?: number;
+  repeat_interval_value?: number;
+  repeat_interval_unit?: FollowupTimeUnit;
+}
