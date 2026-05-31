@@ -13,31 +13,30 @@ pure: אין DB אמיתי (Lead in-memory), אין OpenAI אמיתי (mock של
 """
 
 from unittest.mock import AsyncMock
+from uuid import uuid4
 
 import pytest
 
-from app.constants import LeadStatus, SourceChannel
 from app.core.exceptions import ValidationError
-from app.models.lead import Lead
 from app.services import transcription
 from app.services.transcription import (
     MAX_AUDIO_BYTES,
+    LeadTranscriptionContext,
     TranscriptionError,
     TranscriptionUnavailable,
     transcribe_uploaded,
 )
 
 
-def _mk_lead(**kwargs) -> Lead:
+def _mk_ctx(**kwargs) -> LeadTranscriptionContext:
     defaults = dict(
+        id=uuid4(),
         full_name="דנה לוי",
-        source_channel=SourceChannel.MANUAL.value,
-        status=LeadStatus.NEW.value,
         service_category="clinic",
         service_subtype="voice_rehab",
     )
     defaults.update(kwargs)
-    return Lead(**defaults)
+    return LeadTranscriptionContext(**defaults)
 
 
 async def test_transcribe_uploaded_returns_text_on_success(monkeypatch):
@@ -49,7 +48,7 @@ async def test_transcribe_uploaded_returns_text_on_success(monkeypatch):
         AsyncMock(return_value="שלום, זו הקלטה לבדיקה"),
     )
     text = await transcribe_uploaded(
-        b"fake audio bytes", "audio/webm", _mk_lead()
+        b"fake audio bytes", "audio/webm", _mk_ctx()
     )
     assert text == "שלום, זו הקלטה לבדיקה"
 
@@ -61,7 +60,7 @@ async def test_transcribe_uploaded_strips_codec_from_mime(monkeypatch):
         transcription, "transcribe_audio", AsyncMock(return_value="ok")
     )
     text = await transcribe_uploaded(
-        b"bytes", "audio/mp4;codecs=mp4a.40.2", _mk_lead()
+        b"bytes", "audio/mp4;codecs=mp4a.40.2", _mk_ctx()
     )
     assert text == "ok"
 
@@ -69,20 +68,20 @@ async def test_transcribe_uploaded_strips_codec_from_mime(monkeypatch):
 async def test_transcribe_uploaded_rejects_invalid_mime():
     """mime לא ברשימה (e.g., text/plain) → ValidationError (422 ב-HTTP)."""
     with pytest.raises(ValidationError, match="סוג קובץ אודיו"):
-        await transcribe_uploaded(b"bytes", "text/plain", _mk_lead())
+        await transcribe_uploaded(b"bytes", "text/plain", _mk_ctx())
 
 
 async def test_transcribe_uploaded_rejects_missing_mime():
     """content_type=None (דפדפן לא שלח) → ValidationError."""
     with pytest.raises(ValidationError, match="סוג קובץ אודיו"):
-        await transcribe_uploaded(b"bytes", None, _mk_lead())
+        await transcribe_uploaded(b"bytes", None, _mk_ctx())
 
 
 async def test_transcribe_uploaded_rejects_empty_bytes():
     """0 bytes (recording של 0 שניות / רשת חתכה) → ValidationError, לא
     קריאת חינם ל-OpenAI."""
     with pytest.raises(ValidationError, match="ריק"):
-        await transcribe_uploaded(b"", "audio/webm", _mk_lead())
+        await transcribe_uploaded(b"", "audio/webm", _mk_ctx())
 
 
 async def test_transcribe_uploaded_rejects_oversized_bytes():
@@ -90,7 +89,7 @@ async def test_transcribe_uploaded_rejects_oversized_bytes():
     קודם (קריאה עם limit), אבל ה-service מגן defensive."""
     big = b"x" * (MAX_AUDIO_BYTES + 1)
     with pytest.raises(ValidationError, match="גדול"):
-        await transcribe_uploaded(big, "audio/webm", _mk_lead())
+        await transcribe_uploaded(big, "audio/webm", _mk_ctx())
 
 
 async def test_transcribe_uploaded_propagates_unavailable(monkeypatch):
@@ -102,7 +101,7 @@ async def test_transcribe_uploaded_propagates_unavailable(monkeypatch):
         AsyncMock(side_effect=TranscriptionUnavailable("no key")),
     )
     with pytest.raises(TranscriptionUnavailable):
-        await transcribe_uploaded(b"bytes", "audio/webm", _mk_lead())
+        await transcribe_uploaded(b"bytes", "audio/webm", _mk_ctx())
 
 
 async def test_transcribe_uploaded_propagates_transcription_error(monkeypatch):
@@ -114,4 +113,4 @@ async def test_transcribe_uploaded_propagates_transcription_error(monkeypatch):
         AsyncMock(side_effect=TranscriptionError("network down")),
     )
     with pytest.raises(TranscriptionError):
-        await transcribe_uploaded(b"bytes", "audio/webm", _mk_lead())
+        await transcribe_uploaded(b"bytes", "audio/webm", _mk_ctx())

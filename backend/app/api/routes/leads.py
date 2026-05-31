@@ -30,6 +30,7 @@ from app.services import lead_actions as actions_service
 from app.services import quick_action_chips as chips_service
 from app.services.transcription import (
     MAX_AUDIO_BYTES,
+    LeadTranscriptionContext,
     TranscriptionError,
     TranscriptionUnavailable,
     transcribe_uploaded,
@@ -226,6 +227,7 @@ async def transcribe_note(
     """
     # ולידציית קיום ליד לפני קריאת bytes — נכשל מהר אם 404.
     lead = await leads_service.get_lead_or_404(db, lead_id)
+    ctx = LeadTranscriptionContext.from_lead(lead)
 
     # streaming read עם size guard. UploadFile.read() מעמיס לזיכרון —
     # 10MB סביר לאיפון אבל לא רוצים לקרוא יותר אם משהו תקול.
@@ -233,9 +235,16 @@ async def transcribe_note(
     if len(audio_bytes) > MAX_AUDIO_BYTES:
         raise ValidationError("הקובץ גדול מדי. הקלטה מקסימלית ~5 דקות.")
 
+    # סגירת ה-DB session **לפני** קריאת OpenAI הארוכה (5-30 שניות).
+    # pool_size=5, max_overflow=10 → 15 חיבורים בלבד. בלי סגירה, 15
+    # voice uploads מקבילים שולחים את ה-pool למיצוי וחוסמים את שאר
+    # ה-API. ה-`ctx` snapshot כבר מכיל את כל מה שצריך להלן.
+    # FastAPI יקרא ל-close שוב בסוף ה-handler — no-op.
+    await db.close()
+
     try:
         text = await transcribe_uploaded(
-            audio_bytes, audio_file.content_type, lead
+            audio_bytes, audio_file.content_type, ctx
         )
     except TranscriptionUnavailable as exc:
         # 503 — OPENAI_API_KEY חסר. ה-UI יכול להציג "תיעוד קולי לא זמין".
