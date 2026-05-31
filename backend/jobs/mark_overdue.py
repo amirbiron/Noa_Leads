@@ -84,6 +84,7 @@ async def process_overdue_tasks(
             continue
 
         # זה moment של אלרט.
+
         task.current_iteration += 1
         if task.current_iteration < rule.repeat_count:
             # יש עוד חזרה — נתזמן אותה.
@@ -91,7 +92,10 @@ async def process_overdue_tasks(
                 rule.repeat_interval_value, rule.repeat_interval_unit
             )
             task.due_at = now + timedelta(seconds=interval_sec)
-        # else: זו האחרונה. due_at נשאר ב-now → 7d stuck countdown יפעל ממנו.
+        else:
+            # זו האחרונה — anchor ל-7d stuck countdown.
+            task.due_at = now
+
         fired += 1
 
     # סימון leads — race-safe (closed leads מוחרגים אטומית ב-WHERE).
