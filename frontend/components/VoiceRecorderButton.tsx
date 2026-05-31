@@ -84,6 +84,11 @@ export function VoiceRecorderButton({
   const [error, setError] = useState<string | null>(null);
   const sessionRef = useRef<RecordingSession | null>(null);
   const isMountedRef = useRef(true);
+  // sync guard ל-startRecording: ה-window בין tap ל-React render (שbf
+  // לדerror את הכפתור) הוא ~16ms+. שני taps רצופים מצליחים שניהם
+  // ל-`await getUserMedia` לפני שהכפתור disabled. ה-ref נטען sync,
+  // מנותק מ-render cycle, מבטיח שרק call ראשון ממשיך.
+  const startingRef = useRef(false);
 
   // cleanup ב-unmount — מסמן את ה-session הנוכחי כ-cancelled, ומשחרר
   // mic/recorder. async handlers שעוד "בטיסה" (onstop, אחרי await
@@ -103,101 +108,112 @@ export function VoiceRecorderButton({
   }
 
   async function startRecording() {
-    // double-tap guard #1: כבר יש session פעיל → מתעלמים.
-    if (sessionRef.current && !sessionRef.current.cancelled) return;
-    setError(null);
-    setState("starting");
-
-    let stream: MediaStream;
+    // double-tap guard: שני בדיקות sync (ref-based). startingRef תופס
+    // double-tap לפני ש-session נוצר; sessionRef תופס clicks אחרי שהוא
+    // נוצר (recording state). ה-setState("starting") חסום ע"י React
+    // render cycle (~16ms+), אז לא ניתן לסמוך עליו.
+    if (startingRef.current || sessionRef.current) return;
+    startingRef.current = true;
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    } catch (err) {
-      if (!isMountedRef.current) return;
-      const name = (err as { name?: string })?.name;
-      setError(
-        name === "NotAllowedError" || name === "PermissionDeniedError"
-          ? "אין הרשאה למיקרופון. אשרי בדפדפן ונסי שוב."
-          : "לא ניתן לגשת למיקרופון.",
-      );
-      setState("idle");
-      return;
-    }
+      setError(null);
+      setState("starting");
 
-    // guard: ה-modal נסגר בזמן permission prompt — משחררים את ה-stream
-    // מיד ויוצאים. בלי זה ה-mic נשאר תפוס לנצח (Bug 4).
-    if (!isMountedRef.current) {
-      stream.getTracks().forEach((t) => t.stop());
-      return;
-    }
+      let stream: MediaStream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      } catch (err) {
+        if (!isMountedRef.current) return;
+        const name = (err as { name?: string })?.name;
+        setError(
+          name === "NotAllowedError" || name === "PermissionDeniedError"
+            ? "אין הרשאה למיקרופון. אשרי בדפדפן ונסי שוב."
+            : "לא ניתן לגשת למיקרופון.",
+        );
+        setState("idle");
+        return;
+      }
 
-    const mimeHint = pickMimeHint();
-    let recorder: MediaRecorder;
-    try {
-      recorder = new MediaRecorder(
+      // guard: ה-modal נסגר בזמן permission prompt — משחררים את ה-stream
+      // מיד ויוצאים. בלי זה ה-mic נשאר תפוס לנצח (Bug 4).
+      if (!isMountedRef.current) {
+        stream.getTracks().forEach((t) => t.stop());
+        return;
+      }
+
+      const mimeHint = pickMimeHint();
+      let recorder: MediaRecorder;
+      try {
+        recorder = new MediaRecorder(
+          stream,
+          mimeHint ? { mimeType: mimeHint } : undefined,
+        );
+      } catch {
+        stream.getTracks().forEach((t) => t.stop());
+        setError("לא ניתן להתחיל הקלטה בדפדפן זה.");
+        setState("idle");
+        return;
+      }
+
+      // MIME אמיתי שה-browser בחר — לא הניחוש שלנו. ב-Safari כש-hint
+      // ריק/לא נתמך, recorder.mimeType יחזיר את ה-default האמיתי
+      // (לרוב audio/mp4), כך שה-Blob והבקשה מסומנים נכון (Bug 6).
+      const session: RecordingSession = {
+        cancelled: false,
+        uploadStarted: false,
+        abortController: new AbortController(),
         stream,
-        mimeHint ? { mimeType: mimeHint } : undefined,
-      );
-    } catch {
-      stream.getTracks().forEach((t) => t.stop());
-      setError("לא ניתן להתחיל הקלטה בדפדפן זה.");
-      setState("idle");
-      return;
-    }
+        recorder,
+        mimeType: recorder.mimeType || mimeHint || "audio/webm",
+        chunks: [],
+      };
+      sessionRef.current = session;
 
-    // MIME אמיתי שה-browser בחר — לא הניחוש שלנו. ב-Safari כש-hint
-    // ריק/לא נתמך, recorder.mimeType יחזיר את ה-default האמיתי
-    // (לרוב audio/mp4), כך שה-Blob והבקשה מסומנים נכון (Bug 6).
-    const session: RecordingSession = {
-      cancelled: false,
-      uploadStarted: false,
-      abortController: new AbortController(),
-      stream,
-      recorder,
-      mimeType: recorder.mimeType || mimeHint || "audio/webm",
-      chunks: [],
-    };
-    sessionRef.current = session;
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) session.chunks.push(e.data);
+      };
+      recorder.onstop = () => {
+        void handleStop(session);
+      };
+      recorder.onerror = () => {
+        // disposeSession מנתק את onstop לפני stop, כך ש-handleStop לא
+        // ירוץ אחרי error (Bug 3).
+        disposeSession(session);
+        if (sessionRef.current === session) sessionRef.current = null;
+        if (isMountedRef.current) {
+          setError("שגיאה בהקלטה.");
+          setState("idle");
+        }
+      };
 
-    recorder.ondataavailable = (e) => {
-      if (e.data.size > 0) session.chunks.push(e.data);
-    };
-    recorder.onstop = () => {
-      void handleStop(session);
-    };
-    recorder.onerror = () => {
-      // disposeSession מנתק את onstop לפני stop, כך ש-handleStop לא
-      // ירוץ אחרי error (Bug 3).
-      disposeSession(session);
-      if (sessionRef.current === session) sessionRef.current = null;
-      if (isMountedRef.current) {
-        setError("שגיאה בהקלטה.");
-        setState("idle");
+      try {
+        recorder.start();
+      } catch {
+        // Bug 5: start() עלול לזרוק (InvalidStateError / NotSupportedError).
+        // בלי disposeSession כאן, ה-stream נשאר פתוח.
+        disposeSession(session);
+        sessionRef.current = null;
+        if (isMountedRef.current) {
+          setError("שגיאה בהפעלת ההקלטה.");
+          setState("idle");
+        }
+        return;
       }
-    };
 
-    try {
-      recorder.start();
-    } catch {
-      // Bug 5: start() עלול לזרוק (InvalidStateError / NotSupportedError).
-      // בלי disposeSession כאן, ה-stream נשאר פתוח.
-      disposeSession(session);
-      sessionRef.current = null;
-      if (isMountedRef.current) {
-        setError("שגיאה בהפעלת ההקלטה.");
-        setState("idle");
+      // edge: unmount קרה בדיוק לפני setState. ה-cleanup של ה-useEffect
+      // קרא disposeSession על session ש-ref כבר הצביע אליו → cancelled=true.
+      if (!isMountedRef.current) {
+        disposeSession(session);
+        sessionRef.current = null;
+        return;
       }
-      return;
-    }
 
-    // edge: unmount קרה בדיוק לפני setState. ה-cleanup של ה-useEffect
-    // קרא disposeSession על session ש-ref כבר הצביע אליו → cancelled=true.
-    if (!isMountedRef.current) {
-      disposeSession(session);
-      sessionRef.current = null;
-      return;
+      setState("recording");
+    } finally {
+      // משחרר את ה-double-tap guard בכל מסלול יציאה (success/error/
+      // unmount). חיוני: בלי finally, אם זרק חריגה לא צפויה ה-flag
+      // היה נשאר true והכפתור לא היה מגיב לעולם.
+      startingRef.current = false;
     }
-
-    setState("recording");
   }
 
   function stopRecording() {
