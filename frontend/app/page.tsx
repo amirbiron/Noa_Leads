@@ -111,11 +111,12 @@ export default function HomePage() {
               - Daily slot: סטטיסטי (F-07) או AI (C.1), לפי הטוגל. אחד בכל רגע.
                 שניהם בחלון 19:00→07:00 (`shouldShowDailySummary`).
               - Weekly slot: AI נרטיבי בלבד, חלון ראשון 08:00→שני 07:00.
-              Mobile: stacked (flex-col), daily מעל weekly.
-              Desktop (lg+): side-by-side (flex-row). */}
+              Stacked בכל הbreakpoints: Daily מעל Weekly. הקיפול הפר-בלוק
+              (persisted ב-localStorage) מאפשר למשתמשת לפנות מקום בעת
+              הצורך — אין יותר side-by-side בדסקטופ. */}
 
           {(hasStatsInWindow || hasAiDailyInWindow || hasWeeklyInWindow) && (
-            <div className="flex flex-col lg:flex-row lg:gap-4 lg:items-stretch gap-3 mb-3">
+            <div className="flex flex-col gap-3 lg:gap-4 mb-3">
               {/* Daily slot — display whichever is available */}
               {(dailyView === "statistical" || !hasAiDailyInWindow) && hasStatsInWindow && (
                 <DailySummaryBubble

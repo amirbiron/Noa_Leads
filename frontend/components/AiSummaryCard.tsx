@@ -75,7 +75,7 @@ export function AiSummaryCard({
 
   return (
     <div
-      className={`border rounded-xl p-4 lg:flex-1 ${wrapperClass.replace("text-indigo-500", "").replace("text-emerald-600", "")}`}
+      className={`border rounded-xl p-4 ${wrapperClass.replace("text-indigo-500", "").replace("text-emerald-600", "")}`}
     >
       <div className="flex items-start gap-3">
         <Icon
