@@ -838,9 +838,13 @@ async def compute_tomorrow_focus_block(
         if lead.id in attention_seen:
             continue  # כבר מופיע ב-attention — לא לכפול.
         kind = "VIP" if lead.priority_level == PriorityLevel.VIP.value else "ארגוני"
+        # `lead_id` בסוף השורה — *אחרי* `({kind})` — כדי שlet
+        # `_INPUT_NAME_PATTERNS[2]` (regex של "ליד שדורש פוקוס:" שעוצר ב-`(`)
+        # יחלץ רק את ה-display name. אם נדחוף lead_id לפני ה-`(`, ה-regex
+        # יתפוס את כל המידע ביניהם כ-name → §6.6#3 ייכשל בשקט.
         lines.append(
-            f"- ליד שדורש פוקוס: {_lead_display_name(lead)} | "
-            f"lead_id: {lead.id} | ({kind})"
+            f"- ליד שדורש פוקוס: {_lead_display_name(lead)} ({kind}) | "
+            f"lead_id: {lead.id}"
         )
         if len(lines) >= _BLOCK_LIMIT:
             break

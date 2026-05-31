@@ -716,6 +716,37 @@ async def test_tomorrow_focus_vip_plus_attention_pointer(db):
     assert "דורש מעקב" in tomorrow        # שורת המצביע לעומס ה-attention
 
 
+async def test_tomorrow_focus_extract_name_is_clean_of_lead_id(db):
+    """Regression (cursor finding): פיצ'ר ההיפר-קישור הוסיף `lead_id` לשורת
+    tomorrow_focus. אם ה-lead_id נדחף *לפני* `(<kind>)`, pattern 3 של
+    `_extract_input_names` (שעוצר ב-`(` הראשון) תופס את כל המידע ביניהם
+    כ-name — מה שגרם ל-§6.6#3 לא למצוא את השם הנקי שClaude מזכירה.
+
+    ה-fix: lead_id בסוף השורה + pattern 3 עוצר גם ב-`|` (defense-in-depth).
+    """
+    from app.services.summaries import _extract_input_names
+
+    one_hour_ago = _NOW - timedelta(hours=1)
+    lead = await _mk_lead(
+        db, full_name="שרון VIP",
+        created_at=one_hour_ago,
+        priority_level=PriorityLevel.VIP.value,
+        waiting_on=WaitingOn.NOAH.value,
+    )
+    lines, seen = await si._collect_attention_items(db, _NOW)
+    tomorrow = await si.compute_tomorrow_focus_block(db, _NOW, lines, seen)
+    assert tomorrow is not None
+    # ה-lead_id עדיין מופיע ב-block — נחוץ ל-AI לבניית ה-marker.
+    assert f"lead_id: {lead.id}" in tomorrow
+
+    # _extract_input_names מחזיר רק את השם הנקי. לפני ה-fix היה מקבל
+    # "שרון VIP | lead_id: ... |".
+    names = _extract_input_names(tomorrow)
+    assert "שרון VIP" in names
+    assert not any("lead_id" in n for n in names), names
+    assert not any("|" in n for n in names), names
+
+
 async def test_tomorrow_focus_none_when_only_attention(db):
     """
     אין ליד VIP/ארגון — גם אם יש פריט attention, tomorrow מושמט (None).
