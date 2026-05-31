@@ -236,9 +236,19 @@ export const api = {
   // `bodyFactory` (ולא `body`) — FormData הוא stream חד-פעמי. אם token
   // פג והגיע 401, ה-fetcher יבנה FormData חדש ל-retry במקום לשלוח את
   // הקודם שכבר consumed. ה-Blob עצמו נשאר חי בזיכרון; rebuild זול.
-  transcribeNote: (leadId: string, audioBlob: Blob, mimeType: string) =>
+  //
+  // `signal` (אופציונלי) — מאפשר ל-caller לבטל את הבקשה אם הקומפוננטה
+  // unmounts תוך כדי upload. בלי זה, ה-fetch ממשיך עד OpenAI ומכלה
+  // bytes/חיוב לחינם.
+  transcribeNote: (
+    leadId: string,
+    audioBlob: Blob,
+    mimeType: string,
+    signal?: AbortSignal,
+  ) =>
     fetcher<{ text: string }>(`/leads/${leadId}/transcribe-note`, {
       method: "POST",
+      signal,
       bodyFactory: () => {
         const form = new FormData();
         const ext = mimeType.split("/")[1]?.split(";")[0] ?? "webm";

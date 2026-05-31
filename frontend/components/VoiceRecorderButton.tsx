@@ -35,6 +35,10 @@ type RecState = "idle" | "starting" | "recording" | "transcribing";
 
 type RecordingSession = {
   cancelled: boolean;
+  // abort signal לכל async ב-session — בעיקר ה-upload ל-/transcribe-note.
+  // disposeSession() קורא abort() → ה-fetch ב-handleStop נעצר אם
+  // ה-modal נסגר תוך כדי upload (אחרת ה-OpenAI call היה מתבצע לחינם).
+  abortController: AbortController;
   stream: MediaStream | null;
   recorder: MediaRecorder | null;
   mimeType: string;
@@ -140,6 +144,7 @@ export function VoiceRecorderButton({
     // (לרוב audio/mp4), כך שה-Blob והבקשה מסומנים נכון (Bug 6).
     const session: RecordingSession = {
       cancelled: false,
+      abortController: new AbortController(),
       stream,
       recorder,
       mimeType: recorder.mimeType || mimeHint || "audio/webm",
@@ -196,7 +201,14 @@ export function VoiceRecorderButton({
     // visual feedback מיידי — onstop async; בלי setState כאן הכפתור
     // היה נראה "recording" עוד שבריר שנייה אחרי שהמשתמש לחץ.
     setState("transcribing");
-    session.recorder.stop();
+    try {
+      session.recorder.stop();
+    } catch {
+      // recorder.stop() עלול לזרוק (InvalidStateError וכו'). בלי תפיסה
+      // — handleStop לא רץ, ה-mic נשאר פתוח, הכפתור תקוע ב"מתמללת…".
+      disposeSession(session);
+      finishSession(session, "שגיאה בעצירת ההקלטה.");
+    }
   }
 
   // helper יחיד לסיום session — מאחד את ה-cleanup ומוודא שמסלולי
@@ -239,10 +251,16 @@ export function VoiceRecorderButton({
 
     let text: string | null = null;
     try {
-      const result = await api.transcribeNote(leadId, blob, session.mimeType);
+      const result = await api.transcribeNote(
+        leadId,
+        blob,
+        session.mimeType,
+        session.abortController.signal,
+      );
       text = result.text;
     } catch (err) {
-      // ה-modal נסגר תוך כדי upload — שקט בכוונה.
+      // ה-modal נסגר תוך כדי upload — disposeSession קרא abort(), אז
+      // ה-fetch הופסק ו-OpenAI לא קיבל את הקובץ. שקט בכוונה.
       if (session.cancelled || !isMountedRef.current) {
         finishSession(session, null);
         return;
@@ -333,6 +351,14 @@ export function VoiceRecorderButton({
 function disposeSession(session: RecordingSession | null) {
   if (!session) return;
   session.cancelled = true;
+  // abort כל fetch תלוי-session (בעיקר ה-upload ל-/transcribe-note).
+  // אם handleStop כבר ב-await transcribeNote — ה-fetch נעצר ו-OpenAI
+  // לא מקבל את הקובץ. לפני התיקון: ה-upload המשיך עד סופו לחינם.
+  try {
+    session.abortController.abort();
+  } catch {
+    // ignore
+  }
   const recorder = session.recorder;
   if (recorder) {
     recorder.onstop = null;
