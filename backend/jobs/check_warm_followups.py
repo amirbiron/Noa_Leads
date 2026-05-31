@@ -1,9 +1,10 @@
 """
 check_warm_followups — רץ כל שעה (Spec §17.1 + §17.2, F-08).
 
-מאתר לידים IN_PROGRESS שעבר 48 שעות מאז ה-outbound האחרון של נועה,
+מאתר לידים IN_PROGRESS שעבר X שעות מאז ה-outbound האחרון של נועה,
 והלקוח לא הגיב — ויוצר עבורם משימת warm_followup. due_at = last_outbound_at
-+ 48h, מותאם לשעות עבודה.
++ X, מותאם לשעות עבודה. X נקרא live מ-FollowupRule (`warm_followup`),
+ברירת מחדל 48h לפי §17.1.
 
 idempotency: יוצר רק לידים בלי שום task פתוח. זה מכבד:
 - chip שכבר יצר followup task ("מעוניין בשיחה" → followup 2d).
@@ -21,22 +22,24 @@ from app.constants import LeadStatus, TaskStatus, TaskType
 from app.db.session import AsyncSessionLocal
 from app.models.lead import Lead
 from app.models.task import Task
+from app.services.followup_rules import get_rule_interval_seconds
 from app.utils.work_hours import is_working_time, next_working_day_start
 from jobs._runner import run_job
 
 logger = logging.getLogger("jobs.check_warm_followups")
 
 
-# Spec §17.2: due = last_outbound_at + 48h. ה-Spec §17.1 נותן טווח 48-72h
-# — אנחנו לוקחים 48 כסף יחיד; אם נועה תרצה לעדכן בעתיד, להוסיף שדה
-# לשולחן שירותים או config.
+# Spec §17.2: due = last_outbound_at + 48h. fallback אם FollowupRule
+# לא seeded (migration 0029 לא רץ). הערך הזה ניתן לעריכה ב-UI הגדרות.
 WARM_FOLLOWUP_DELAY_HOURS = 48
 
 
-async def _warm_followup_candidates(db: AsyncSession) -> list[Lead]:
+async def _warm_followup_candidates(
+    db: AsyncSession, interval_seconds: int
+) -> list[Lead]:
     """
     שולף לידים IN_PROGRESS שעוברים את התנאים לcreate warm_followup:
-    - last_outbound_at <= now - 48h (כלומר שלחנו ועברו 48h+).
+    - last_outbound_at <= now - interval (כלומר שלחנו ועברו X+ שעות).
     - אין inbound חדש מאז (לקוח לא ענה).
     - אין task פתוח בכלל (מכבד chip-driven tasks).
     - אין warm_followup task — *בכל סטטוס* — שנוצר אחרי ה-outbound הנוכחי.
@@ -44,9 +47,7 @@ async def _warm_followup_candidates(db: AsyncSession) -> list[Lead]:
       ברגע שיש outbound חדש (Noah שלחה משהו), last_outbound_at קופץ קדימה
       וה-warm_followup הישן "נשאר מאחור" — מותר ליצור חדש.
     """
-    threshold = datetime.now(timezone.utc) - timedelta(
-        hours=WARM_FOLLOWUP_DELAY_HOURS
-    )
+    threshold = datetime.now(timezone.utc) - timedelta(seconds=interval_seconds)
 
     has_open_task = (
         select(Task.id)
@@ -86,13 +87,13 @@ async def _warm_followup_candidates(db: AsyncSession) -> list[Lead]:
     return list(result.scalars().all())
 
 
-def _calc_due_at(last_outbound_at: datetime) -> datetime:
+def _calc_due_at(last_outbound_at: datetime, interval_seconds: int) -> datetime:
     """
-    due_at = last_outbound_at + 48h, נדחה לתחילת יום עבודה אם נופל מחוץ.
+    due_at = last_outbound_at + interval, נדחה לתחילת יום עבודה אם נופל מחוץ.
     next_working_day_start מחזיר ISRAEL_TZ — ממירים ל-UTC לעקביות עם
     שאר ה-tasks (מיון/השוואות ב-postgres מצפים tz אחיד).
     """
-    due = last_outbound_at + timedelta(hours=WARM_FOLLOWUP_DELAY_HOURS)
+    due = last_outbound_at + timedelta(seconds=interval_seconds)
     if not is_working_time(due):
         due = next_working_day_start(due).astimezone(timezone.utc)
     return due
@@ -102,13 +103,21 @@ async def check_warm_followups() -> None:
     async with AsyncSessionLocal() as db:
         from app.services.tasks import sync_lead_next_action_cache
 
-        leads = await _warm_followup_candidates(db)
+        # live lookup פעם אחת בתחילת הריצה — selection threshold + due_at
+        # שניהם נגזרים מאותו ערך כדי לשמור על הסמנטיקה "due = last_outbound + X".
+        interval_sec = await get_rule_interval_seconds(
+            db,
+            TaskType.WARM_FOLLOWUP.value,
+            default_seconds=WARM_FOLLOWUP_DELAY_HOURS * 3600,
+        )
+
+        leads = await _warm_followup_candidates(db, interval_sec)
         for lead in leads:
             task = Task(
                 lead_id=lead.id,
                 type=TaskType.WARM_FOLLOWUP.value,
                 assigned_to=lead.owner_id,
-                due_at=_calc_due_at(lead.last_outbound_at),
+                due_at=_calc_due_at(lead.last_outbound_at, interval_sec),
                 status=TaskStatus.OPEN.value,
                 origin_rule="auto_warm_followup",
             )

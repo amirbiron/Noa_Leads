@@ -343,7 +343,8 @@ async def _create_followup_task_if_needed(
     """
     יוצר task פולואפ אוטומטי אחרי פעולות מסוימות:
     - mark_proposal_sent (set_proposal_sent_at=True) → PROPOSAL_FOLLOWUP
-      עם grace של FOLLOWUP_GRACE_PROPOSAL_ORG (4 ימים, האפיון יב §484).
+      עם grace שנקרא live מ-FollowupRule (`proposal_followup`).
+      ברירת מחדל = FOLLOWUP_GRACE_PROPOSAL_ORG (4 ימים, §17.1).
 
     אינדמפוטנטי: אם כבר קיים PROPOSAL_FOLLOWUP פתוח לליד, מדלגים.
     """
@@ -352,6 +353,7 @@ async def _create_followup_task_if_needed(
 
     from app.constants import FOLLOWUP_GRACE_PROPOSAL_ORG
     from app.models.task import Task
+    from app.services.followup_rules import get_rule_interval_seconds
     from app.services.tasks import sync_lead_next_action_cache
 
     existing = await db.execute(
@@ -366,11 +368,16 @@ async def _create_followup_task_if_needed(
     if existing.scalar_one_or_none() is not None:
         return
 
+    interval_sec = await get_rule_interval_seconds(
+        db,
+        TaskType.PROPOSAL_FOLLOWUP.value,
+        default_seconds=int(FOLLOWUP_GRACE_PROPOSAL_ORG.total_seconds()),
+    )
     db.add(
         Task(
             lead_id=lead_id,
             type=TaskType.PROPOSAL_FOLLOWUP.value,
-            due_at=now + FOLLOWUP_GRACE_PROPOSAL_ORG,
+            due_at=now + timedelta(seconds=interval_sec),
             status=TaskStatus.OPEN.value,
             origin_rule="auto_proposal_followup",
         )

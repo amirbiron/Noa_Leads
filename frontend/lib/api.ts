@@ -11,6 +11,8 @@ import type {
   DashboardPollResponse,
   DormantSuggestion,
   EmailMessage,
+  FollowupRule,
+  FollowupRuleUpdate,
   PendingBookingsResponse,
   HomeDashboard,
   QuickActionChip,
@@ -173,6 +175,16 @@ export const api = {
   markAiSummaryInaccurate: (id: string) =>
     fetcher<void>(`/dashboard/ai-summaries/${id}/inaccurate`, {
       method: "POST",
+    }),
+
+  // ----- Followup rules (§17.1) -----
+  listFollowupRules: () =>
+    fetcher<FollowupRule[]>("/settings/followup-rules"),
+
+  updateFollowupRule: (key: string, payload: FollowupRuleUpdate) =>
+    fetcher<FollowupRule>(`/settings/followup-rules/${key}`, {
+      method: "PATCH",
+      body: payload,
     }),
 
   // ----- Leads -----
