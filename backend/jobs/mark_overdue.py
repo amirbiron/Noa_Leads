@@ -94,17 +94,8 @@ async def process_overdue_tasks(
         # else: זו האחרונה. due_at נשאר ב-now → 7d stuck countdown יפעל ממנו.
         fired += 1
 
-    # סימון leads — bulk update. רק מי שעדיין לא needs_attention, כדי
-    # לא לדפוק updated_at של רשומות שלא השתנו (כלל 2).
-    if affected_lead_ids:
-        await db.execute(
-            update(Lead)
-            .where(
-                Lead.id.in_(affected_lead_ids),
-                Lead.needs_attention.is_(False),
-            )
-            .values(needs_attention=True, updated_at=func.now())
-        )
+    # סימון leads — race-safe (closed leads מוחרגים אטומית ב-WHERE).
+    await _mark_leads_needs_attention(db, affected_lead_ids)
 
     # flush לפני sync cache — sync_lead_next_action_cache קורא את
     # task.due_at הנוכחי, וצריך לראות את העדכון.
@@ -114,6 +105,36 @@ async def process_overdue_tasks(
         await sync_lead_next_action_cache(db, lead_id)
 
     return len(tasks), fired, len(affected_lead_ids)
+
+
+async def _mark_leads_needs_attention(db, lead_ids: set[UUID]) -> None:
+    """Bulk UPDATE — needs_attention=True ללידים שעבר due_at של ה-tasks
+    שלהם.
+
+    Race guard: ה-WHERE כולל `status NOT IN (closed)` כדי שליד שנסגר בין
+    SELECT ה-tasks ל-UPDATE הזה (close_lead שרץ במקביל ב-route אחר) לא
+    יקבל את הדגל. ה-SELECT של mark_overdue מסנן סגורים, אבל
+    `affected_lead_ids` עובר stale ל-UPDATE — בלי ה-guard, ליד שנסגר
+    במקביל היה מקבל needs_attention=True (סותר §6.5: ליד סגור לעולם לא
+    live).
+
+    `needs_attention.is_(False)` נשאר — לא מבמפים updated_at של רשומות
+    שכבר מסומנות.
+
+    תואם כלל 2 (TOCTOU אטומי) וכלל 8 (race scenarios) ב-CLAUDE.md.
+    """
+    if not lead_ids:
+        return
+    closed = [s.value for s in CLOSED_LEAD_STATUSES]
+    await db.execute(
+        update(Lead)
+        .where(
+            Lead.id.in_(lead_ids),
+            Lead.needs_attention.is_(False),
+            Lead.status.notin_(closed),
+        )
+        .values(needs_attention=True, updated_at=func.now())
+    )
 
 
 async def mark_overdue() -> None:

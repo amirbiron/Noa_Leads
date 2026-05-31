@@ -12,7 +12,7 @@ from app.constants import LeadStatus, SourceChannel, TaskStatus, TaskType
 from app.models.followup_rule import FollowupRule
 from app.models.lead import Lead
 from app.models.task import Task
-from jobs.mark_overdue import process_overdue_tasks
+from jobs.mark_overdue import _mark_leads_needs_attention, process_overdue_tasks
 
 
 async def _mk_lead(db, **kw) -> Lead:
@@ -152,6 +152,39 @@ async def test_touchpoint_cancels_repeats(db):
     assert fired == 0
     assert leads == 0
     assert task.current_iteration == 0
+
+
+async def test_closed_lead_does_not_get_needs_attention(db):
+    """Race regression (cursor finding): ליד נסגר אחרי SELECT-ה-tasks
+    אבל לפני ה-bulk UPDATE על Lead.needs_attention. ה-WHERE של ה-UPDATE
+    חייב לחסום את הליד הסגור — אחרת ליד WON/LOST/ARCHIVED יקבל
+    needs_attention=True ויסתור §6.5.
+
+    סימולציה: לא ניתן לסמלץ את ה-race דרך process_overdue_tasks (ה-SELECT
+    עצמו מסנן סגורים, אז affected_lead_ids ריק). קוראים ישירות ל-
+    `_mark_leads_needs_attention` עם id של ליד שכבר סגור — מדמה את
+    ה-state בדיוק אחרי SELECT כש-close_lead רץ במקביל.
+    """
+    lead = await _mk_lead(db, status=LeadStatus.WON.value)
+    assert lead.needs_attention is False
+
+    await _mark_leads_needs_attention(db, {lead.id})
+    await db.refresh(lead)
+
+    # ה-guard ב-WHERE חוסם — needs_attention נשאר False.
+    assert lead.needs_attention is False
+
+
+async def test_open_lead_still_gets_needs_attention(db):
+    """Sanity: ה-guard לא שובר את ה-flow הרגיל — ליד פתוח כן מקבל
+    needs_attention=True."""
+    lead = await _mk_lead(db, status=LeadStatus.IN_PROGRESS.value)
+    assert lead.needs_attention is False
+
+    await _mark_leads_needs_attention(db, {lead.id})
+    await db.refresh(lead)
+
+    assert lead.needs_attention is True
 
 
 async def test_sync_cache_after_repeat(db):
