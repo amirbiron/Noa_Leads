@@ -199,10 +199,26 @@ export function VoiceRecorderButton({
     session.recorder.stop();
   }
 
+  // helper יחיד לסיום session — מאחד את ה-cleanup ומוודא שמסלולי
+  // "המשתמש עוד שם" תמיד מציגים feedback (success דרך onTranscribed
+  // לפני קריאה זו, או error דרך `errorMessage`). שקט מותר *רק* כאשר
+  // cancelled/unmounted (isMountedRef.current === false).
+  //
+  // **לא setState("idle")** בלי מעבר דרך כאן — אחרת קל לשכוח feedback
+  // ולקבל יציאה שקטה שנראית כמו no-op.
+  function finishSession(
+    session: RecordingSession,
+    errorMessage: string | null,
+  ) {
+    if (sessionRef.current === session) sessionRef.current = null;
+    if (!isMountedRef.current) return;
+    if (errorMessage !== null) setError(errorMessage);
+    setState("idle");
+  }
+
   async function handleStop(session: RecordingSession) {
-    // Bug 2/3: אם ה-session בוטל (unmount / error) — לא לבנות blob,
-    // לא לעלות, לא לעדכן UI. disposeSession כבר ניתק onstop, אבל
-    // double-check defensive במקרה ש-onstop רץ לפני שה-handlers נותקו.
+    // Bug 2/3 (מהסבב הקודם): session בוטל ב-unmount/onerror — disposeSession
+    // כבר ניתק את ה-stream וקרא cleanup. יוצאים שקט בכוונה.
     if (session.cancelled) return;
 
     // משחררים את ה-stream מיד, עוד לפני העלאה. אם ה-upload נכשל,
@@ -214,9 +230,10 @@ export function VoiceRecorderButton({
     session.chunks = [];
 
     if (blob.size === 0) {
-      // recording של 0 שניות / חתך — לא נקרא ל-API.
-      if (sessionRef.current === session) sessionRef.current = null;
-      if (isMountedRef.current) setState("idle");
+      // Blob ריק = Safari החזיר chunks ריקים / עצירה מיידית / capture
+      // נכשל. בלי הודעה נועה רואה את הכפתור חוזר ל"הקליטי הערה" וחושבת
+      // שלא קרה כלום.
+      finishSession(session, "ההקלטה היתה ריקה. נסי שוב.");
       return;
     }
 
@@ -225,28 +242,33 @@ export function VoiceRecorderButton({
       const result = await api.transcribeNote(leadId, blob, session.mimeType);
       text = result.text;
     } catch (err) {
-      // ה-modal נסגר תוך כדי upload או error — לא מציגים שגיאה ולא
-      // מעדכנים state (Bug 2).
+      // ה-modal נסגר תוך כדי upload — שקט בכוונה.
       if (session.cancelled || !isMountedRef.current) {
-        if (sessionRef.current === session) sessionRef.current = null;
+        finishSession(session, null);
         return;
       }
-      setError(
+      finishSession(
+        session,
         err instanceof ApiError ? err.message : "התמלול נכשל. נסי שוב.",
       );
-      setState("idle");
-      if (sessionRef.current === session) sessionRef.current = null;
       return;
     }
 
     if (session.cancelled || !isMountedRef.current) {
-      if (sessionRef.current === session) sessionRef.current = null;
+      finishSession(session, null);
       return;
     }
 
-    if (text && text.trim()) onTranscribed(text.trim());
-    setState("idle");
-    if (sessionRef.current === session) sessionRef.current = null;
+    const trimmed = text?.trim() ?? "";
+    if (!trimmed) {
+      // 200 OK עם טקסט ריק = OpenAI לא זיהה דיבור. בלי הודעה הכפתור
+      // חוזר ל-idle והמשתמשת חושבת שמשהו נשבר בשקט.
+      finishSession(session, "התמלול לא זיהה דיבור. נסי לדבר ברור יותר.");
+      return;
+    }
+
+    onTranscribed(trimmed);
+    finishSession(session, null);
   }
 
   const isRecording = state === "recording";
