@@ -58,7 +58,7 @@ export function DailySummaryBubble({
         : "סיכום";
 
   return (
-    <div className="bg-gradient-to-bl from-indigo-500/10 to-indigo-500/5 border border-indigo-300/40 rounded-xl p-4 lg:flex-1">
+    <div className="bg-gradient-to-bl from-indigo-500/10 to-indigo-500/5 border border-indigo-300/40 rounded-xl p-4">
       <div className="flex items-start gap-3">
         <Moon
           size={20}
