@@ -237,6 +237,31 @@ state טרמינלי.
 
 **Mode מומלץ:** Strict. cron loops גורמים ל-API spam ועלות AI.
 
+### Variant 5b: Cron handler לא תופס כל exception class של ה-service שלו
+
+**דוגמה:**
+- `renew_calendar_watch` (06/2026) — תפס `GoogleNotConnectedError` ו-`GoogleAuthInvalidError`, אבל **לא** `GoogleNotConfiguredError`. כש-env vars נעלמו על ה-cron service (drift לטנטי), ה-cron קרס עם stack trace לא-מנוהל במקום ל-log שגיאה ברורה לאדמין.
+
+**הסבר:** דומה ל-Pattern 5 הראשי (חוסר exit condition), אבל ב-failure mode הפוך — לא loop, אלא **uncaught exception**. אם ה-service זורק 3 exception classes (config-time, runtime-OAuth, network), ה-cron handler חייב לתפוס את כולם. תפיסה חלקית = stack trace נופל על אדמין במקום הודעה actionable.
+
+**Custom rule prompt:**
+```
+לכל handler ב-`jobs/` שקורא ל-service חיצוני:
+
+1. אסוף את כל ה-exception classes שה-service זורק (חפש `class .*Error`
+   בקובץ ה-service).
+2. ודא שה-handler תופס *כל* class רלוונטי, גם אם לכאורה לא יקרה
+   ב-runtime ("env vars תמיד מוגדרים" — לא נכון בpresence of drift).
+3. אם אין טיפול logical — לפחות `logger.error` עם הוראה לאדמין +
+   הפניה ל-SETUP-CHECKLIST. **לא graceful skip שקט**: ה-cron אסור
+   להשתיק תקלת תשתית.
+```
+
+**False positives:**
+- ⚠️ exception class שהוא בכוונה fatal (שובר את הענן) — לא צריך תפיסה. אבל זה נדיר בcron jobs.
+
+**Mode מומלץ:** Warning, עם הקפדה על "אם תופסים A אבל לא B, איזה הוא ההצדקה". ניתן לתעד במלל ב-handler.
+
 ---
 
 ## P2 — Pattern 6: Touchpoint לא comprehensive (חסר field/auto-close/cache)

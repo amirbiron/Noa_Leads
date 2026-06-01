@@ -7,6 +7,9 @@ renew_calendar_watch — רץ פעם ביום (מומלץ 04:00).
 
 אם BACKEND_URL לא מוגדר — הג'וב לא יוצר watch (warn + exit 0).
 אם Google לא מחובר — דילוג שקט.
+אם Google env vars חסרים על ה-cron service — error log מפורש, **לא**
+דילוג שקט (אחרת drift בתשתית הופך את הסנכרון לשבור בשקט). ראה
+SETUP-CHECKLIST §3.A.3 ו-recurring-bug-patterns Pattern 5.
 """
 
 import logging
@@ -22,6 +25,23 @@ async def renew_watch() -> None:
     async with AsyncSessionLocal() as db:
         try:
             renewed = await gc_service.renew_watch_if_needed(db)
+        except gc_service.GoogleNotConfiguredError:
+            # env vars חסרים על cron service. זה drift לטנטי: ה-OAuth flow
+            # רץ ב-web service (שיש לו env), נוצרת שורה ב-DB, ואז ה-cron
+            # מנסה לקרוא ל-`_client_config()` ונופל. עד היצירה של ה-row
+            # ה-cron היה עושה early return ב-`_load_row(db) is None` —
+            # ולכן הdrift התחבא חודשים.
+            #
+            # logger.error (לא info/warning) כדי שהאלרט יהיה גלוי ב-logs
+            # aggregator. **לא graceful skip שקט** — הסנכרון של הלקוחה
+            # שבור עד שהאדמין מוסיף את ה-env לcron service ב-Render.
+            logger.error(
+                "Google env vars missing on cron service — calendar sync "
+                "is BROKEN until GOOGLE_CLIENT_ID/SECRET/REDIRECT_URI "
+                "are configured on the cron service in Render. "
+                "See SETUP-CHECKLIST §3.A.3 (web+cron parity)."
+            )
+            return
         except gc_service.GoogleNotConnectedError:
             logger.info("Google Calendar not connected — skipping watch renewal")
             return

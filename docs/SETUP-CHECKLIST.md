@@ -101,6 +101,18 @@
 
 #### 3.A.3 Google integration (חובה אם הלקוח מפעיל Calendar / Gmail intake)
 
+> ⚠️ **חובה: env vars אלו נדרשים גם ב-web service וגם ב-cron service.**
+> Render מנהל את שני השירותים בנפרד; env שמוגדר רק ב-web → cron יקרוס
+> עם `GoogleNotConfiguredError` ברגע שיהיה DB row של credentials
+> (כלומר, אחרי החיבור הראשון של הלקוחה דרך ה-UI). זה drift לטנטי
+> שלא מתבטא ב-deploy ראשון (אין credentials → cron עושה early return),
+> אלא רק אחרי שה-OAuth flow רץ פעם אחת ויש שורה ב-`google_calendar_credentials`.
+>
+> **דפוס כללי**: כל env שמשרת flow של cron (לא רק UI/API) חייב להופיע
+> בשני ה-services. ראה גם `BACKEND_URL` (סעיף 3.A.1) — אותו דפוס שכבר
+> נשרף עליו פעמיים. אכיפה: לאחר deploy חדש, השווה env vars ידנית
+> בין ה-web service ל-cron service ב-Render dashboard.
+
 - [ ] `GOOGLE_CLIENT_ID` — מ-Google Cloud Console (ראה Section 4.1).
 - [ ] `GOOGLE_CLIENT_SECRET` — אותו מקום.
 - [ ] `GOOGLE_REDIRECT_URI` — `<BACKEND_URL>/google/auth/callback`.
