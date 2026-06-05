@@ -65,4 +65,6 @@ async def retry_pending() -> None:
 
 
 if __name__ == "__main__":
-    run_job("retry_pending_classification", retry_pending)
+    # requires_encryption=True — apply_filter_label דורש refresh_token
+    # מפוענח של Gmail.
+    run_job("retry_pending_classification", retry_pending, requires_encryption=True)

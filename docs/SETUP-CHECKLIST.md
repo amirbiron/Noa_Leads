@@ -101,17 +101,20 @@
 
 #### 3.A.3 Google integration (חובה אם הלקוח מפעיל Calendar / Gmail intake)
 
-> ⚠️ **חובה: env vars אלו נדרשים גם ב-web service וגם ב-cron service.**
-> Render מנהל את שני השירותים בנפרד; env שמוגדר רק ב-web → cron יקרוס
-> עם `GoogleNotConfiguredError` ברגע שיהיה DB row של credentials
-> (כלומר, אחרי החיבור הראשון של הלקוחה דרך ה-UI). זה drift לטנטי
-> שלא מתבטא ב-deploy ראשון (אין credentials → cron עושה early return),
-> אלא רק אחרי שה-OAuth flow רץ פעם אחת ויש שורה ב-`google_calendar_credentials`.
+> ✅ **תוקן (06/2026): envVarGroup משותף `noa-leads-google`**.
+> כל ה-env vars של Google + `SECRETS_ENCRYPTION_KEY` + `BACKEND_URL`
+> מוגדרים ב-group יחיד ב-`render.yaml`, ומתפזרים אוטומטית ל-web ול-3
+> cron services שדורשים אותם (`renew_calendar_watch`, `renew_gmail_watch`,
+> `retry_pending_classification`).
+>
+> **מתאם**: הזן את הערכים *פעם אחת* ב-Render dashboard תחת
+> "Environment Groups → noa-leads-google". הם יתפזרו אוטומטית. בלי
+> ה-group היו 8 vars שדרשו עדכון ידני ב-4 places — drift שנשרף עליו
+> פעמיים (05/2026 GOOGLE_* חסר ב-cron; 06/2026 SECRETS_ENCRYPTION_KEY
+> חסר). ראה: `docs/recurring-bug-patterns.md` Pattern 5 Variant 5c.
 >
 > **דפוס כללי**: כל env שמשרת flow של cron (לא רק UI/API) חייב להופיע
-> בשני ה-services. ראה גם `BACKEND_URL` (סעיף 3.A.1) — אותו דפוס שכבר
-> נשרף עליו פעמיים. אכיפה: לאחר deploy חדש, השווה env vars ידנית
-> בין ה-web service ל-cron service ב-Render dashboard.
+> ב-envVarGroup, לא ב-`sync: false` per-service.
 
 - [ ] `GOOGLE_CLIENT_ID` — מ-Google Cloud Console (ראה Section 4.1).
 - [ ] `GOOGLE_CLIENT_SECRET` — אותו מקום.

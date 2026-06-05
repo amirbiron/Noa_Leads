@@ -262,6 +262,39 @@ state טרמינלי.
 
 **Mode מומלץ:** Warning, עם הקפדה על "אם תופסים A אבל לא B, איזה הוא ההצדקה". ניתן לתעד במלל ב-handler.
 
+### Variant 5c: Env drift בין services + unsafe-default fallback
+
+**דוגמאות:**
+- `GOOGLE_CLIENT_ID/SECRET/REDIRECT_URI` הוגדרו רק ב-web service ב-Render (5/2026). cron `renew_calendar_watch` נכשל אחרי שנועה התחברה ל-Google דרך web — DB row נוצר → ה-cron יצא מ-early return → קרא ל-`_client_config()` → נפל. drift לטנטי שלא התבטא ב-deploy ראשון.
+- `SECRETS_ENCRYPTION_KEY` חסר ב-cron service (6/2026, אחרי שהGoogle env תוקן). ה-cron הצליח להגיע ל-`decrypt_secret` ונפל עם `RuntimeError: ciphertext is encrypted but SECRETS_ENCRYPTION_KEY is not set`. אותו class בדיוק כמו ה-bug הקודם.
+- ה-fallback ב-`encryption.py` (גרסה קודמת): plaintext mode פעיל כש-`APP_ENV != "production"`. אבל ה-default של `app_env` ב-config.py הוא `"development"` → אם המתאם שכח להוסיף `APP_ENV=production` לcron, ה-cron כתב tokens כ-plaintext **בשקט**.
+
+**הסבר:** שני sub-patterns יחד:
+1. **Env drift**: web ו-cron services מוגדרים בנפרד ב-Render. כל env שדורש > service אחד חייב להיות ב-`envVarGroup` ב-`render.yaml`, לא ב-`sync: false` per-service. אחרת deployments חדשים יחסרו ערכים שלא היו מודעים לדרוש.
+2. **Unsafe-default fallback**: כש-config secret חסר, ה-fallback חייב להיות *strict by default*, ולדרוש opt-in מפורש ל-fallback. כל ערך לא-מוכר ל-`app_env` (typo, missing, "staging") חייב להפעיל את ה-strict path.
+
+**Custom rule prompt:**
+```
+1. ב-render.yaml: כל env var שמוגדר עם `sync: false` ב-2+ services הוא
+   suspect. אסור שיהיה drift. דווח: "הזז ל-envVarGroup משותף".
+
+2. בכל `if env_var_X / settings.X / config.X` שמסתעף ל-fallback:
+   - אם ה-fallback פחות בטוח (plaintext, no-auth, skip), ודא ש-condition
+     הוא **explicit opt-in** ("development", "dev"), לא "anything except
+     production".
+   - דווח: "fallback לא מוגן מ-typo או default — הפוך לstrict by default".
+
+3. eager validation: כל service (web + cron) שדורש secret חייב לקרוא ל-
+   `assert_*_ready()` ב-startup. lazy-init בקריאה ראשונה מבזבז זמן ומחביא
+   שגיאות תחת stack trace.
+```
+
+**False positives:**
+- ⚠️ env vars שבאמת ייחודיים ל-service אחד (`CORS_ORIGINS` ל-web בלבד) — לא דרושים group.
+- ⚠️ tests שעוברים בלי key — fixture יכול לסמלץ dev mode.
+
+**Mode מומלץ:** Strict על #1 (env drift) — קל לזהות אוטומטית. Warning על #2 (fallback condition) — דורש review של ה-logic.
+
 ---
 
 ## P2 — Pattern 6: Touchpoint לא comprehensive (חסר field/auto-close/cache)

@@ -58,4 +58,7 @@ async def renew_watch() -> None:
 
 
 if __name__ == "__main__":
-    run_job("renew_calendar_watch", renew_watch)
+    # requires_encryption=True — ה-cron קורא ל-decrypt_secret על refresh_token
+    # ב-DB. eager validation ב-_runner נכשל ב-startup אם SECRETS_ENCRYPTION_KEY
+    # חסר/invalid, במקום לחכות שמגיע ל-קריאה.
+    run_job("renew_calendar_watch", renew_watch, requires_encryption=True)
