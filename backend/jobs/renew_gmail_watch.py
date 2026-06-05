@@ -40,4 +40,5 @@ async def renew_watch() -> None:
 
 
 if __name__ == "__main__":
-    run_job("renew_gmail_watch", renew_watch)
+    # requires_encryption=True — מפענח refresh_token של Gmail מ-DB.
+    run_job("renew_gmail_watch", renew_watch, requires_encryption=True)

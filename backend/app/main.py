@@ -37,7 +37,14 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # מקום עתידי ל-init של חיבורי DB / clients חיצוניים
+    # eager validation: encryption חייב להיות תקין לפני שנותנים traffic.
+    # אם SECRETS_ENCRYPTION_KEY חסר/invalid או APP_ENV != "development",
+    # זה זורק RuntimeError והservice לא יעלה. בלי זה, deploy "מצליח"
+    # ו-OAuth flow ראשון נופל שעות מאוחר יותר עם stack trace שקשה
+    # לקריאה. ראה: docs/recurring-bug-patterns.md Pattern 5 Variant 5c.
+    from app.utils.encryption import assert_encryption_ready
+
+    assert_encryption_ready()
     yield
 
 

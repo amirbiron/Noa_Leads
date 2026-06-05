@@ -101,6 +101,21 @@
 
 #### 3.A.3 Google integration (חובה אם הלקוח מפעיל Calendar / Gmail intake)
 
+> ✅ **תוקן (06/2026): envVarGroup משותף `noa-leads-google`**.
+> כל ה-env vars של Google + `SECRETS_ENCRYPTION_KEY` + `BACKEND_URL`
+> מוגדרים ב-group יחיד ב-`render.yaml`, ומתפזרים אוטומטית ל-web ול-3
+> cron services שדורשים אותם (`renew_calendar_watch`, `renew_gmail_watch`,
+> `retry_pending_classification`).
+>
+> **מתאם**: הזן את הערכים *פעם אחת* ב-Render dashboard תחת
+> "Environment Groups → noa-leads-google". הם יתפזרו אוטומטית. בלי
+> ה-group היו 8 vars שדרשו עדכון ידני ב-4 places — drift שנשרף עליו
+> פעמיים (05/2026 GOOGLE_* חסר ב-cron; 06/2026 SECRETS_ENCRYPTION_KEY
+> חסר). ראה: `docs/recurring-bug-patterns.md` Pattern 5 Variant 5c.
+>
+> **דפוס כללי**: כל env שמשרת flow של cron (לא רק UI/API) חייב להופיע
+> ב-envVarGroup, לא ב-`sync: false` per-service.
+
 - [ ] `GOOGLE_CLIENT_ID` — מ-Google Cloud Console (ראה Section 4.1).
 - [ ] `GOOGLE_CLIENT_SECRET` — אותו מקום.
 - [ ] `GOOGLE_REDIRECT_URI` — `<BACKEND_URL>/google/auth/callback`.

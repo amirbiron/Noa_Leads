@@ -76,10 +76,10 @@ async def test_create_first_response_uses_rule_interval(db):
     assert task.type == TaskType.FIRST_RESPONSE.value
     # due_at >= now + 2h (לפחות interval; adjustment רק יכול להוסיף).
     assert task.due_at >= now + timedelta(hours=2) - timedelta(seconds=5)
-    # due_at <= now + 2h + 24h (adjustment לכל היותר דוחה ליום עבודה הבא).
-    assert task.due_at <= now + timedelta(hours=2) + timedelta(hours=24)
+    # due_at <= now + 2h + 72h (adjustment של work hours: שישי דוחה לראשון).
+    assert task.due_at <= now + timedelta(hours=2) + timedelta(hours=72)
     # שינוי משמעותי מהקבוע הישן (24h): due_at רחוק יותר מ-2h מעכשיו,
-    # אבל באופן ברור פחות מ-24h+24h. השוואה ישירה ל-default היא לא
+    # אבל באופן ברור פחות מ-24h+72h. השוואה ישירה ל-default היא לא
     # דטרמיניסטית (תלוי בשעת הריצה), ולכן בודקים רק את ה-bound החדש.
 
 
@@ -104,9 +104,10 @@ async def test_create_first_response_falls_back_to_default_if_rule_missing(db):
     assert task.due_at >= now + timedelta(seconds=default_sec) - timedelta(
         seconds=5
     )
-    # due_at <= now + 24h + 24h (adjustment של work hours).
+    # due_at <= now + 24h + 72h (adjustment של work hours; כש-now+interval
+    # נופל ביום שישי, ה-adjustment דוחה לראשון = 2-3 ימים).
     assert task.due_at <= now + timedelta(seconds=default_sec) + timedelta(
-        hours=24
+        hours=72
     )
 
 
@@ -172,10 +173,10 @@ async def test_warm_followup_uses_rule_for_both_selection_and_due_at(db):
     assert lead_too_recent.id not in candidate_ids
 
     # due_at = last_outbound + 12h, מותאם לשעות עבודה. בדיקה: לפחות
-    # last_outbound + 12h, ולכל היותר +24h adjustment.
+    # last_outbound + 12h, ולכל היותר +72h adjustment (שישי דוחה לראשון).
     due = _calc_due_at(last_outbound, interval_sec)
     assert due >= last_outbound + timedelta(hours=12) - timedelta(seconds=5)
-    assert due <= last_outbound + timedelta(hours=12) + timedelta(hours=24)
+    assert due <= last_outbound + timedelta(hours=12) + timedelta(hours=72)
 
     # cleanup: rollback של conftest מנקה. אין צורך ליצור tasks בפועל
     # (אנחנו בודקים את ה-helpers בנפרד מ-cron commit).
