@@ -19,7 +19,6 @@ import asyncio
 import logging
 from datetime import date, datetime, time, timedelta, timezone
 from uuid import UUID
-from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -606,6 +605,15 @@ async def create_booking_request(
             "slot_end": slot_end.isoformat(),
         },
     )
+
+    # בקשת תור = touchpoint inbound (הלקוח חזר אלינו). סוגרת tasks תקועים
+    # — בעיקר warm_followup ("הלקוח לא חזר") שכבר לא רלוונטי. ה-bypass
+    # שתוקן: לפני כן ה-UPDATE לא סגר tasks, ו-warm_followup שרד אחרי שהלקוח
+    # קבע תור. booking לא pure-inbound (transition ל-BOOKING_PENDING), אז
+    # חולק רק את Layer 1 (close_touchpoint_tasks), לא register_inbound המלא.
+    from app.services.lead_actions import close_touchpoint_tasks
+
+    await close_touchpoint_tasks(db, lead.id, now_utc)
 
     # extract primitives לפני commit — אחרי commit ה-ORM attributes עלולים
     # להיות expired/lazy ולגרור MissingGreenlet ב-async session (כלל 5 ב-CLAUDE.md).

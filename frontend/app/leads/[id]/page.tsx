@@ -22,6 +22,7 @@ import { useDashboardPollContext } from "@/components/DashboardPollProvider";
 import { DynamicActionButton } from "@/components/DynamicActionButton";
 import { EditLeadModal } from "@/components/EditLeadModal";
 import { IncomingEmailsSection } from "@/components/IncomingEmailsSection";
+import { LogInboundButton } from "@/components/LogInboundButton";
 import { PendingBookingCard } from "@/components/PendingBookingCard";
 import { ProgramCard } from "@/components/ProgramCard";
 import { QuickActions } from "@/components/QuickActions";
@@ -355,6 +356,14 @@ export default function LeadDetailPage() {
                 העברה
               </button>
             </div>
+          )}
+
+          {/* תיעוד הודעה נכנסת — ה-trigger ל-perform_action("log_inbound_message").
+              כשהלקוח עונה בוואטסאפ/טלפון, נועה מסמנת כאן; ה-chokepoint סוגר
+              warm_followup ומבצע את שאר ה-side-effects. רק לליד פתוח
+              (allowed_from=OPEN_LEAD_STATUSES ב-backend). */}
+          {!["WON", "LOST", "ARCHIVED"].includes(lead.status) && (
+            <LogInboundButton leadId={lead.id} onLogged={load} />
           )}
 
           {/* קישור לדף קביעת תור — להעתקה ושיתוף עם הליד */}

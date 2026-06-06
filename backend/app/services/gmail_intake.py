@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import json
 import logging
 import re
 from typing import Any
@@ -444,9 +443,12 @@ async def _create_lead_from_draft(
             preferred_contact=PreferredContact.EMAIL,
         )
 
-    # commit=False כדי שנוסיף activity + נעדכן email_msg.lead_id באטומיות
+    # commit=False כדי שנוסיף activity + נעדכן email_msg.lead_id באטומיות.
+    # set_last_inbound=True — הליד נוצר ממייל נכנס של הלקוח (קטגוריה B
+    # ב-inbound chokepoint). last_inbound_at נקבע ביצירה; FIRST_RESPONSE
+    # נשאר פתוח (נועה עוד צריכה לענות).
     lead = await leads_service.create_lead(
-        db, lead_create, current_user_id=None, commit=False
+        db, lead_create, current_user_id=None, commit=False, set_last_inbound=True
     )
 
     # סימוני AI

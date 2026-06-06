@@ -16,7 +16,6 @@ from app.constants import (
     CLOSED_LEAD_STATUSES,
     OPEN_LEAD_STATUSES,
     ActivityType,
-    ClosureReason,
     LeadStatus,
 )
 from app.core.exceptions import (
@@ -47,6 +46,7 @@ async def create_lead(
     *,
     create_first_response_task: bool = True,
     commit: bool = True,
+    set_last_inbound: bool = False,
 ) -> Lead:
     """
     יוצרת ליד חדש + רישום ב-audit log + (כברירת מחדל) משימת first_response.
@@ -54,10 +54,17 @@ async def create_lead(
 
     commit=False — מאפשר לקוראים להוסיף activities נוספים לפני commit,
     כדי לשמור על אטומיות (ראה intake_after_hours_whatsapp).
+
+    set_last_inbound=True — לליד שנוצר *מ-inbound* של הלקוח (WhatsApp
+    after-hours, Gmail intake): קובע last_inbound_at=now ביצירה. בלי זה
+    silence-break detection ומיון הדשבורד מתבססים על NULL. *לא* סוגר
+    FIRST_RESPONSE — נועה עדיין צריכה לענות (זה קטגוריה B במיפוי, לא
+    register_inbound; ראה inbound chokepoint).
     """
     # אם לא צוין owner מפורש, מקצים לפי המשתמש שיצר
     owner_id = payload.owner_id or current_user_id
 
+    now = datetime.now(timezone.utc)
     lead = Lead(
         full_name=payload.full_name,
         phone=payload.phone,
@@ -87,6 +94,8 @@ async def create_lead(
         lead_message=payload.lead_message,
         status=LeadStatus.NEW.value,
         waiting_on="NOAH",
+        # ליד שנוצר מ-inbound — last_inbound_at=now. ברירת מחדל None.
+        last_inbound_at=now if set_last_inbound else None,
     )
     db.add(lead)
     await db.flush()  # כדי לקבל id
