@@ -24,6 +24,13 @@ logger = logging.getLogger("jobs.renew_calendar_watch")
 async def renew_watch() -> None:
     async with AsyncSessionLocal() as db:
         try:
+            # גילוי יומי של פקיעת חיבור: אימות מפורש של ה-credentials לפני
+            # החידוש. אם ה-refresh token פג (Google מבטל אחרי 7 ימים ב-Testing
+            # mode — ראה docs/google-calendar-setup.md), get_credentials_or_404
+            # זורק GoogleAuthInvalidError ו-_mark_auth_invalid שולח את התראת
+            # הטלגרם הקיימת — תוך ≤24h, ולא רק כש-renew_watch_if_needed במקרה
+            # מגיע ל-create_watch (כל ~7 ימים). owner_alert_sent_at מונע ספאם.
+            await gc_service.get_credentials_or_404(db)
             renewed = await gc_service.renew_watch_if_needed(db)
         except gc_service.GoogleNotConfiguredError:
             # env vars חסרים על cron service. זה drift לטנטי: ה-OAuth flow
@@ -46,8 +53,12 @@ async def renew_watch() -> None:
             logger.info("Google Calendar not connected — skipping watch renewal")
             return
         except gc_service.GoogleAuthInvalidError:
+            # get_credentials_or_404 כבר שלח התראת טלגרם בגילוי הראשון
+            # (_mark_auth_invalid). ריצות הבאות רואות auth_invalid_at מסומן
+            # ולא שולחות שוב.
             logger.warning(
-                "Google auth invalid — watch renewal skipped (owner already alerted)"
+                "Google auth invalid — owner alerted via Telegram, "
+                "watch renewal skipped until reconnect"
             )
             return
 
