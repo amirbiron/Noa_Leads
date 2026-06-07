@@ -171,6 +171,16 @@
     - **External** אם חשבון אישי (gmail.com) — דורש Google verification
       לפני שמשתמשים אחרים יוכלו לאשר. **(?) לבחור לפי סוג חשבון.**
   - הגדרת App name, support email, developer contact.
+  - [ ] ⚠️ **Publishing status: PUBLISH APP (Production) — קריטי.**
+    אפליקציה ב-**Testing** status: Google **מבטל את ה-refresh tokens
+    אחרי 7 ימים**. התוצאה: חיבור Gmail ו-Calendar "פג תוקף" כל שבוע,
+    והלקוחה צריכה להתחבר מחדש שוב ושוב (+ מקבלת התראת טלגרם על פקיעה).
+    **הפתרון:** OAuth consent screen → **PUBLISH APP** → "In production".
+    אז ה-tokens מפסיקים לפוג כל 7 ימים. לחשבון gmail.com (External)
+    תופיע אזהרת "Google hasn't verified this app" בהתחברות — לוחצים
+    **Advanced → Go to <app> (unsafe)** ומאשרים; ה-tokens יציבים אחרי זה.
+    (verification מלא של Google מבטל גם את האזהרה, אבל לוקח שבועות
+    ואינו חובה ל-MVP — מספיק Production status.)
 - [ ] יצירת **OAuth 2.0 Client ID** (Credentials → Create Credentials →
   OAuth client ID → Web application).
 - [ ] Authorized redirect URIs — להוסיף **שתי כתובות**:
