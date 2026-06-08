@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
+  Bell,
   ChevronLeft,
   Coins,
   FileText,
@@ -13,7 +14,6 @@ import {
   UserPlus,
 } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
-import { FollowupRulesSection } from "@/components/FollowupRulesSection";
 import { GmailConnectionSection } from "@/components/GmailConnectionSection";
 import { GoogleCalendarSection } from "@/components/GoogleCalendarSection";
 import { SectionHeader } from "@/components/SectionHeader";
@@ -97,6 +97,13 @@ export default function SettingsPage() {
             label="תעריפי שירות"
           />
         )}
+        {/* חוקי פולואף (§17.1) — תת-עמוד ייעודי (היה inline ומתפזר). owner
+            עורך, assistant readonly; ה-enforcement ב-backend. */}
+        <NavRow
+          href="/settings/followup-rules"
+          icon={<Bell size={18} />}
+          label="חוקי פולואף"
+        />
         <NavRow href="/proposals" icon={<Send size={18} className="rtl:-scale-x-100" />} label="הצעות פתוחות" />
       </ul>
 
@@ -123,19 +130,6 @@ export default function SettingsPage() {
           <AssistantSetupForm onCreated={loadUsers} />
         </>
       )}
-
-      {/* חוקי פולואף (§17.1) — עריכת זמני התראה + תזכורת חוזרת
-          (owner-only; assistant רואה readonly). */}
-      <SectionHeader
-        title="חוקי פולואף"
-        hint={
-          me?.role === "owner"
-            ? "שינויים יחולו על תזכורות שייווצרו מעכשיו. תזכורות פעילות ימשיכו לפי הזמן הראשוני שלהן — אך החזרות שלהן יקבלו את ההגדרה החדשה."
-            : "תצוגה בלבד — עריכה ניתנת לבעלים"
-        }
-      />
-      <FollowupRulesSection isOwner={me?.role === "owner"} />
-
 
       {/* AI status — נכבה תמיד בפאזה 1 */}
       <SectionHeader title="פיצ'רים עתידיים" />
