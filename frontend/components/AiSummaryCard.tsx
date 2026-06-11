@@ -1,9 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { CalendarRange, Sparkles, ThumbsDown } from "lucide-react";
-import { api, ApiError } from "@/lib/api";
-import { EXPAND_DAILY_SUMMARY_EVENT } from "@/lib/dailySummaryEvents";
+import { CalendarRange, Sparkles } from "lucide-react";
 import { parseSummaryText } from "@/lib/parseSummaryText";
 import { useLocalStorageState } from "@/lib/useLocalStorage";
 import type {
@@ -21,15 +18,17 @@ import { CollapseToggleButton } from "./CollapseToggleButton";
 // בודקים שהשדה עצמו לא ריק (כי במקרה הבסיסי `(string|null) === null`
 // ו-`array.length === 0` כבר מוסתרים).
 //
-// **כפתור "לא מדויק" (§3.7)**: לחיצה → POST ל-endpoint שמעלה
-// inaccurate_count ב-1. feedback ויזואלי קצר. counter פנימי (לא מוצג).
-//
 // **collapsible**: כפתור chevron בכל הbreakpoints (גם דסקטופ). מצב
-// הקיפול נשמר ב-localStorage תחת `noa:summary:{type}:collapsed` —
-// לפי slot, חולק עם DailySummaryBubble (Daily slot) ועם רענונים/
-// breakpoints.
-
-type SubmitState = "idle" | "submitting" | "done" | "error";
+// הקיפול נשמר ב-localStorage תחת `noa:summary:{type}:collapsed`.
+//
+// **visibility של הסיכום היומי:** Daily card מוסתר לחלוטין ב-default
+// בעמוד הבית — Parent (`app/page.tsx`) שולט ע"י state `showDailySummary`
+// שמתעדכן בלחיצה על ה-badge "סיכום יומי". כש-Daily כן מרונדר, הוא רנדר
+// פתוח (`collapsed: false` כברירת מחדל) — אין סיבה לקיפול נוסף אחרי
+// שהמשתמשת ביקשה לראות.
+//
+// **כפתור "לא מדויק" הוסר** (החלטת מוצר). ה-endpoint
+// `api.markAiSummaryInaccurate` נשאר ב-frontend/lib/api.ts לעתיד.
 
 export function AiSummaryCard({
   summary,
@@ -39,54 +38,24 @@ export function AiSummaryCard({
   collapsible?: boolean;
 }) {
   // key נגזר מ-summary.type — `noa:summary:daily:collapsed` או
-  // `noa:summary:weekly:collapsed`. ברירת המחדל ל-daily: מקופל
-  // (החלטת מוצר — חוסך מקום, הbadge בכותרת פותח). שבועי נשאר פתוח
-  // כברירת מחדל כי אין badge מתאים.
+  // `noa:summary:weekly:collapsed`. default false (פתוח).
   const [collapsed, setCollapsed] = useLocalStorageState(
     `noa:summary:${summary.type}:collapsed`,
-    summary.type === "daily",
+    false,
   );
-
-  // האזנה ל-`noa:expand-daily-summary` — נורה מהbadge "סיכום יומי" בכותרת
-  // ה-AppShell בעמוד הבית. פותח את כרטיס הסיכום היומי גם אם נשמר במצב
-  // מקופל ב-localStorage. רק לכרטיס "daily" — שבועי מתעלם.
-  useEffect(() => {
-    if (summary.type !== "daily") return;
-    function onExpand() {
-      setCollapsed(false);
-    }
-    window.addEventListener(EXPAND_DAILY_SUMMARY_EVENT, onExpand);
-    return () =>
-      window.removeEventListener(EXPAND_DAILY_SUMMARY_EVENT, onExpand);
-  }, [summary.type, setCollapsed]);
   // אם collapsible=false, אסור לערך השמור ב-localStorage לחסום את ה-body —
   // הכפתור מוסתר וה-משתמשת לא יכולה לפתוח. ה-state עדיין נשמר ל-mode
   // הבא בו collapsible=true.
   const isCollapsed = collapsible && collapsed;
-  const [submitState, setSubmitState] = useState<SubmitState>("idle");
 
   const isDaily = summary.type === "daily";
   const titlePrefix = isDaily ? "סיכום יומי" : "סיכום שבועי";
   const Icon = isDaily ? Sparkles : CalendarRange;
-  const accentColor = isDaily ? "indigo" : "emerald";
 
   // Tailwind requires literal class names — לא להשתמש ב-`bg-${color}-X`.
   const wrapperClass = isDaily
     ? "bg-gradient-to-bl from-indigo-500/10 to-indigo-500/5 border-indigo-300/40 text-indigo-500"
     : "bg-gradient-to-bl from-emerald-500/10 to-emerald-500/5 border-emerald-300/40 text-emerald-600";
-
-  async function handleInaccurate() {
-    if (submitState !== "idle") return;
-    setSubmitState("submitting");
-    try {
-      await api.markAiSummaryInaccurate(summary.id);
-      setSubmitState("done");
-    } catch (err) {
-      // לוג בקונסולה, ולא מציגים פירוט למשתמש (כלל 3).
-      console.error("markAiSummaryInaccurate failed", err);
-      setSubmitState(err instanceof ApiError ? "error" : "error");
-    }
-  }
 
   return (
     <div
@@ -116,22 +85,11 @@ export function AiSummaryCard({
           </div>
 
           {!isCollapsed && (
-            <>
-              {isDaily ? (
-                <DailyBody output={summary.output as AiSummaryOutputDaily} />
-              ) : (
-                <WeeklyBody output={summary.output as AiSummaryOutputWeekly} />
-              )}
-
-              {/* כפתור "לא מדויק" — §3.7. ממוקם בתחתית ה-card, פעיל פעם אחת. */}
-              <div className="mt-3 flex justify-end">
-                <InaccurateButton
-                  state={submitState}
-                  onClick={handleInaccurate}
-                  accent={accentColor}
-                />
-              </div>
-            </>
+            isDaily ? (
+              <DailyBody output={summary.output as AiSummaryOutputDaily} />
+            ) : (
+              <WeeklyBody output={summary.output as AiSummaryOutputWeekly} />
+            )
           )}
         </div>
       </div>
@@ -208,45 +166,5 @@ function ListSection({ label, items }: { label: string; items: string[] }) {
         ))}
       </ul>
     </div>
-  );
-}
-
-function InaccurateButton({
-  state,
-  onClick,
-  accent,
-}: {
-  state: SubmitState;
-  onClick: () => void;
-  accent: "indigo" | "emerald";
-}) {
-  if (state === "done") {
-    return (
-      <span
-        className={`text-[11px] ${accent === "indigo" ? "text-indigo-600" : "text-emerald-700"}`}
-        aria-live="polite"
-      >
-        תודה, נשפר
-      </span>
-    );
-  }
-  if (state === "error") {
-    return (
-      <span className="text-[11px] text-state-red" aria-live="polite">
-        לא הצלחנו לשמור — נסי שוב
-      </span>
-    );
-  }
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={state === "submitting"}
-      aria-label="סמני את הסיכום כלא מדויק"
-      className="flex items-center gap-1 text-[11px] text-gray-500 hover:text-gray-900 disabled:opacity-50"
-    >
-      <ThumbsDown size={14} aria-hidden />
-      <span>לא מדויק</span>
-    </button>
   );
 }
