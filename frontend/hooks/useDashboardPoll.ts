@@ -153,31 +153,48 @@ export function useDashboardPoll(): PollState & PollControl {
         if (expiresAt <= now) manuallyCreatedRef.current.delete(id);
       }
 
-      // publish — מסנן שוב מול manuallyCreatedRef (חשוב אחרי defer:
-      // ה-Map עשוי להתעדכן בין ה-poll ל-publish), ומקבע ב-setState.
-      // נקרא או מיידית או דרך setTimeout במסלול ה-creation-pending.
+      // publish — מפריד בין שני signals:
+      //   * `pollVersion` bump = "רשימות, רעננו": תקף גם ללידים שנועה
+      //     יצרה ידנית (היא בדף הליד שלהם, אבל /today /leads /pending
+      //     לא מודעים — מציגים רשימה stale עד poll חיצוני).
+      //   * `toastMessage` + `recentlyUpdatedLeadIds` = "מה להציג":
+      //     מסונן (אין טעם להראות "ליד חדש: X" על מה שנועה הקלידה,
+      //     ואין טעם לבקש מדף הליד שלה לעשות load מחדש — הוא fresh).
+      //
+      // ה-defer (creation-pending) רק קובע מתי publish רץ; הסמנטיקה
+      // של "filtered מול raw" שווה בשני המסלולים.
       const publish = () => {
+        // raw delta — לבדיקה האם בכלל קרה משהו ב-server.
+        const rawDelta =
+          resp.new_leads.length + resp.leads_with_inbound_replies.length;
+        if (rawDelta === 0) return; // poll ריק לחלוטין — אין מה לעשות.
+
+        // filtered — לידים שנועה לא יצרה. רק אלה מצדיקים toast ו-
+        // refetch בדף ליד פתוח.
         const finalNewLeads = resp.new_leads.filter(
           (l) => !manuallyCreatedRef.current.has(l.id),
         );
-        const total =
+        const filteredDelta =
           finalNewLeads.length + resp.leads_with_inbound_replies.length;
-        if (total === 0) return; // אין delta אחרי סינון — לא toast.
-        const finalResp: DashboardPollResponse = {
-          ...resp,
-          new_leads: finalNewLeads,
-        };
+
         const ids = new Set<string>([
-          ...finalResp.new_leads.map((l: LeadCard) => l.id),
-          ...finalResp.leads_with_inbound_replies.map(
-            (l: LeadCard) => l.id,
-          ),
+          ...finalNewLeads.map((l: LeadCard) => l.id),
+          ...resp.leads_with_inbound_replies.map((l: LeadCard) => l.id),
         ]);
-        const message = buildToast(finalResp);
+
+        // toast רק אם יש משהו ש*נראה* למשתמש. אם הכל לידים ידניים →
+        // null = אין toast חדש. שומרים על prev.toastMessage כדי לא
+        // לבטל toast קיים שעוד בתוקף (auto-dismiss timer ינקה אותו).
+        const message =
+          filteredDelta > 0
+            ? buildToast({ ...resp, new_leads: finalNewLeads })
+            : null;
+
         setState((prev) => ({
+          // bump תמיד כש-rawDelta > 0 — רשימות צריכות לדעת על השינוי.
           pollVersion: prev.pollVersion + 1,
           recentlyUpdatedLeadIds: ids,
-          toastMessage: message,
+          toastMessage: message ?? prev.toastMessage,
         }));
       };
 
