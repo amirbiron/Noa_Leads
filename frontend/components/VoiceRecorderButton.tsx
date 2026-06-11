@@ -25,11 +25,32 @@ import { api, ApiError } from "@/lib/api";
 // לפני side-effect, כך ש-unmount/error/double-tap לא גורמים ל-upload
 // מיותר או setState על component unmounted.
 
-interface Props {
+// 2 מצבי שימוש (discriminated):
+//   `mode: "lead"` — תמלול בקונטקסט ליד קיים (`/leads/{id}/transcribe-note`).
+//   `mode: "new"` — תמלול לטופס יצירת ליד (`/transcribe-note`, ה-context
+//   הוא form fields שכבר הוקלדו). אין `leadId`.
+//
+// הפרדה ב-type מבטיחה שאי אפשר לטעות ולערבב — TS יזרוק אם חסר prop.
+type LeadMode = {
+  mode: "lead";
   leadId: string;
+};
+
+type NewLeadMode = {
+  mode: "new";
+  // ה-context שיועבר ל-backend כ-form fields. כל השדות אופציונליים —
+  // נועה אולי לחצה הקלטה לפני שמילאה הכל.
+  context: {
+    leadName?: string | null;
+    serviceCategory?: string | null;
+    serviceSubtype?: string | null;
+  };
+};
+
+type Props = (LeadMode | NewLeadMode) & {
   onTranscribed: (text: string) => void;
   disabled?: boolean;
-}
+};
 
 type RecState = "idle" | "starting" | "recording" | "transcribing";
 
@@ -75,11 +96,14 @@ function pickMimeHint(): string {
   return ""; // ה-MediaRecorder יבחר default
 }
 
-export function VoiceRecorderButton({
-  leadId,
-  onTranscribed,
-  disabled,
-}: Props) {
+export function VoiceRecorderButton(props: Props) {
+  const { onTranscribed, disabled } = props;
+  // ref עדכני ל-props.mode/context: `handleStop` ירוץ אחרי start-time
+  // closure (onstop callback של MediaRecorder נדבק פעם אחת ב-startRecording).
+  // אם נועה מקלידה שם תוך כדי הקלטה, אנחנו רוצים את השם בזמן ה-upload,
+  // לא בזמן ההתחלה. ref מתעדכן בכל render, closure תמיד קורא לערך עדכני.
+  const propsRef = useRef(props);
+  propsRef.current = props;
   const [state, setState] = useState<RecState>("idle");
   const [error, setError] = useState<string | null>(null);
   const sessionRef = useRef<RecordingSession | null>(null);
@@ -302,12 +326,24 @@ export function VoiceRecorderButton({
 
     let text: string | null = null;
     try {
-      const result = await api.transcribeNote(
-        leadId,
-        blob,
-        session.mimeType,
-        session.abortController.signal,
-      );
+      // בחירת ה-endpoint לפי mode. ב-"lead" יש leadId אמיתי; ב-"new"
+      // הקונטקסט הוא מה שכבר הוקלד בטופס יצירה (נקרא דרך ref כדי לתפוס
+      // עדכונים אחרי start־recording).
+      const liveProps = propsRef.current;
+      const result =
+        liveProps.mode === "lead"
+          ? await api.transcribeNote(
+              liveProps.leadId,
+              blob,
+              session.mimeType,
+              session.abortController.signal,
+            )
+          : await api.transcribeForNewLead(
+              blob,
+              session.mimeType,
+              liveProps.context,
+              session.abortController.signal,
+            );
       text = result.text;
     } catch (err) {
       // ה-modal נסגר תוך כדי upload — disposeSession קרא abort(), אז

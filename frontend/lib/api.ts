@@ -258,6 +258,35 @@ export const api = {
       },
     }),
 
+  // תמלול בלי lead — ל-NewLeadModal (לפני שהליד נוצר). הקונטקסט שמועבר
+  // הם השדות שכבר הוקלדו בטופס (שם, קטגוריה, sub-type) — משפר דיוק
+  // התמלול. ה-route ב-backend: routes/transcription.py.
+  transcribeForNewLead: (
+    audioBlob: Blob,
+    mimeType: string,
+    ctx: {
+      leadName?: string | null;
+      serviceCategory?: string | null;
+      serviceSubtype?: string | null;
+    },
+    signal?: AbortSignal,
+  ) =>
+    fetcher<{ text: string }>(`/transcribe-note`, {
+      method: "POST",
+      signal,
+      bodyFactory: () => {
+        const form = new FormData();
+        const ext = mimeType.split("/")[1]?.split(";")[0] ?? "webm";
+        form.append("audio_file", audioBlob, `recording.${ext}`);
+        if (ctx.leadName) form.append("lead_name", ctx.leadName);
+        if (ctx.serviceCategory)
+          form.append("service_category", ctx.serviceCategory);
+        if (ctx.serviceSubtype)
+          form.append("service_subtype", ctx.serviceSubtype);
+        return form;
+      },
+    }),
+
   getTimeline: (id: string) =>
     fetcher<Activity[]>(`/leads/${id}/timeline`),
 

@@ -3,7 +3,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiError } from "@/lib/api";
 import { AUTH_CHANGED_EVENT, isLoggedIn } from "@/lib/auth";
-import type { DashboardPollResponse } from "@/lib/types";
+import {
+  LEAD_MANUALLY_CREATED_EVENT,
+  MANUALLY_CREATED_TTL_MS,
+  type LeadManuallyCreatedDetail,
+} from "@/lib/leadEvents";
+import type { DashboardPollResponse, LeadCard } from "@/lib/types";
 
 // 60 שניות. לפי spec של אדיר: עד 15 דק' latency מקובל; 60s נותן UX
 // כמעט-realtime עם עומס זניח (1440 requests/יום למשתמש פעיל).
@@ -62,6 +67,30 @@ export function useDashboardPoll(): PollState & PollControl {
   const sinceRef = useRef<string>(new Date().toISOString());
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // לידים שנועה יצרה ידנית באמצעות NewLeadModal — מסוננים מ-toast/
+  // recentlyUpdatedLeadIds (אין טעם להתריע לה על מה שהיא עצמה יצרה
+  // רגע קודם). Map id → expiresAt (ms epoch). cleanup ב-doPoll
+  // לפני סינון, כדי שלא ידלוף לזמן בלתי-מוגבל.
+  const manuallyCreatedRef = useRef<Map<string, number>>(new Map());
+
+  useEffect(() => {
+    function onManuallyCreated(e: Event) {
+      const detail = (e as CustomEvent<LeadManuallyCreatedDetail>).detail;
+      if (detail?.id) {
+        manuallyCreatedRef.current.set(
+          detail.id,
+          Date.now() + MANUALLY_CREATED_TTL_MS,
+        );
+      }
+    }
+    window.addEventListener(LEAD_MANUALLY_CREATED_EVENT, onManuallyCreated);
+    return () =>
+      window.removeEventListener(
+        LEAD_MANUALLY_CREATED_EVENT,
+        onManuallyCreated,
+      );
+  }, []);
+
   const doPoll = useCallback(async () => {
     if (!isLoggedIn()) return;
     if (typeof document !== "undefined" && document.hidden) return;
@@ -72,15 +101,34 @@ export function useDashboardPoll(): PollState & PollControl {
       // server_time = anchor ל-poll הבא (מבדיל clock skew של ה-client).
       sinceRef.current = resp.server_time;
 
+      // cleanup של IDs פגי-תוקף לפני סינון — מונע דליפת זיכרון לאורך
+      // sessions ארוכים. ה-TTL (5 דק') מספיק לפסות poll שהיה in-flight
+      // בזמן ה-create.
+      const now = Date.now();
+      for (const [id, expiresAt] of manuallyCreatedRef.current) {
+        if (expiresAt <= now) manuallyCreatedRef.current.delete(id);
+      }
+
+      // סינון לידים שנועה יצרה ידנית — toast מיותר ואין מה "לרענן"
+      // עליהם (היא כבר ניווטה לדף הליד).
+      const newLeads = resp.new_leads.filter(
+        (l) => !manuallyCreatedRef.current.has(l.id),
+      );
+      const filtered: DashboardPollResponse = {
+        ...resp,
+        new_leads: newLeads,
+      };
+
       const total =
-        resp.new_leads.length + resp.leads_with_inbound_replies.length;
-      if (total === 0) return; // אין delta — לא להעלות pollVersion ולא toast
+        filtered.new_leads.length +
+        filtered.leads_with_inbound_replies.length;
+      if (total === 0) return; // אין delta אחרי סינון — לא toast.
 
       const ids = new Set<string>([
-        ...resp.new_leads.map((l) => l.id),
-        ...resp.leads_with_inbound_replies.map((l) => l.id),
+        ...filtered.new_leads.map((l: LeadCard) => l.id),
+        ...filtered.leads_with_inbound_replies.map((l: LeadCard) => l.id),
       ]);
-      const message = buildToast(resp);
+      const message = buildToast(filtered);
       setState((prev) => ({
         pollVersion: prev.pollVersion + 1,
         recentlyUpdatedLeadIds: ids,

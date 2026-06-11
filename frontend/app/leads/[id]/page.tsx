@@ -3,7 +3,6 @@
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import {
-  ArrowRightLeft,
   CalendarPlus,
   FileText,
   Mail,
@@ -30,7 +29,6 @@ import { SectionHeader } from "@/components/SectionHeader";
 import { StateBadge } from "@/components/StateBadge";
 import { TemplatePickerSheet } from "@/components/TemplatePickerSheet";
 import { Timeline } from "@/components/Timeline";
-import { TransferLeadModal } from "@/components/TransferLeadModal";
 import { api, ApiError } from "@/lib/api";
 import { toWhatsAppDigits } from "@/lib/phone";
 import {
@@ -50,7 +48,6 @@ import type {
   Lead,
   Program,
   StateColor,
-  User,
 } from "@/lib/types";
 
 // צבע מצב — לוגיקה פשוטה (Spec §12.9):
@@ -84,12 +81,9 @@ export default function LeadDetailPage() {
   const [loading, setLoading] = useState(true);
   const [templateOpen, setTemplateOpen] = useState(false);
   const [closeOpen, setCloseOpen] = useState(false);
-  const [transferOpen, setTransferOpen] = useState(false);
   const [programOpen, setProgramOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [reopening, setReopening] = useState(false);
-  // רשימת משתמשים — כדי לדעת אם קיימת עוזרת (כפתור "העברה" disabled אם אין).
-  const [users, setUsers] = useState<User[]>([]);
 
   async function load() {
     setError(null);
@@ -138,14 +132,6 @@ export default function LeadDetailPage() {
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
-
-  // טעינת משתמשים פעם אחת — לקביעת זמינות כפתור "העברה". כשל זניח (best-effort):
-  // הכפתור פשוט יישאר disabled.
-  useEffect(() => {
-    api.listUsers().then(setUsers).catch(() => {});
-  }, []);
-
-  const hasAssistant = users.some((u) => u.role === "assistant");
 
   // Refetch בחזרה מטאב/אפליקציה אחרת — קריטי לתרחיש פגישה: נועה
   // עזבה את הדף לטלפון, הפגישה הסתיימה, חוזרת — צריכה לראות את
@@ -334,28 +320,17 @@ export default function LeadDetailPage() {
             </div>
           )}
 
-          {/* כפתורי תבנית + העברה — רק לליד פתוח */}
+          {/* כפתור בחירת תבנית — רק לליד פתוח */}
           {!["WON", "LOST", "ARCHIVED"].includes(lead.status) && (
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                onClick={() => setTemplateOpen(true)}
-                className="rounded-lg bg-white border border-gray-200 py-2.5 text-sm font-medium flex items-center justify-center gap-1.5"
-              >
-                {/* Send הוא מטוס נייר — "חץ שליחה" שצריך להישקף ב-RTL
-                    לפי הסקיל (docs/Skills/hebrew-rtl-best-practices). */}
-                <Send size={15} aria-hidden className="rtl:-scale-x-100" />
-                בחירת תבנית
-              </button>
-              <button
-                onClick={() => setTransferOpen(true)}
-                disabled={!hasAssistant}
-                title={hasAssistant ? undefined : "אין עוזרת מוגדרת"}
-                className="rounded-lg bg-white border border-gray-200 py-2.5 text-sm font-medium flex items-center justify-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <ArrowRightLeft size={15} aria-hidden />
-                העברה
-              </button>
-            </div>
+            <button
+              onClick={() => setTemplateOpen(true)}
+              className="w-full rounded-lg bg-white border border-gray-200 py-2.5 text-sm font-medium flex items-center justify-center gap-1.5"
+            >
+              {/* Send הוא מטוס נייר — "חץ שליחה" שצריך להישקף ב-RTL
+                  לפי הסקיל (docs/Skills/hebrew-rtl-best-practices). */}
+              <Send size={15} aria-hidden className="rtl:-scale-x-100" />
+              בחירת תבנית
+            </button>
           )}
 
           {/* תיעוד הודעה נכנסת — ה-trigger ל-perform_action("log_inbound_message").
@@ -480,12 +455,6 @@ export default function LeadDetailPage() {
             open={closeOpen}
             onClose={() => setCloseOpen(false)}
             onClosed={load}
-          />
-          <TransferLeadModal
-            lead={lead}
-            open={transferOpen}
-            onClose={() => setTransferOpen(false)}
-            onTransferred={load}
           />
           <AddProgramModal
             leadId={lead.id}

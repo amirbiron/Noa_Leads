@@ -28,6 +28,7 @@ from app.api.routes import settings as settings_routes
 from app.api.routes import setup as setup_routes
 from app.api.routes import tasks as tasks_routes
 from app.api.routes import templates as templates_routes
+from app.api.routes import transcription as transcription_routes
 from app.api.routes import users as users_routes
 from app.config import get_settings
 from app.core.exceptions import AppException
@@ -186,6 +187,7 @@ def create_app() -> FastAPI:
     app.include_router(gmail_webhook_routes.router)
     app.include_router(booking_routes.router)
     app.include_router(bookings_routes.router)
+    app.include_router(transcription_routes.router)
     app.include_router(admin_routes.router)
 
     return app

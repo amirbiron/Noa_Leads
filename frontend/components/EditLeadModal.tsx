@@ -259,6 +259,7 @@ export function EditLeadModal({ lead, open, onClose, onSaved }: Props) {
                 נתמך (iOS Safari < 14.5), הכפתור מסתיר את עצמו. */}
             <div className="mt-2">
               <VoiceRecorderButton
+                mode="lead"
                 leadId={lead.id}
                 disabled={busy}
                 onTranscribed={(text) =>
