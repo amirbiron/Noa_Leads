@@ -29,7 +29,7 @@ export default function TodayPage() {
   }, []);
 
   return (
-    <AppShell title="פעולות היום">
+    <AppShell title="פעולות היום" titleTermKey="page_today">
       {loading && (
         <div className="text-center text-gray-400 py-10 text-sm">טוען…</div>
       )}

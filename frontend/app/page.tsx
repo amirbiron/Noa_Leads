@@ -148,6 +148,7 @@ export default function HomePage() {
                 ? `${data.today_actions.length} משימות מחכות לך היום`
                 : "אין משימות דחופות היום"
             }
+            termKey="page_today"
           />
           {data.today_actions.length === 0 ? (
             <EmptyState
@@ -189,6 +190,7 @@ export default function HomePage() {
               <SectionHeader
                 title="ממתין לטיפול"
                 count={data.pending.length}
+                termKey="page_pending"
               />
               <ul className="space-y-2">
                 {data.pending.map((lead) => (

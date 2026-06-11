@@ -17,6 +17,7 @@ import type {
   ServiceCategory,
   SourceChannel,
 } from "@/lib/types";
+import { TermHint } from "./TermHint";
 import { VoiceRecorderButton } from "./VoiceRecorderButton";
 
 // טופס יצירת ליד. שדות חובה לפי §7.1 (שם, טלפון, מקור, תוכן הפנייה) +
@@ -115,7 +116,10 @@ export function NewLeadModal({
         className="bg-white w-full sm:max-w-md sm:rounded-2xl rounded-t-2xl shadow-xl max-h-[95dvh] flex flex-col"
       >
         <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 shrink-0">
-          <h2 className="font-semibold">ליד חדש</h2>
+          <h2 className="font-semibold flex items-center">
+            ליד חדש
+            <TermHint termKey="concept_lead" />
+          </h2>
           <button
             type="button"
             onClick={onClose}

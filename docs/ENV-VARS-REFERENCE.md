@@ -380,6 +380,15 @@
 - **Default:** `http://localhost:8000`
 - **מקור:** `frontend/lib/api.ts:45`, `frontend/.env.example:2`
 
+### `NEXT_PUBLIC_SHOW_TERM_HINTS`
+- **סטטוס:** אופציונלי.
+- **תיאור:** הצגת אייקוני ⓘ ליד מושגי המערכת (סוגי משימות, סטטוסים,
+  "אצל מי הכדור", שמות דפים) עם popover הסבר קצר. מיועד לתקופת היכרות
+  ראשונית (~חודש-חודשיים). לכיבוי גלובלי: `false` + redeploy.
+- **ערכים מקובלים:** `true` / `false` / (ריק = מופעל).
+- **Default:** מופעל (כש-var ריק).
+- **מקור:** `frontend/lib/glossary.ts` (TERM_HINTS_ENABLED).
+
 ---
 
 ## 11. (?) לעתיד — לא ממומש כיום

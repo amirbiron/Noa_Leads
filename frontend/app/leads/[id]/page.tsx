@@ -28,8 +28,14 @@ import { QuickActions } from "@/components/QuickActions";
 import { SectionHeader } from "@/components/SectionHeader";
 import { StateBadge } from "@/components/StateBadge";
 import { TemplatePickerSheet } from "@/components/TemplatePickerSheet";
+import { TermHint } from "@/components/TermHint";
 import { Timeline } from "@/components/Timeline";
 import { api, ApiError } from "@/lib/api";
+import {
+  statusToTermKey,
+  waitingOnToTermKey,
+  type TermKey,
+} from "@/lib/glossary";
 import { toWhatsAppDigits } from "@/lib/phone";
 import {
   labelCategory,
@@ -219,8 +225,16 @@ export default function LeadDetailPage() {
             </div>
 
             <div className="grid grid-cols-2 gap-2 mt-3 text-xs">
-              <Meta label="סטטוס" value={labelStatus(lead.status)} />
-              <Meta label="ממתין" value={labelWaiting(lead.waiting_on)} />
+              <Meta
+                label="סטטוס"
+                value={labelStatus(lead.status)}
+                valueTermKey={statusToTermKey(lead.status)}
+              />
+              <Meta
+                label="ממתין"
+                value={labelWaiting(lead.waiting_on)}
+                valueTermKey={waitingOnToTermKey(lead.waiting_on)}
+              />
               <Meta label="עדיפות" value={labelPriority(lead.priority_level)} />
               <Meta label="ערוץ" value={labelContact(lead.preferred_contact)} />
             </div>
@@ -288,6 +302,7 @@ export default function LeadDetailPage() {
               <div className="flex items-center gap-1.5 text-sm font-medium text-purple-900">
                 <MoonStar size={15} aria-hidden />
                 הצעת פעולה: {labelDormantAction(dormantSuggestion.action)}
+                <TermHint termKey="concept_ai_suggestion" />
               </div>
               <p className="mt-1 text-xs text-purple-800 leading-relaxed">
                 {dormantSuggestion.reasoning}
@@ -322,15 +337,18 @@ export default function LeadDetailPage() {
 
           {/* כפתור בחירת תבנית — רק לליד פתוח */}
           {!["WON", "LOST", "ARCHIVED"].includes(lead.status) && (
-            <button
-              onClick={() => setTemplateOpen(true)}
-              className="w-full rounded-lg bg-white border border-gray-200 py-2.5 text-sm font-medium flex items-center justify-center gap-1.5"
-            >
-              {/* Send הוא מטוס נייר — "חץ שליחה" שצריך להישקף ב-RTL
-                  לפי הסקיל (docs/Skills/hebrew-rtl-best-practices). */}
-              <Send size={15} aria-hidden className="rtl:-scale-x-100" />
-              בחירת תבנית
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setTemplateOpen(true)}
+                className="flex-1 rounded-lg bg-white border border-gray-200 py-2.5 text-sm font-medium flex items-center justify-center gap-1.5"
+              >
+                {/* Send הוא מטוס נייר — "חץ שליחה" שצריך להישקף ב-RTL
+                    לפי הסקיל (docs/Skills/hebrew-rtl-best-practices). */}
+                <Send size={15} aria-hidden className="rtl:-scale-x-100" />
+                בחירת תבנית
+              </button>
+              <TermHint termKey="concept_template" />
+            </div>
           )}
 
           {/* תיעוד הודעה נכנסת — ה-trigger ל-perform_action("log_inbound_message").
@@ -411,7 +429,7 @@ export default function LeadDetailPage() {
 
           {/* צ'יפים לסיכום שיחה */}
           <div>
-            <SectionHeader title="סיכומי שיחה" />
+            <SectionHeader title="סיכומי שיחה" termKey="concept_chip" />
             <QuickActions lead={lead} onActionDone={load} />
           </div>
 
@@ -474,13 +492,25 @@ export default function LeadDetailPage() {
   );
 }
 
-function Meta({ label, value }: { label: string; value: string }) {
+function Meta({
+  label,
+  value,
+  valueTermKey,
+}: {
+  label: string;
+  value: string;
+  // ⓘ קופץ ליד הערך — מסביר את המושג (סטטוס/waiting). undefined → אין ⓘ.
+  valueTermKey?: TermKey;
+}) {
   return (
     <div className="bg-gray-50 rounded-lg px-2.5 py-1.5">
       <div className="text-[10px] uppercase tracking-wide text-gray-400">
         {label}
       </div>
-      <div className="text-xs font-medium text-gray-800 mt-0.5">{value}</div>
+      <div className="text-xs font-medium text-gray-800 mt-0.5 flex items-center">
+        {value}
+        {valueTermKey && <TermHint termKey={valueTermKey} />}
+      </div>
     </div>
   );
 }
