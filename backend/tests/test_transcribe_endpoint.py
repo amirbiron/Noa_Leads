@@ -114,3 +114,45 @@ async def test_transcribe_uploaded_propagates_transcription_error(monkeypatch):
     )
     with pytest.raises(TranscriptionError):
         await transcribe_uploaded(b"bytes", "audio/webm", _mk_ctx())
+
+
+async def test_transcribe_uploaded_accepts_no_lead_context(monkeypatch):
+    """ctx עם id=None ושדות ריקים (NewLeadModal לפני יצירת ליד) — עובר.
+    ה-prompt builder יחזיר מחרוזת ריקה, ה-log רושם 'id=none'."""
+    captured: dict[str, object] = {}
+
+    async def fake_transcribe(path, ctx):  # noqa: ARG001
+        captured["ctx_id"] = ctx.id
+        captured["full_name"] = ctx.full_name
+        return "תמלול בלי ליד"
+
+    monkeypatch.setattr(transcription, "transcribe_audio", fake_transcribe)
+    empty_ctx = LeadTranscriptionContext(
+        id=None,
+        full_name=None,
+        service_category=None,
+        service_subtype=None,
+    )
+    text = await transcribe_uploaded(b"bytes", "audio/webm", empty_ctx)
+    assert text == "תמלול בלי ליד"
+    assert captured["ctx_id"] is None
+    assert captured["full_name"] is None
+
+
+async def test_transcribe_uploaded_with_partial_new_lead_context(monkeypatch):
+    """NewLeadModal עם רק שם הוקלד — prompt builder מקבל name בלבד.
+    תרחיש ריאליסטי: נועה מתחילה לכתוב שם ולוחצת על הקלטה לפני שבוחרת
+    קטגוריה."""
+    monkeypatch.setattr(
+        transcription, "transcribe_audio", AsyncMock(return_value="ok")
+    )
+    ctx = LeadTranscriptionContext(
+        id=None,
+        full_name="רחל כהן",
+        service_category=None,
+        service_subtype=None,
+    )
+    prompt = transcription.build_transcription_prompt(ctx)
+    assert prompt == "שם הליד: רחל כהן"
+    text = await transcribe_uploaded(b"bytes", "audio/webm", ctx)
+    assert text == "ok"

@@ -9,6 +9,11 @@ import {
   PRIORITY_LABELS,
   SERVICE_SUBTYPE_LABELS,
 } from "@/lib/hebrew";
+import {
+  LEAD_CREATION_CANCELED_EVENT,
+  LEAD_CREATION_PENDING_EVENT,
+  LEAD_MANUALLY_CREATED_EVENT,
+} from "@/lib/leadEvents";
 import { SUBTYPES_BY_CATEGORY } from "@/lib/serviceCategories";
 import type {
   PreferredContact,
@@ -16,6 +21,8 @@ import type {
   ServiceCategory,
   SourceChannel,
 } from "@/lib/types";
+import { TermHint } from "./TermHint";
+import { VoiceRecorderButton } from "./VoiceRecorderButton";
 
 // טופס יצירת ליד. שדות חובה לפי §7.1 (שם, טלפון, מקור, תוכן הפנייה) +
 // קטגוריה אופציונלית מוצגים תמיד. כפתור "הוסף פרטים נוספים" חושף את
@@ -68,6 +75,10 @@ export function NewLeadModal({
     e.preventDefault();
     setError(null);
     setSubmitting(true);
+    // pending event **לפני** ה-POST — מסמן ל-useDashboardPoll לדחות
+    // toasts מ-poll-ים שיחזרו בחלון הזה (race: poll in-flight יכול
+    // לקבל את הליד החדש *לפני* שה-POST מסיים ומגלה לנו את ה-ID).
+    window.dispatchEvent(new CustomEvent(LEAD_CREATION_PENDING_EVENT));
     try {
       // כל שדות ה-expand נשלחים גם אם ה-section מקופל — ה-state נשמר
       // כשהמשתמש פותח/סוגר ושומר. ריקים → null (חוץ מ-boolean ו-enums
@@ -86,9 +97,21 @@ export function NewLeadModal({
         personal_note: personalNote.trim() || null,
         lead_message: leadMessage.trim(),
       });
+      // event ל-useDashboardPoll: הליד הזה נוצר ידנית, לא להציג עליו
+      // toast "ליד חדש" בpoll הבא. ה-hook מחזיק Set עם TTL של 5 דקות,
+      // וגם מסיים את "creation in flight mode" שהתחיל ב-pending.
+      window.dispatchEvent(
+        new CustomEvent(LEAD_MANUALLY_CREATED_EVENT, {
+          detail: { id: lead.id },
+        }),
+      );
       onClose();
       router.push(`/leads/${lead.id}`);
     } catch (err) {
+      // ה-POST נכשל — מבטל את "creation in flight mode" כדי שה-hook
+      // יחזור לטפל ב-poll-ים באופן רגיל. בלי זה, ה-pending flag היה
+      // נשאר עד ה-safety timeout (30s) ודוחה toasts אמיתיים בחינם.
+      window.dispatchEvent(new CustomEvent(LEAD_CREATION_CANCELED_EVENT));
       setError(err instanceof ApiError ? err.message : "שגיאה ביצירת הליד");
     } finally {
       setSubmitting(false);
@@ -106,7 +129,10 @@ export function NewLeadModal({
         className="bg-white w-full sm:max-w-md sm:rounded-2xl rounded-t-2xl shadow-xl max-h-[95dvh] flex flex-col"
       >
         <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 shrink-0">
-          <h2 className="font-semibold">ליד חדש</h2>
+          <h2 className="font-semibold flex items-center">
+            ליד חדש
+            <TermHint termKey="concept_lead" />
+          </h2>
           <button
             type="button"
             onClick={onClose}
@@ -182,6 +208,25 @@ export function NewLeadModal({
               className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-base focus:border-gray-900 focus:outline-none"
               placeholder="הדבק כאן את ההודעה שהגיעה בוואטסאפ / תאר במילים שלך מה הלקוח רצה"
             />
+            {/* הקלטה — נועה יכולה לדבר במקום להקליד. הקונטקסט שנשלח
+                ל-OpenAI הוא מה שכבר הוקלד (שם/קטגוריה) כדי לשפר דיוק
+                שמות. ראה VoiceRecorderButton mode="new". */}
+            <div className="mt-2">
+              <VoiceRecorderButton
+                mode="new"
+                context={{
+                  leadName: fullName.trim() || null,
+                  serviceCategory: category || null,
+                  serviceSubtype: subtype || null,
+                }}
+                disabled={submitting}
+                onTranscribed={(text) =>
+                  setLeadMessage((prev) =>
+                    prev.trim() ? `${prev.trimEnd()}\n${text}` : text,
+                  )
+                }
+              />
+            </div>
           </Field>
 
           {/* כפתור הרחבה — חושף את שדות §7.2 שאינם חובה ליצירה. */}
@@ -300,6 +345,22 @@ export function NewLeadModal({
                   placeholder="פרט שכדאי לזכור — שם בן הזוג, העדפה, וכו'"
                   className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-gray-900 focus:outline-none"
                 />
+                <div className="mt-2">
+                  <VoiceRecorderButton
+                    mode="new"
+                    context={{
+                      leadName: fullName.trim() || null,
+                      serviceCategory: category || null,
+                      serviceSubtype: subtype || null,
+                    }}
+                    disabled={submitting}
+                    onTranscribed={(text) =>
+                      setPersonalNote((prev) =>
+                        prev.trim() ? `${prev.trimEnd()}\n${text}` : text,
+                      )
+                    }
+                  />
+                </div>
               </Field>
             </div>
           )}

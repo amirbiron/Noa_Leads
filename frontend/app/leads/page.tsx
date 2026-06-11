@@ -73,7 +73,10 @@ export default function LeadsPage() {
   const hasActiveFilter = Boolean(search) || Boolean(statusFilter);
 
   return (
-    <AppShell title={`לידים${total ? ` (${total})` : ""}`}>
+    <AppShell
+      title={`לידים${total ? ` (${total})` : ""}`}
+      titleTermKey="page_leads"
+    >
       {/* פילטרים */}
       <div className="space-y-2 mb-4">
         <div className="relative">

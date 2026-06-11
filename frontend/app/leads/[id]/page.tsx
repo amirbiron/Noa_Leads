@@ -3,7 +3,6 @@
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import {
-  ArrowRightLeft,
   CalendarPlus,
   FileText,
   Mail,
@@ -29,9 +28,14 @@ import { QuickActions } from "@/components/QuickActions";
 import { SectionHeader } from "@/components/SectionHeader";
 import { StateBadge } from "@/components/StateBadge";
 import { TemplatePickerSheet } from "@/components/TemplatePickerSheet";
+import { TermHint } from "@/components/TermHint";
 import { Timeline } from "@/components/Timeline";
-import { TransferLeadModal } from "@/components/TransferLeadModal";
 import { api, ApiError } from "@/lib/api";
+import {
+  statusToTermKey,
+  waitingOnToTermKey,
+  type TermKey,
+} from "@/lib/glossary";
 import { toWhatsAppDigits } from "@/lib/phone";
 import {
   labelCategory,
@@ -50,7 +54,6 @@ import type {
   Lead,
   Program,
   StateColor,
-  User,
 } from "@/lib/types";
 
 // צבע מצב — לוגיקה פשוטה (Spec §12.9):
@@ -84,12 +87,9 @@ export default function LeadDetailPage() {
   const [loading, setLoading] = useState(true);
   const [templateOpen, setTemplateOpen] = useState(false);
   const [closeOpen, setCloseOpen] = useState(false);
-  const [transferOpen, setTransferOpen] = useState(false);
   const [programOpen, setProgramOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [reopening, setReopening] = useState(false);
-  // רשימת משתמשים — כדי לדעת אם קיימת עוזרת (כפתור "העברה" disabled אם אין).
-  const [users, setUsers] = useState<User[]>([]);
 
   async function load() {
     setError(null);
@@ -138,14 +138,6 @@ export default function LeadDetailPage() {
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
-
-  // טעינת משתמשים פעם אחת — לקביעת זמינות כפתור "העברה". כשל זניח (best-effort):
-  // הכפתור פשוט יישאר disabled.
-  useEffect(() => {
-    api.listUsers().then(setUsers).catch(() => {});
-  }, []);
-
-  const hasAssistant = users.some((u) => u.role === "assistant");
 
   // Refetch בחזרה מטאב/אפליקציה אחרת — קריטי לתרחיש פגישה: נועה
   // עזבה את הדף לטלפון, הפגישה הסתיימה, חוזרת — צריכה לראות את
@@ -233,8 +225,16 @@ export default function LeadDetailPage() {
             </div>
 
             <div className="grid grid-cols-2 gap-2 mt-3 text-xs">
-              <Meta label="סטטוס" value={labelStatus(lead.status)} />
-              <Meta label="ממתין" value={labelWaiting(lead.waiting_on)} />
+              <Meta
+                label="סטטוס"
+                value={labelStatus(lead.status)}
+                valueTermKey={statusToTermKey(lead.status)}
+              />
+              <Meta
+                label="ממתין"
+                value={labelWaiting(lead.waiting_on)}
+                valueTermKey={waitingOnToTermKey(lead.waiting_on)}
+              />
               <Meta label="עדיפות" value={labelPriority(lead.priority_level)} />
               <Meta label="ערוץ" value={labelContact(lead.preferred_contact)} />
             </div>
@@ -302,6 +302,7 @@ export default function LeadDetailPage() {
               <div className="flex items-center gap-1.5 text-sm font-medium text-purple-900">
                 <MoonStar size={15} aria-hidden />
                 הצעת פעולה: {labelDormantAction(dormantSuggestion.action)}
+                <TermHint termKey="concept_ai_suggestion" />
               </div>
               <p className="mt-1 text-xs text-purple-800 leading-relaxed">
                 {dormantSuggestion.reasoning}
@@ -334,27 +335,19 @@ export default function LeadDetailPage() {
             </div>
           )}
 
-          {/* כפתורי תבנית + העברה — רק לליד פתוח */}
+          {/* כפתור בחירת תבנית — רק לליד פתוח */}
           {!["WON", "LOST", "ARCHIVED"].includes(lead.status) && (
-            <div className="grid grid-cols-2 gap-2">
+            <div className="flex items-center gap-2">
               <button
                 onClick={() => setTemplateOpen(true)}
-                className="rounded-lg bg-white border border-gray-200 py-2.5 text-sm font-medium flex items-center justify-center gap-1.5"
+                className="flex-1 rounded-lg bg-white border border-gray-200 py-2.5 text-sm font-medium flex items-center justify-center gap-1.5"
               >
                 {/* Send הוא מטוס נייר — "חץ שליחה" שצריך להישקף ב-RTL
                     לפי הסקיל (docs/Skills/hebrew-rtl-best-practices). */}
                 <Send size={15} aria-hidden className="rtl:-scale-x-100" />
                 בחירת תבנית
               </button>
-              <button
-                onClick={() => setTransferOpen(true)}
-                disabled={!hasAssistant}
-                title={hasAssistant ? undefined : "אין עוזרת מוגדרת"}
-                className="rounded-lg bg-white border border-gray-200 py-2.5 text-sm font-medium flex items-center justify-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <ArrowRightLeft size={15} aria-hidden />
-                העברה
-              </button>
+              <TermHint termKey="concept_template" />
             </div>
           )}
 
@@ -436,7 +429,7 @@ export default function LeadDetailPage() {
 
           {/* צ'יפים לסיכום שיחה */}
           <div>
-            <SectionHeader title="סיכומי שיחה" />
+            <SectionHeader title="סיכומי שיחה" termKey="concept_chip" />
             <QuickActions lead={lead} onActionDone={load} />
           </div>
 
@@ -481,12 +474,6 @@ export default function LeadDetailPage() {
             onClose={() => setCloseOpen(false)}
             onClosed={load}
           />
-          <TransferLeadModal
-            lead={lead}
-            open={transferOpen}
-            onClose={() => setTransferOpen(false)}
-            onTransferred={load}
-          />
           <AddProgramModal
             leadId={lead.id}
             open={programOpen}
@@ -505,13 +492,25 @@ export default function LeadDetailPage() {
   );
 }
 
-function Meta({ label, value }: { label: string; value: string }) {
+function Meta({
+  label,
+  value,
+  valueTermKey,
+}: {
+  label: string;
+  value: string;
+  // ⓘ קופץ ליד הערך — מסביר את המושג (סטטוס/waiting). undefined → אין ⓘ.
+  valueTermKey?: TermKey;
+}) {
   return (
     <div className="bg-gray-50 rounded-lg px-2.5 py-1.5">
       <div className="text-[10px] uppercase tracking-wide text-gray-400">
         {label}
       </div>
-      <div className="text-xs font-medium text-gray-800 mt-0.5">{value}</div>
+      <div className="text-xs font-medium text-gray-800 mt-0.5 flex items-center">
+        {value}
+        {valueTermKey && <TermHint termKey={valueTermKey} />}
+      </div>
     </div>
   );
 }

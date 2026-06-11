@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { MessageSquareReply } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
+import { TermHint } from "./TermHint";
 
 // כפתור משלים בכרטיס הליד: "תעד הודעה נכנסת".
 //
@@ -53,14 +54,17 @@ export function LogInboundButton({
 
   if (!open) {
     return (
-      <button
-        type="button"
-        onClick={() => setOpen(true)}
-        className="w-full rounded-lg bg-white border border-gray-200 py-2.5 text-sm font-medium flex items-center justify-center gap-1.5"
-      >
-        <MessageSquareReply size={15} aria-hidden className="rtl:-scale-x-100" />
-        תעד הודעה נכנסת
-      </button>
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() => setOpen(true)}
+          className="flex-1 rounded-lg bg-white border border-gray-200 py-2.5 text-sm font-medium flex items-center justify-center gap-1.5"
+        >
+          <MessageSquareReply size={15} aria-hidden className="rtl:-scale-x-100" />
+          תעד הודעה נכנסת
+        </button>
+        <TermHint termKey="concept_log_inbound" />
+      </div>
     );
   }
 

@@ -74,9 +74,13 @@ class LeadTranscriptionContext:
 
     סיבה משנית: detached ORM access אחרי close הוא fragile (DetachedInstance);
     snapshot עוקף את הסיכון. שדות frozen — שלא נטעה ונכתוב חזרה.
+
+    `id=None` — נתמך עבור `POST /transcribe-note` (תמלול ב-NewLeadModal,
+    לפני שהליד נוצר). ה-prompt עדיין יכול להכיל name/category מהטופס,
+    ה-log רושם "id=none".
     """
 
-    id: UUID
+    id: UUID | None
     full_name: str | None
     service_category: str | None
     service_subtype: str | None
@@ -199,7 +203,7 @@ async def transcribe_audio(
     logger.info(
         "transcription usage: model=gpt-4o-transcribe lead_id=%s "
         "duration_sec=%.2f cost_usd=%.5f chars=%d",
-        ctx.id,
+        ctx.id if ctx.id is not None else "none",
         duration_sec if duration_sec is not None else -1,
         cost_usd if cost_usd is not None else 0,
         len(text),
