@@ -24,6 +24,7 @@ from app.schemas.lead import (
     LeadTransferRequest,
     LeadUpdate,
 )
+from app.schemas.quick_action_chip import ApplyChipResponse
 from app.schemas.transcription import TranscriptionResponse
 from app.services import leads as leads_service
 from app.services import lead_actions as actions_service
@@ -146,24 +147,29 @@ async def reopen_lead(
     return LeadRead.model_validate(lead)
 
 
-@router.post("/{lead_id}/apply-chip/{chip_id}", response_model=LeadRead)
+@router.post(
+    "/{lead_id}/apply-chip/{chip_id}", response_model=ApplyChipResponse
+)
 async def apply_chip(
     lead_id: UUID,
     chip_id: UUID,
     db: DbSession,
     user: CurrentUser,
-) -> LeadRead:
+) -> ApplyChipResponse:
     """
     מפעיל צ'יפ מהיר על ליד — Spec v2.1 §16.4.
 
     מבצע אטומית: ליד.status=target_status, ליד.waiting_on=waiting_on,
     יוצר task חדש מסוג followup_task_type עם due_at=now+auto_followup_days,
     ורושם activity. שגיאות: 404 (ליד/צ'יפ), 400 (ליד סגור / צ'יפ לא מאוכלס).
+
+    **כלל "אין סיגה אחורה":** chip לא מוריד status מ-PROPOSAL_SENT /
+    BOOKING_PENDING / BOOKED ל-IN_PROGRESS. ה-response מחזיר
+    `status_preserved` + `preserved_reason` כדי שה-UI יציג toast מתאים.
     """
-    lead = await chips_service.apply_chip(
+    return await chips_service.apply_chip(
         db, lead_id=lead_id, chip_id=chip_id, performed_by=user.id
     )
-    return LeadRead.model_validate(lead)
 
 
 @router.get("/{lead_id}/timeline", response_model=list[ActivityRead])
