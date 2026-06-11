@@ -42,7 +42,10 @@ export function NewLeadModal({
   // אופציונלי לפי Spec §7.1 — ברירת מחדל "ללא קטגוריה". נועה תסווג
   // אחר כך מהכרטיס. ראה F-04 ב-docs/spec-deviations.md.
   const [category, setCategory] = useState<ServiceCategory | "">("");
-  const [source, setSource] = useState<SourceChannel>("manual");
+  // ברירת מחדל "whatsapp" — לפי שכיחות בפועל (רוב הלידים הידניים
+  // מגיעים מוואטסאפ). הרשימה הוגבלה ל-3 ערכים הרלוונטיים לטופס:
+  // whatsapp / phone / manual.
+  const [source, setSource] = useState<SourceChannel>("whatsapp");
   // תוכן הפנייה — חובה. בלי זה אין הקשר לליד. §7.1.
   const [leadMessage, setLeadMessage] = useState("");
 
@@ -188,14 +191,13 @@ export function NewLeadModal({
               onChange={(e) => setSource(e.target.value as SourceChannel)}
               className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-base focus:border-gray-900 focus:outline-none"
             >
-              <option value="manual">הזנה ידנית</option>
-              <option value="referral">המלצה</option>
-              <option value="form">טופס באתר</option>
+              {/* רק 3 ערוצים שרלוונטיים לטופס יצירה ידני (החלטת מוצר).
+                  ערכים נוספים ב-SourceChannel enum (form, email, facebook,
+                  instagram, referral, other) נשארים ב-DB ללידים ישנים +
+                  לintake אוטומטי, אך לא נחשפים כאן. */}
               <option value="whatsapp">וואטסאפ</option>
-              <option value="email">מייל</option>
-              <option value="facebook">פייסבוק</option>
-              <option value="instagram">אינסטגרם</option>
-              <option value="other">אחר</option>
+              <option value="phone">טלפון</option>
+              <option value="manual">הזנה ידנית</option>
             </select>
           </Field>
 

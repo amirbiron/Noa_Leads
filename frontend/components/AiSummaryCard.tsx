@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { CalendarRange, Sparkles, ThumbsDown } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
+import { EXPAND_DAILY_SUMMARY_EVENT } from "@/lib/dailySummaryEvents";
 import { parseSummaryText } from "@/lib/parseSummaryText";
 import { useLocalStorageState } from "@/lib/useLocalStorage";
 import type {
@@ -38,12 +39,26 @@ export function AiSummaryCard({
   collapsible?: boolean;
 }) {
   // key נגזר מ-summary.type — `noa:summary:daily:collapsed` או
-  // `noa:summary:weekly:collapsed`. Daily slot חולק את ה-key עם
-  // DailySummaryBubble (שני קומפוננטות, אותו slot, אותה החלטת קיפול).
+  // `noa:summary:weekly:collapsed`. ברירת המחדל ל-daily: מקופל
+  // (החלטת מוצר — חוסך מקום, הbadge בכותרת פותח). שבועי נשאר פתוח
+  // כברירת מחדל כי אין badge מתאים.
   const [collapsed, setCollapsed] = useLocalStorageState(
     `noa:summary:${summary.type}:collapsed`,
-    false,
+    summary.type === "daily",
   );
+
+  // האזנה ל-`noa:expand-daily-summary` — נורה מהbadge "סיכום יומי" בכותרת
+  // ה-AppShell בעמוד הבית. פותח את כרטיס הסיכום היומי גם אם נשמר במצב
+  // מקופל ב-localStorage. רק לכרטיס "daily" — שבועי מתעלם.
+  useEffect(() => {
+    if (summary.type !== "daily") return;
+    function onExpand() {
+      setCollapsed(false);
+    }
+    window.addEventListener(EXPAND_DAILY_SUMMARY_EVENT, onExpand);
+    return () =>
+      window.removeEventListener(EXPAND_DAILY_SUMMARY_EVENT, onExpand);
+  }, [summary.type, setCollapsed]);
   // אם collapsible=false, אסור לערך השמור ב-localStorage לחסום את ה-body —
   // הכפתור מוסתר וה-משתמשת לא יכולה לפתוח. ה-state עדיין נשמר ל-mode
   // הבא בו collapsible=true.
@@ -126,9 +141,11 @@ export function AiSummaryCard({
 
 function DailyBody({ output }: { output: AiSummaryOutputDaily }) {
   const omitted = new Set(output.omitted_sections);
+  // סקציית "היום" הוסרה (החלטת מוצר — backend לא מייצר את השדה,
+  // ב-types.ts הוא נמחק). הסיכום מתחיל ישר מ-bottom_line ועובר ללידים
+  // בולטים / תשומת לב / מחר.
   return (
     <div className="mt-3 space-y-3 text-sm text-gray-800">
-      <Section label="היום">{output.today}</Section>
       {!omitted.has("highlights") && output.highlights.length > 0 && (
         <ListSection label="לידים בולטים" items={output.highlights} />
       )}

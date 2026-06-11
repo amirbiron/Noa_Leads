@@ -77,7 +77,8 @@ export default function BookingPage() {
   // רואה "אין סלוטים" ומניח שאין מועדים כלל ב-14 הימים.
   const [availabilityError, setAvailabilityError] = useState<string | null>(null);
 
-  // טווח ימים זמין לבחירה — מהיום ועד DAYS_TO_SHOW
+  // טווח ימים זמין ל"בחירה מהירה" — מהיום ועד DAYS_TO_SHOW. תאריכים
+  // מעבר לטווח נבחרים דרך ה-`<input type="date">` (customDateAvailability).
   const allDates = useMemo(() => {
     const today = new Date();
     const arr: Date[] = [];
@@ -89,7 +90,18 @@ export default function BookingPage() {
     return arr;
   }, []);
 
+  const todayISO = useMemo(() => formatDate(new Date()), []);
+
   const [selectedDate, setSelectedDate] = useState<string>(formatDate(new Date()));
+  // availability לתאריך יחיד מחוץ ל-grid. נטען לפי דרישה כש-input
+  // type="date" בוחר תאריך > today+13. נפרד מ-availability הראשי
+  // (שמכסה רק את 14 הימים) — backend מוגבל ל-14 ימים פר call.
+  const [customDateAvailability, setCustomDateAvailability] = useState<{
+    date: string;
+    slots: TimeSlot[];
+  } | null>(null);
+  const [loadingCustomDate, setLoadingCustomDate] = useState(false);
+  const [customDateError, setCustomDateError] = useState<string | null>(null);
   const [selectedSlot, setSelectedSlot] = useState<TimeSlot | null>(null);
   const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -140,11 +152,60 @@ export default function BookingPage() {
     void fetchAvailability();
   }, [fetchAvailability]);
 
+  // בודק אם תאריך ב-grid 14 הימים (משתמש ב-availability הראשי) או
+  // מחוצה לו (משתמש ב-customDateAvailability שנטען בנפרד).
+  const isDateInGrid = useMemo(() => {
+    const inGrid = new Set(allDates.map((d) => formatDate(d)));
+    return (date: string) => inGrid.has(date);
+  }, [allDates]);
+
   const slotsForSelectedDate = useMemo(() => {
+    // תאריך מותאם (מחוץ ל-grid) — slots מ-customDateAvailability.
+    if (customDateAvailability?.date === selectedDate) {
+      return customDateAvailability.slots;
+    }
     if (!availability) return [];
     const day = availability.days.find((d) => d.date === selectedDate);
     return day?.slots ?? [];
-  }, [availability, selectedDate]);
+  }, [availability, customDateAvailability, selectedDate]);
+
+  // בחירת תאריך מ-input type="date". אם בתוך ה-grid — פשוט מסונכרן.
+  // אם מחוצה לו — fetch נפרד לתאריך יחיד (יעיל; backend מוגבל ל-14
+  // ימים פר call, אז יום בודד = 1 day-range).
+  const fetchCustomDateAvailability = useMemo(
+    () => async (date: string) => {
+      if (!token) return;
+      setLoadingCustomDate(true);
+      setCustomDateError(null);
+      try {
+        const result = await api.getBookingAvailability(token, date, date);
+        const day = result.days.find((d) => d.date === date);
+        setCustomDateAvailability({ date, slots: day?.slots ?? [] });
+      } catch (err) {
+        setCustomDateError(
+          err instanceof ApiError ? err.message : "שגיאה בטעינת זמינות",
+        );
+        setCustomDateAvailability({ date, slots: [] });
+      } finally {
+        setLoadingCustomDate(false);
+      }
+    },
+    [token],
+  );
+
+  function handleCustomDateChange(value: string) {
+    if (!value) return;
+    setSelectedDate(value);
+    setSelectedSlot(null);
+    if (isDateInGrid(value)) {
+      // התאריך בטווח ה-grid — ה-availability הראשי כבר מכיל אותו.
+      // מנקים את ה-custom כדי שלא ידרוס.
+      setCustomDateAvailability(null);
+      setCustomDateError(null);
+    } else {
+      void fetchCustomDateAvailability(value);
+    }
+  }
 
   async function submit() {
     if (!selectedSlot) return;
@@ -266,6 +327,7 @@ export default function BookingPage() {
           <div className="text-sm font-semibold text-gray-700 mb-2">
             בחרי יום
           </div>
+          {/* בחירה מהירה: 14 הימים הקרובים. */}
           <div className="grid grid-cols-7 gap-1.5">
             {allDates.map((d) => {
               const key = formatDate(d);
@@ -278,6 +340,9 @@ export default function BookingPage() {
                   onClick={() => {
                     setSelectedDate(key);
                     setSelectedSlot(null);
+                    // יוצאים ממצב "תאריך מותאם" אם הקליק חוזר ל-grid.
+                    setCustomDateAvailability(null);
+                    setCustomDateError(null);
                   }}
                   // כשיש שגיאת fetch — לא מכבים את הכפתורים, אחרת כל
                   // השבועיים נראים אפורים כאילו אין זמינות אמיתית.
@@ -299,6 +364,22 @@ export default function BookingPage() {
               );
             })}
           </div>
+
+          {/* תאריך חופשי מעבר ל-14 הימים. ה-input משתמש ב-native
+              date picker של הדפדפן/מערכת ההפעלה — תומך בכל תאריך עתידי.
+              min={todayISO} חוסם תאריכים בעבר. */}
+          <div className="mt-3">
+            <label className="block text-xs text-gray-600 mb-1.5">
+              או תאריך אחר:
+            </label>
+            <input
+              type="date"
+              min={todayISO}
+              value={!isDateInGrid(selectedDate) ? selectedDate : ""}
+              onChange={(e) => handleCustomDateChange(e.target.value)}
+              className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm focus:outline-none focus:border-gray-900"
+            />
+          </div>
         </section>
 
         {/* סלוטים */}
@@ -306,11 +387,25 @@ export default function BookingPage() {
           <div className="text-sm font-semibold text-gray-700 mb-2">
             בחרי שעה
           </div>
-          {loadingSlots ? (
+          {loadingSlots || loadingCustomDate ? (
             <div className="text-center text-gray-400 text-sm py-6">טוען…</div>
-          ) : availabilityError ? (
-            // שגיאה אמיתית — לא מציגים "אין סלוטים", כי זה מטעה: אולי
-            // היומן עמוס באמת ואולי הקריאה נכשלה. מבדילים ונותנים retry.
+          ) : customDateError ? (
+            // שגיאה ספציפית לתאריך מותאם — retry על אותו תאריך.
+            <div className="bg-white rounded-xl border border-state-red/30 px-4 py-5 flex flex-col items-center gap-3">
+              <div className="flex items-start gap-2 text-state-red text-sm">
+                <AlertCircle size={16} className="mt-0.5 shrink-0" aria-hidden />
+                <span>{customDateError}</span>
+              </div>
+              <button
+                onClick={() => void fetchCustomDateAvailability(selectedDate)}
+                className="text-sm rounded-lg border border-gray-200 px-4 py-2 hover:bg-gray-50"
+              >
+                נסי שוב
+              </button>
+            </div>
+          ) : availabilityError && isDateInGrid(selectedDate) ? (
+            // שגיאה אמיתית בטעינת ה-grid — לא מציגים "אין סלוטים", כי זה
+            // מטעה: אולי היומן עמוס באמת ואולי הקריאה נכשלה. retry על ה-grid.
             <div className="bg-white rounded-xl border border-state-red/30 px-4 py-5 flex flex-col items-center gap-3">
               <div className="flex items-start gap-2 text-state-red text-sm">
                 <AlertCircle size={16} className="mt-0.5 shrink-0" aria-hidden />

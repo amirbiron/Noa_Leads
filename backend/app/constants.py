@@ -109,6 +109,7 @@ class SourceChannel(StrEnum):
     FACEBOOK = "facebook"
     INSTAGRAM = "instagram"
     WHATSAPP = "whatsapp"
+    PHONE = "phone"  # נוסף לטופס הזנה ידנית — שיחת טלפון נכנסת/יוצאת
     OTHER = "other"
 
 
