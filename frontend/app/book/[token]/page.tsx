@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import { AlertCircle, Calendar, CheckCircle2, Clock, Info } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
@@ -102,6 +102,13 @@ export default function BookingPage() {
   } | null>(null);
   const [loadingCustomDate, setLoadingCustomDate] = useState(false);
   const [customDateError, setCustomDateError] = useState<string | null>(null);
+  // ref ל-"הבקשה האחרונה" של תאריך מותאם — מונע race של תגובות
+  // לא-בסדר. אם המשתמש בוחר A ואז במהירות B, התגובה של A יכולה
+  // להגיע אחרי B; בלי ה-ref היא הייתה דורסת את ה-state עם slots
+  // לתאריך הלא נכון. הערך מעודכן ב-fetchCustomDateAvailability לפני
+  // ה-await, ומתאופס ל-null בקליק על תאריך ב-grid (לסגור fetch in-
+  // flight של תאריך מותאם).
+  const lastCustomFetchRef = useRef<string | null>(null);
   const [selectedSlot, setSelectedSlot] = useState<TimeSlot | null>(null);
   const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -172,22 +179,34 @@ export default function BookingPage() {
   // בחירת תאריך מ-input type="date". אם בתוך ה-grid — פשוט מסונכרן.
   // אם מחוצה לו — fetch נפרד לתאריך יחיד (יעיל; backend מוגבל ל-14
   // ימים פר call, אז יום בודד = 1 day-range).
+  //
+  // race guard: לפני ה-await מסמנים `lastCustomFetchRef.current = date`.
+  // אחרי ה-await בודקים שהערך עוד שווה לתאריך הזה. אם לא — בקשה
+  // מאוחרת יותר (תאריך אחר / קליק על grid) רצה במקביל, והתגובה
+  // הנוכחית stale → דורסים אותה בשקט. ה-`finally` מנקה loading רק
+  // אם זו עדיין הבקשה הפעילה — אחרת הוא ינוקה ע"י הבקשה המאוחרת.
   const fetchCustomDateAvailability = useMemo(
     () => async (date: string) => {
       if (!token) return;
+      lastCustomFetchRef.current = date;
       setLoadingCustomDate(true);
       setCustomDateError(null);
       try {
         const result = await api.getBookingAvailability(token, date, date);
+        if (lastCustomFetchRef.current !== date) return; // stale
         const day = result.days.find((d) => d.date === date);
         setCustomDateAvailability({ date, slots: day?.slots ?? [] });
       } catch (err) {
+        if (lastCustomFetchRef.current !== date) return; // stale
         setCustomDateError(
           err instanceof ApiError ? err.message : "שגיאה בטעינת זמינות",
         );
         setCustomDateAvailability({ date, slots: [] });
       } finally {
-        setLoadingCustomDate(false);
+        // רק הבקשה הפעילה מנקה loading; בקשה stale מתעלמת.
+        if (lastCustomFetchRef.current === date) {
+          setLoadingCustomDate(false);
+        }
       }
     },
     [token],
@@ -199,9 +218,12 @@ export default function BookingPage() {
     setSelectedSlot(null);
     if (isDateInGrid(value)) {
       // התאריך בטווח ה-grid — ה-availability הראשי כבר מכיל אותו.
-      // מנקים את ה-custom כדי שלא ידרוס.
+      // מנקים את ה-custom כדי שלא ידרוס. ה-ref מסומן null כדי לבטל
+      // fetch תלוי-תאריך-קודם שעוד in-flight.
+      lastCustomFetchRef.current = null;
       setCustomDateAvailability(null);
       setCustomDateError(null);
+      setLoadingCustomDate(false);
     } else {
       void fetchCustomDateAvailability(value);
     }
@@ -341,8 +363,12 @@ export default function BookingPage() {
                     setSelectedDate(key);
                     setSelectedSlot(null);
                     // יוצאים ממצב "תאריך מותאם" אם הקליק חוזר ל-grid.
+                    // ה-ref מסומן null כדי לבטל fetch in-flight של
+                    // תאריך מותאם — תגובתו תזוהה כ-stale ותידחה.
+                    lastCustomFetchRef.current = null;
                     setCustomDateAvailability(null);
                     setCustomDateError(null);
+                    setLoadingCustomDate(false);
                   }}
                   // כשיש שגיאת fetch — לא מכבים את הכפתורים, אחרת כל
                   // השבועיים נראים אפורים כאילו אין זמינות אמיתית.
