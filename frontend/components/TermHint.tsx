@@ -81,12 +81,28 @@ export function TermHint({ termKey, iconSize = 14, ariaLabel }: Props) {
   const titleId = `${idRef.current}-title`;
 
   return (
-    <span className="relative inline-flex items-center align-middle">
+    <span
+      className="relative inline-flex items-center align-middle"
+      // ה-span עוטף את הכפתור והpopover. ⓘ ממוקם בתוך כרטיסים שעטופים
+      // ב-<Link> (TodayActionRow וכו'). כל אינטראקציה כאן חייבת לעצור גם
+      // את ה-propagation וגם את ה-default action — אחרת קליק על ⓘ מנווט
+      // ל-/leads/[id] במקום לפתוח popover. ה-onClick על ה-span תופס גם
+      // אזורים שאינם הכפתור (gap, popover background).
+      onClick={(e) => {
+        e.stopPropagation();
+        e.preventDefault();
+      }}
+    >
       <button
         ref={buttonRef}
         type="button"
         onClick={(e) => {
+          // stopPropagation לבד לא מספיק כשהאב הוא <a>: ה-React event
+          // אכן נעצר, אבל ה-DOM event ממשיך ל-default action של ה-anchor
+          // (ניווט). preventDefault על אותו event מסמן defaultPrevented
+          // → הדפדפן מדלג על הניווט.
           e.stopPropagation();
+          e.preventDefault();
           setOpen((v) => !v);
         }}
         aria-label={ariaLabel ?? `הסבר על: ${entry.title}`}
