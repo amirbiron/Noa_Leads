@@ -105,6 +105,9 @@ export function TermHint({ termKey, iconSize = 14, ariaLabel }: Props) {
                 e.stopPropagation();
                 e.preventDefault();
                 setOpen(false);
+                // עקביות a11y עם Escape ו-X: focus חוזר לכפתור ⓘ. אחרת
+                // screen reader נשאר בעץ של ה-dialog שכבר לא קיים.
+                buttonRef.current?.focus();
               }
             }}
             className="fixed inset-0 z-[100] bg-black/40 flex items-center justify-center p-4"
