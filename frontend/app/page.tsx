@@ -111,11 +111,12 @@ export default function HomePage() {
 
           {((showDailySummary && hasAiDailyInWindow) || hasWeeklyInWindow) && (
             <div className="flex flex-col gap-3 lg:gap-4 mb-3">
+              {/* daily — לא collapsible (parent שולט ב-visibility דרך
+                  showDailySummary). אחרת ערך ישן ב-localStorage
+                  (`noa:summary:daily:collapsed=true`) היה גורם לחשיפה
+                  חלקית (רק bottom_line) אחרי לחיצה על ה-badge. */}
               {showDailySummary && hasAiDailyInWindow && (
-                <AiSummaryCard
-                  summary={data.ai_daily_summary!}
-                  collapsible
-                />
+                <AiSummaryCard summary={data.ai_daily_summary!} />
               )}
 
               {hasWeeklyInWindow && (
