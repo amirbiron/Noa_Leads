@@ -26,11 +26,8 @@ export interface LeadManuallyCreatedDetail {
 // safety margin. מעל זה — הליד כבר לא "טרי" בעיני ה-poll ממילא.
 export const MANUALLY_CREATED_TTL_MS = 5 * 60 * 1000;
 
-// כמה זמן לדחות toast מ-poll כש-creation in flight. רוב ה-POSTs יסיימו
-// ב-<500ms; 2 שניות מכסה גם רשת איטית. אחרי זה אם אין סימן ל-event,
-// ה-toast מוצג רגיל (sanity — לא רוצים לדחות לנצח אם משהו נתקע).
-export const CREATION_PENDING_DEFER_MS = 2000;
-
 // safety: ה-pending flag לא תקוע יותר מ-30s גם אם events לא נורים
-// (browser closed mid-POST, JS error, וכו').
+// (browser closed mid-POST, JS error, וכו'). אחרי ה-cap הזה, queued
+// polls נסחטים גם אם ה-create event עוד לא הגיע — עדיף toast מיותר
+// אחד מ-UI תקוע ללא רענון.
 export const CREATION_PENDING_MAX_MS = 30 * 1000;

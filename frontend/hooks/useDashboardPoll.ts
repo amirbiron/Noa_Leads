@@ -4,7 +4,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiError } from "@/lib/api";
 import { AUTH_CHANGED_EVENT, isLoggedIn } from "@/lib/auth";
 import {
-  CREATION_PENDING_DEFER_MS,
   CREATION_PENDING_MAX_MS,
   LEAD_CREATION_CANCELED_EVENT,
   LEAD_CREATION_PENDING_EVENT,
@@ -80,15 +79,20 @@ export function useDashboardPoll(): PollState & PollControl {
   // "creation in flight" — דלוק בין `lead-creation-pending` ל-
   // `lead-manually-created`/`lead-creation-canceled`. מטפל ב-race:
   // poll שהיה in-flight כש-נועה לחצה submit יכול לחזור עם הליד החדש
-  // *לפני* שה-POST resolve והID נכנס ל-Map. בזמן הזה, doPoll דוחה
-  // את ה-toast ב-CREATION_PENDING_DEFER_MS — מספיק זמן ל-POST להחזיר
-  // ול-event לרוץ → ה-defer בודק שוב את ה-Map שכבר עודכן.
+  // *לפני* שה-POST resolve והID נכנס ל-Map.
   const creationPendingRef = useRef(false);
   // safety timeout — אם events לא נורים (browser closed mid-POST, JS
   // error), ה-flag לא תקוע לנצח ומעצור toasts אמיתיים.
   const creationPendingTimeoutRef = useRef<
     ReturnType<typeof setTimeout> | null
   >(null);
+  // Queue של publishes שהוחזקו במהלך creation-in-flight. במקום
+  // `setTimeout(publish, FIXED_MS)` שיכול להחמיץ POST איטי (>FIXED),
+  // אנחנו מחכים ל-settle אמיתי: success / cancel / safety timeout.
+  // ה-publish נסחט אחרי שה-event הוסיף את ה-ID ל-Map → סינון נכון.
+  // ה-cap היחיד שנשאר הוא ה-safety (30s) — מונע UI תקוע אם events
+  // לא יורים בכלל.
+  const pendingPublishesRef = useRef<Array<() => void>>([]);
 
   useEffect(() => {
     function clearPendingTimeout() {
@@ -97,9 +101,19 @@ export function useDashboardPoll(): PollState & PollControl {
         creationPendingTimeoutRef.current = null;
       }
     }
+    function drainPendingPublishes() {
+      // snapshot + reset לפני run — אם publish ייצור bedge-effect שיתורן
+      // עוד publish (לא קורה היום אבל ה-pattern מגן עתידית).
+      const queue = pendingPublishesRef.current;
+      pendingPublishesRef.current = [];
+      queue.forEach((fn) => fn());
+    }
     function settlePending() {
       creationPendingRef.current = false;
       clearPendingTimeout();
+      // drain הוא הסיבה שהqueue קיים: ה-Map כבר עודכן (success) או
+      // נשאר ריק (cancel/timeout) — כל publish יסנן עם המידע הסופי.
+      drainPendingPublishes();
     }
     function onPending() {
       creationPendingRef.current = true;
@@ -117,8 +131,8 @@ export function useDashboardPoll(): PollState & PollControl {
           Date.now() + MANUALLY_CREATED_TTL_MS,
         );
       }
-      // ID נכנס ל-Map → ה-pending mode לא נחוץ יותר. ה-Map עצמו ימשיך
-      // לסנן את ה-ID הזה ב-poll-ים הבאים.
+      // ID נכנס ל-Map → settle drains את ה-queue, וה-publishes יסננו
+      // אותו בזכות `manuallyCreatedRef.has(id)`.
       settlePending();
     }
     window.addEventListener(LEAD_CREATION_PENDING_EVENT, onPending);
@@ -132,6 +146,10 @@ export function useDashboardPoll(): PollState & PollControl {
         onManuallyCreated,
       );
       clearPendingTimeout();
+      // discard queued publishes ב-unmount — ה-closures מחזיקים תשובות
+      // poll ישנות שכבר לא רלוונטיות, ו-setState על component מפורק
+      // ייצור warning.
+      pendingPublishesRef.current = [];
     };
   }, []);
 
@@ -200,12 +218,15 @@ export function useDashboardPoll(): PollState & PollControl {
 
       if (creationPendingRef.current) {
         // יצירת ליד ידנית in-flight: ה-POST של createLead עדיין לא
-        // החזיר → ה-ID של הליד החדש עוד לא ב-Map. דוחים את הtoast
-        // ב-~2s כדי לתת לאירוע ה-`lead-manually-created` להגיע ולהוסיף
-        // את ה-ID. אחרי ה-defer `publish` מסנן שוב את ה-Map העדכני.
-        // בלי זה: poll שחזר ראשון היה מציג "ליד חדש: X" על הליד שנועה
-        // עצמה יצרה רגע קודם.
-        setTimeout(publish, CREATION_PENDING_DEFER_MS);
+        // החזיר → ה-ID של הליד החדש עוד לא ב-Map. דוחים את ה-publish
+        // ל-queue שתסחט ע"י `settlePending` (event success/cancel/
+        // safety timeout). בלי זה: poll שחזר ראשון היה מציג "ליד חדש"
+        // על הליד שנועה עצמה יצרה רגע קודם.
+        //
+        // הbar הקריטי לעומת ה-fixed timeout הקודם: drain תלוי-event,
+        // לא timer. POST שלוקח 5s או 25s עדיין יסונן נכון — ה-publish
+        // מחכה ב-queue עד שה-event מגיע ומוסיף את ה-ID ל-Map.
+        pendingPublishesRef.current.push(publish);
         return;
       }
       publish();
