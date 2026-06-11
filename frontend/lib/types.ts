@@ -309,6 +309,22 @@ export interface QuickActionChipUpdate {
   is_active?: boolean;
 }
 
+// תוצאת POST /leads/{id}/apply-chip/{chip_id} — Spec v2.1 §16.4 +
+// "אין סיגה אחורה" (ראה ApplyChipResponse ב-backend).
+// status_preserved=True כש-chip ניסה להציב סטטוס מוקדם יותר בזרימה
+// (PROPOSAL_SENT/BOOKING_PENDING/BOOKED → IN_PROGRESS). ה-frontend
+// מציג toast רך ב-booking_pending/booked, ושקט ב-proposal_sent.
+export type ChipPreservedReason =
+  | "proposal_sent"
+  | "booking_pending"
+  | "booked";
+
+export interface ApplyChipResponse {
+  lead: Lead;
+  status_preserved: boolean;
+  preserved_reason: ChipPreservedReason | null;
+}
+
 export interface StuckTaskItem {
   task_id: string;
   task_type: string;

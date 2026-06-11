@@ -3,7 +3,11 @@
 import { useEffect, useState } from "react";
 import { api, ApiError } from "@/lib/api";
 import { labelTaskType } from "@/lib/hebrew";
-import type { Lead, QuickActionChip } from "@/lib/types";
+import type {
+  ChipPreservedReason,
+  Lead,
+  QuickActionChip,
+} from "@/lib/types";
 
 // צ'יפים לסיכום שיחה — Spec v2.1 §16.4.
 // כל קליק קורא ל-/leads/{lead_id}/apply-chip/{chip_id} שמבצע את 4 הפעולות
@@ -29,6 +33,20 @@ function toastMessage(chip: QuickActionChip): string {
   const when = pluralizeDays(chip.auto_followup_days!);
   const action = labelTaskType(chip.followup_task_type!);
   return `${action} — תזכורת תיווצר ${when}`;
+}
+
+// כש-status_preserved=True ב-BOOKING_PENDING / BOOKED — הסטטוס נשמר במכוון
+// ע"י ה-backend (כלל "אין סיגה אחורה"). מציגים toast עדין שמזכיר לנועה לבדוק
+// את ה-booking/event. ב-PROPOSAL_SENT הסטטוס נשמר בשקט — מציגים את ה-toast
+// הרגיל של הפולואפ (מבחינת ה-UX, ההצעה עדיין פתוחה כמצופה).
+function preservedToastMessage(reason: ChipPreservedReason): string | null {
+  if (reason === "booking_pending") {
+    return "הצ'יפ הוחל. הליד נשאר ב⁨'ממתין לאישור תור'⁩ כי יש בקשת תור פתוחה — בדקי אם לאשר/לדחות.";
+  }
+  if (reason === "booked") {
+    return "הצ'יפ הוחל. הליד נשאר ב⁨'פגישה מאושרת'⁩ כי יש אירוע ביומן — בדקי אם הפגישה רלוונטית.";
+  }
+  return null; // proposal_sent → toast רגיל
 }
 
 export function QuickActions({
@@ -77,8 +95,14 @@ export function QuickActions({
     setBusy(chip.id);
     setError(null);
     try {
-      await api.applyChip(lead.id, chip.id);
-      setToast(toastMessage(chip));
+      const response = await api.applyChip(lead.id, chip.id);
+      // status_preserved=True ב-BOOKING_PENDING/BOOKED → toast עדין
+      // מסביר למה הסטטוס לא השתנה. PROPOSAL_SENT (preserved או לא)
+      // → toast רגיל. ראה ApplyChipResponse ב-backend.
+      const softMessage = response.preserved_reason
+        ? preservedToastMessage(response.preserved_reason)
+        : null;
+      setToast(softMessage ?? toastMessage(chip));
       onActionDone();
     } catch (err) {
       setError(

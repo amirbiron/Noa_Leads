@@ -4,6 +4,7 @@
 import { clearTokens, getAccessToken, getRefreshToken, setTokens } from "./auth";
 import type {
   Activity,
+  ApplyChipResponse,
   AvailabilityResponse,
   BookingPageInfo,
   BookingRead,
@@ -334,7 +335,7 @@ export const api = {
   // הפעולות: status / waiting_on / יצירת task / activity. מחזיר את הליד
   // המעודכן. 400 על ליד סגור או צ'יפ לא מאוכלס.
   applyChip: (leadId: string, chipId: string) =>
-    fetcher<Lead>(`/leads/${leadId}/apply-chip/${chipId}`, {
+    fetcher<ApplyChipResponse>(`/leads/${leadId}/apply-chip/${chipId}`, {
       method: "POST",
     }),
 
