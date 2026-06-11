@@ -34,14 +34,20 @@ export function AppShell({
       <div className="min-h-screen pb-24 bg-gray-50">
         {title && (
           <header className="bg-white border-b border-gray-200 sticky top-0 z-20">
-            <div className="max-w-2xl mx-auto px-4 py-3.5 flex items-center justify-between">
-              <h1 className="text-lg font-semibold flex items-center">
-                {title}
-                {titleTermKey && (
-                  <TermHint termKey={titleTermKey} iconSize={16} />
-                )}
+            <div className="max-w-2xl mx-auto px-4 py-3.5 flex items-center justify-between gap-2">
+              {/* min-w-0 על ה-h1 — מבטיח שב-flex parent הוא יכול להתכווץ
+                  אם הטקסט ארוך, במקום לדחוף את הכפתורים מימין (גלגל +
+                  headerActions) אל מחוץ למסך. shrink-0 על ה-actions
+                  בצד השני מקבע אותם. */}
+              <h1 className="text-lg font-semibold min-w-0 truncate">
+                <span className="inline-flex items-center align-middle">
+                  <span className="truncate">{title}</span>
+                  {titleTermKey && (
+                    <TermHint termKey={titleTermKey} iconSize={16} />
+                  )}
+                </span>
               </h1>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 shrink-0">
                 {headerActions}
                 {!hideSettings && (
                   <Link
