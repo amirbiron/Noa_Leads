@@ -168,7 +168,10 @@ export default function LeadDetailPage() {
   }, [pollVersion, id]);
 
   return (
-    <AppShell>
+    // title="ליד" כללי — נדרש כדי שה-header של AppShell יתרנדר ויציג
+    // את גלגל ההגדרות (בלי title ה-header כולו לא רנדר). שם הליד עצמו
+    // נשאר בולט בכרטיס הפנימי למטה.
+    <AppShell title="ליד">
       {loading && (
         <div className="text-center text-gray-400 py-10 text-sm">טוען…</div>
       )}

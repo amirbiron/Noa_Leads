@@ -11,7 +11,6 @@ import { LeadCardRow } from "@/components/LeadCardRow";
 import { SectionHeader } from "@/components/SectionHeader";
 import { TodayActionRow } from "@/components/TodayActionRow";
 import { api, ApiError } from "@/lib/api";
-import { EXPAND_DAILY_SUMMARY_EVENT } from "@/lib/dailySummaryEvents";
 import { shouldShowAiWeeklySummary, shouldShowDailySummary } from "@/lib/date";
 import { labelCategory } from "@/lib/hebrew";
 import type { HomeDashboard } from "@/lib/types";
@@ -23,6 +22,10 @@ export default function HomePage() {
   const [data, setData] = useState<HomeDashboard | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  // ברירת מחדל: הסיכום היומי לא מוצג כלל (אפילו לא מקופל). לחיצה על
+  // ה-badge "סיכום יומי" בכותרת חושפת אותו. session-scoped — ביקור חדש
+  // מתחיל שוב מ-hidden. אם רוצים persist, להעביר ל-localStorage.
+  const [showDailySummary, setShowDailySummary] = useState(false);
   // הערך לא בשימוש — רק מאלץ re-render דקתי כדי שבועת הסיכום תיעלם
   // אוטומטית ב-07:00 (§12.4), ראה ה-useEffect של הטיימר למטה.
   const [, setMinuteTick] = useState(0);
@@ -68,15 +71,14 @@ export default function HomePage() {
     !!data?.ai_weekly_summary &&
     shouldShowAiWeeklySummary(data.ai_weekly_summary.date_range_end);
 
-  // ה-badge "סיכום יומי" — לחיצה מפתחת את AiSummaryCard גם אם נשמר
-  // במצב מקופל ב-localStorage. תקשורת דרך CustomEvent (ראה
-  // lib/dailySummaryEvents.ts), כדי לא לרים state בין AppShell ל-card.
+  // ה-badge "סיכום יומי" — לחיצה חושפת את AiSummaryCard. ברירת מחדל
+  // hidden לחלוטין; כל לחיצה מציבה showDailySummary=true. הbadge עצמו
+  // נשאר מוצג גם אחרי החשיפה (לא מתחלף ל"סגור"), אבל לחיצה חוזרת
+  // לא עושה כלום (state כבר true) — תואם לבקשת המשתמשת "לחיצה מראה".
   const dailyTogglePill = hasAiDailyInWindow ? (
     <button
       type="button"
-      onClick={() =>
-        window.dispatchEvent(new CustomEvent(EXPAND_DAILY_SUMMARY_EVENT))
-      }
+      onClick={() => setShowDailySummary(true)}
       aria-label="פתח סיכום יומי"
       className="rounded-full bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-medium px-3 py-1 flex items-center gap-1"
     >
@@ -101,18 +103,20 @@ export default function HomePage() {
         <>
           {/* C.1/C.2 §6.8: סיכומי הבית.
               - Daily slot: AI נרטיבי בלבד (C.1). חלון 19:00→07:00.
-                ברירת מחדל: מקופל. ה-badge "סיכום יומי" בכותרת פותח.
-              - Weekly slot: AI נרטיבי, חלון ראשון 08:00→שני 07:00. פתוח כברירת מחדל.
-              Stacked בכל הbreakpoints: Daily מעל Weekly. הקיפול נשמר ב-
-              localStorage פר-בלוק. */}
+                **ברירת מחדל: מוסתר לחלוטין.** ה-badge "סיכום יומי" בכותרת
+                חושף — showDailySummary controls visibility.
+              - Weekly slot: AI נרטיבי, חלון ראשון 08:00→שני 07:00. פתוח
+                כברירת מחדל (קיפול פנימי דרך chevron + localStorage).
+              Stacked בכל הbreakpoints: Daily מעל Weekly. */}
 
-          {(hasAiDailyInWindow || hasWeeklyInWindow) && (
+          {((showDailySummary && hasAiDailyInWindow) || hasWeeklyInWindow) && (
             <div className="flex flex-col gap-3 lg:gap-4 mb-3">
-              {hasAiDailyInWindow && (
-                <AiSummaryCard
-                  summary={data.ai_daily_summary!}
-                  collapsible
-                />
+              {/* daily — לא collapsible (parent שולט ב-visibility דרך
+                  showDailySummary). אחרת ערך ישן ב-localStorage
+                  (`noa:summary:daily:collapsed=true`) היה גורם לחשיפה
+                  חלקית (רק bottom_line) אחרי לחיצה על ה-badge. */}
+              {showDailySummary && hasAiDailyInWindow && (
+                <AiSummaryCard summary={data.ai_daily_summary!} />
               )}
 
               {hasWeeklyInWindow && (
