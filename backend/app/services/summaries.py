@@ -42,7 +42,6 @@ _ONE_DAY = timedelta(days=1)
 # ולעולם לא חותכת טקסט. ערכי list הם מכסה *לכל פריט* ברשימה.
 _DAILY_WORD_CAPS: dict[str, int] = {
     "bottom_line": 40,
-    "today": 80,
     "highlights": 40,
     "needs_attention": 30,
     "tomorrow": 50,

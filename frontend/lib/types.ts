@@ -51,6 +51,7 @@ export type SourceChannel =
   | "facebook"
   | "instagram"
   | "whatsapp"
+  | "phone"
   | "other";
 
 export type ClosureReason =
@@ -428,7 +429,6 @@ export interface DailySummary {
 
 export interface AiSummaryOutputDaily {
   bottom_line: string;
-  today: string;
   highlights: string[];
   needs_attention: string[];
   tomorrow: string | null;

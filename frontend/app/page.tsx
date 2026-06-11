@@ -5,27 +5,24 @@ import Link from "next/link";
 import { Sparkles, TrendingUp } from "lucide-react";
 import { AiSummaryCard } from "@/components/AiSummaryCard";
 import { AppShell } from "@/components/AppShell";
-import { DailySummaryBubble } from "@/components/DailySummaryBubble";
 import { useDashboardPollContext } from "@/components/DashboardPollProvider";
 import { EmptyState } from "@/components/EmptyState";
 import { LeadCardRow } from "@/components/LeadCardRow";
 import { SectionHeader } from "@/components/SectionHeader";
 import { TodayActionRow } from "@/components/TodayActionRow";
 import { api, ApiError } from "@/lib/api";
+import { EXPAND_DAILY_SUMMARY_EVENT } from "@/lib/dailySummaryEvents";
 import { shouldShowAiWeeklySummary, shouldShowDailySummary } from "@/lib/date";
 import { labelCategory } from "@/lib/hebrew";
 import type { HomeDashboard } from "@/lib/types";
 
-// טוגל סיכום יומי — סטטיסטי (ברירת מחדל) או AI נרטיבי (C.1/C.2 §6.8).
-// שני המצבים חולקים את אותו slot (לא מקבילים), והבועה ב-navbar מציגה
-// תמיד לאן הלחיצה תוביל.
-type DailyView = "statistical" | "ai";
+// סיכום יומי — AI נרטיבי בלבד. הסיכום הסטטיסטי (DailySummaryBubble) הוסר
+// מה-UI לפי החלטת מוצר; הקומפוננטה נשארת בקוד אם יחזרו אליה.
 
 export default function HomePage() {
   const [data, setData] = useState<HomeDashboard | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [dailyView, setDailyView] = useState<DailyView>("statistical");
   // הערך לא בשימוש — רק מאלץ re-render דקתי כדי שבועת הסיכום תיעלם
   // אוטומטית ב-07:00 (§12.4), ראה ה-useEffect של הטיימר למטה.
   const [, setMinuteTick] = useState(0);
@@ -63,33 +60,28 @@ export default function HomePage() {
     return () => clearInterval(id);
   }, []);
 
-  // C.1/C.2 §6.8: הטוגל אפשרי רק כששני הסיכומים זמינים ובחלון תצוגה.
-  // אם רק אחד זמין, אין הצדקה לבועה (התצוגה קבועה ממילא).
-  const hasStatsInWindow =
-    !!data?.daily_summary &&
-    shouldShowDailySummary(data.daily_summary.summary_date);
+  // C.1/C.2 §6.8: badge מוצג כשיש סיכום יומי AI בחלון.
   const hasAiDailyInWindow =
     !!data?.ai_daily_summary &&
     shouldShowDailySummary(data.ai_daily_summary.date_range_end);
-  const canToggleDaily = hasStatsInWindow && hasAiDailyInWindow;
   const hasWeeklyInWindow =
     !!data?.ai_weekly_summary &&
     shouldShowAiWeeklySummary(data.ai_weekly_summary.date_range_end);
 
-  // הבועה מציגה תמיד **לאן הלחיצה תוביל** (לא איפה אתה עכשיו).
-  const dailyTogglePill = canToggleDaily ? (
+  // ה-badge "סיכום יומי" — לחיצה מפתחת את AiSummaryCard גם אם נשמר
+  // במצב מקופל ב-localStorage. תקשורת דרך CustomEvent (ראה
+  // lib/dailySummaryEvents.ts), כדי לא לרים state בין AppShell ל-card.
+  const dailyTogglePill = hasAiDailyInWindow ? (
     <button
       type="button"
       onClick={() =>
-        setDailyView((v) => (v === "statistical" ? "ai" : "statistical"))
+        window.dispatchEvent(new CustomEvent(EXPAND_DAILY_SUMMARY_EVENT))
       }
-      aria-label="החלף תצוגת סיכום יומי"
+      aria-label="פתח סיכום יומי"
       className="rounded-full bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-medium px-3 py-1 flex items-center gap-1"
     >
       <Sparkles size={12} aria-hidden />
-      <span>
-        {dailyView === "statistical" ? "סיכום יומי" : "סיכום סטטיסטי"}
-      </span>
+      <span>סיכום יומי</span>
     </button>
   ) : null;
 
@@ -108,30 +100,21 @@ export default function HomePage() {
       {data && (
         <>
           {/* C.1/C.2 §6.8: סיכומי הבית.
-              - Daily slot: סטטיסטי (F-07) או AI (C.1), לפי הטוגל. אחד בכל רגע.
-                שניהם בחלון 19:00→07:00 (`shouldShowDailySummary`).
-              - Weekly slot: AI נרטיבי בלבד, חלון ראשון 08:00→שני 07:00.
-              Stacked בכל הbreakpoints: Daily מעל Weekly. הקיפול הפר-בלוק
-              (persisted ב-localStorage) מאפשר למשתמשת לפנות מקום בעת
-              הצורך — אין יותר side-by-side בדסקטופ. */}
+              - Daily slot: AI נרטיבי בלבד (C.1). חלון 19:00→07:00.
+                ברירת מחדל: מקופל. ה-badge "סיכום יומי" בכותרת פותח.
+              - Weekly slot: AI נרטיבי, חלון ראשון 08:00→שני 07:00. פתוח כברירת מחדל.
+              Stacked בכל הbreakpoints: Daily מעל Weekly. הקיפול נשמר ב-
+              localStorage פר-בלוק. */}
 
-          {(hasStatsInWindow || hasAiDailyInWindow || hasWeeklyInWindow) && (
+          {(hasAiDailyInWindow || hasWeeklyInWindow) && (
             <div className="flex flex-col gap-3 lg:gap-4 mb-3">
-              {/* Daily slot — display whichever is available */}
-              {(dailyView === "statistical" || !hasAiDailyInWindow) && hasStatsInWindow && (
-                <DailySummaryBubble
-                  summary={data.daily_summary!}
-                  collapsible
-                />
-              )}
-              {(dailyView === "ai" || !hasStatsInWindow) && hasAiDailyInWindow && (
+              {hasAiDailyInWindow && (
                 <AiSummaryCard
                   summary={data.ai_daily_summary!}
                   collapsible
                 />
               )}
 
-              {/* Weekly slot — בלי טוגל */}
               {hasWeeklyInWindow && (
                 <AiSummaryCard
                   summary={data.ai_weekly_summary!}
