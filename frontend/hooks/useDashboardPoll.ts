@@ -4,6 +4,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiError } from "@/lib/api";
 import { AUTH_CHANGED_EVENT, isLoggedIn } from "@/lib/auth";
 import {
+  CREATION_PENDING_DEFER_MS,
+  CREATION_PENDING_MAX_MS,
+  LEAD_CREATION_CANCELED_EVENT,
+  LEAD_CREATION_PENDING_EVENT,
   LEAD_MANUALLY_CREATED_EVENT,
   MANUALLY_CREATED_TTL_MS,
   type LeadManuallyCreatedDetail,
@@ -73,7 +77,38 @@ export function useDashboardPoll(): PollState & PollControl {
   // לפני סינון, כדי שלא ידלוף לזמן בלתי-מוגבל.
   const manuallyCreatedRef = useRef<Map<string, number>>(new Map());
 
+  // "creation in flight" — דלוק בין `lead-creation-pending` ל-
+  // `lead-manually-created`/`lead-creation-canceled`. מטפל ב-race:
+  // poll שהיה in-flight כש-נועה לחצה submit יכול לחזור עם הליד החדש
+  // *לפני* שה-POST resolve והID נכנס ל-Map. בזמן הזה, doPoll דוחה
+  // את ה-toast ב-CREATION_PENDING_DEFER_MS — מספיק זמן ל-POST להחזיר
+  // ול-event לרוץ → ה-defer בודק שוב את ה-Map שכבר עודכן.
+  const creationPendingRef = useRef(false);
+  // safety timeout — אם events לא נורים (browser closed mid-POST, JS
+  // error), ה-flag לא תקוע לנצח ומעצור toasts אמיתיים.
+  const creationPendingTimeoutRef = useRef<
+    ReturnType<typeof setTimeout> | null
+  >(null);
+
   useEffect(() => {
+    function clearPendingTimeout() {
+      if (creationPendingTimeoutRef.current) {
+        clearTimeout(creationPendingTimeoutRef.current);
+        creationPendingTimeoutRef.current = null;
+      }
+    }
+    function settlePending() {
+      creationPendingRef.current = false;
+      clearPendingTimeout();
+    }
+    function onPending() {
+      creationPendingRef.current = true;
+      clearPendingTimeout();
+      creationPendingTimeoutRef.current = setTimeout(
+        settlePending,
+        CREATION_PENDING_MAX_MS,
+      );
+    }
     function onManuallyCreated(e: Event) {
       const detail = (e as CustomEvent<LeadManuallyCreatedDetail>).detail;
       if (detail?.id) {
@@ -82,13 +117,22 @@ export function useDashboardPoll(): PollState & PollControl {
           Date.now() + MANUALLY_CREATED_TTL_MS,
         );
       }
+      // ID נכנס ל-Map → ה-pending mode לא נחוץ יותר. ה-Map עצמו ימשיך
+      // לסנן את ה-ID הזה ב-poll-ים הבאים.
+      settlePending();
     }
+    window.addEventListener(LEAD_CREATION_PENDING_EVENT, onPending);
+    window.addEventListener(LEAD_CREATION_CANCELED_EVENT, settlePending);
     window.addEventListener(LEAD_MANUALLY_CREATED_EVENT, onManuallyCreated);
-    return () =>
+    return () => {
+      window.removeEventListener(LEAD_CREATION_PENDING_EVENT, onPending);
+      window.removeEventListener(LEAD_CREATION_CANCELED_EVENT, settlePending);
       window.removeEventListener(
         LEAD_MANUALLY_CREATED_EVENT,
         onManuallyCreated,
       );
+      clearPendingTimeout();
+    };
   }, []);
 
   const doPoll = useCallback(async () => {
@@ -109,31 +153,45 @@ export function useDashboardPoll(): PollState & PollControl {
         if (expiresAt <= now) manuallyCreatedRef.current.delete(id);
       }
 
-      // סינון לידים שנועה יצרה ידנית — toast מיותר ואין מה "לרענן"
-      // עליהם (היא כבר ניווטה לדף הליד).
-      const newLeads = resp.new_leads.filter(
-        (l) => !manuallyCreatedRef.current.has(l.id),
-      );
-      const filtered: DashboardPollResponse = {
-        ...resp,
-        new_leads: newLeads,
+      // publish — מסנן שוב מול manuallyCreatedRef (חשוב אחרי defer:
+      // ה-Map עשוי להתעדכן בין ה-poll ל-publish), ומקבע ב-setState.
+      // נקרא או מיידית או דרך setTimeout במסלול ה-creation-pending.
+      const publish = () => {
+        const finalNewLeads = resp.new_leads.filter(
+          (l) => !manuallyCreatedRef.current.has(l.id),
+        );
+        const total =
+          finalNewLeads.length + resp.leads_with_inbound_replies.length;
+        if (total === 0) return; // אין delta אחרי סינון — לא toast.
+        const finalResp: DashboardPollResponse = {
+          ...resp,
+          new_leads: finalNewLeads,
+        };
+        const ids = new Set<string>([
+          ...finalResp.new_leads.map((l: LeadCard) => l.id),
+          ...finalResp.leads_with_inbound_replies.map(
+            (l: LeadCard) => l.id,
+          ),
+        ]);
+        const message = buildToast(finalResp);
+        setState((prev) => ({
+          pollVersion: prev.pollVersion + 1,
+          recentlyUpdatedLeadIds: ids,
+          toastMessage: message,
+        }));
       };
 
-      const total =
-        filtered.new_leads.length +
-        filtered.leads_with_inbound_replies.length;
-      if (total === 0) return; // אין delta אחרי סינון — לא toast.
-
-      const ids = new Set<string>([
-        ...filtered.new_leads.map((l: LeadCard) => l.id),
-        ...filtered.leads_with_inbound_replies.map((l: LeadCard) => l.id),
-      ]);
-      const message = buildToast(filtered);
-      setState((prev) => ({
-        pollVersion: prev.pollVersion + 1,
-        recentlyUpdatedLeadIds: ids,
-        toastMessage: message,
-      }));
+      if (creationPendingRef.current) {
+        // יצירת ליד ידנית in-flight: ה-POST של createLead עדיין לא
+        // החזיר → ה-ID של הליד החדש עוד לא ב-Map. דוחים את הtoast
+        // ב-~2s כדי לתת לאירוע ה-`lead-manually-created` להגיע ולהוסיף
+        // את ה-ID. אחרי ה-defer `publish` מסנן שוב את ה-Map העדכני.
+        // בלי זה: poll שחזר ראשון היה מציג "ליד חדש: X" על הליד שנועה
+        // עצמה יצרה רגע קודם.
+        setTimeout(publish, CREATION_PENDING_DEFER_MS);
+        return;
+      }
+      publish();
     } catch (err) {
       // 401 → fetcher כבר ניווט ל-/login. שאר שגיאות (network, 500) —
       // לא קריטי, ה-poll הבא ינסה שוב. log רק ל-dev visibility.

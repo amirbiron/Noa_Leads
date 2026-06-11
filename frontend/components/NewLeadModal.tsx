@@ -9,7 +9,11 @@ import {
   PRIORITY_LABELS,
   SERVICE_SUBTYPE_LABELS,
 } from "@/lib/hebrew";
-import { LEAD_MANUALLY_CREATED_EVENT } from "@/lib/leadEvents";
+import {
+  LEAD_CREATION_CANCELED_EVENT,
+  LEAD_CREATION_PENDING_EVENT,
+  LEAD_MANUALLY_CREATED_EVENT,
+} from "@/lib/leadEvents";
 import { SUBTYPES_BY_CATEGORY } from "@/lib/serviceCategories";
 import type {
   PreferredContact,
@@ -71,6 +75,10 @@ export function NewLeadModal({
     e.preventDefault();
     setError(null);
     setSubmitting(true);
+    // pending event **לפני** ה-POST — מסמן ל-useDashboardPoll לדחות
+    // toasts מ-poll-ים שיחזרו בחלון הזה (race: poll in-flight יכול
+    // לקבל את הליד החדש *לפני* שה-POST מסיים ומגלה לנו את ה-ID).
+    window.dispatchEvent(new CustomEvent(LEAD_CREATION_PENDING_EVENT));
     try {
       // כל שדות ה-expand נשלחים גם אם ה-section מקופל — ה-state נשמר
       // כשהמשתמש פותח/סוגר ושומר. ריקים → null (חוץ מ-boolean ו-enums
@@ -90,7 +98,8 @@ export function NewLeadModal({
         lead_message: leadMessage.trim(),
       });
       // event ל-useDashboardPoll: הליד הזה נוצר ידנית, לא להציג עליו
-      // toast "ליד חדש" בpoll הבא. ה-hook מחזיק Set עם TTL של 5 דקות.
+      // toast "ליד חדש" בpoll הבא. ה-hook מחזיק Set עם TTL של 5 דקות,
+      // וגם מסיים את "creation in flight mode" שהתחיל ב-pending.
       window.dispatchEvent(
         new CustomEvent(LEAD_MANUALLY_CREATED_EVENT, {
           detail: { id: lead.id },
@@ -99,6 +108,10 @@ export function NewLeadModal({
       onClose();
       router.push(`/leads/${lead.id}`);
     } catch (err) {
+      // ה-POST נכשל — מבטל את "creation in flight mode" כדי שה-hook
+      // יחזור לטפל ב-poll-ים באופן רגיל. בלי זה, ה-pending flag היה
+      // נשאר עד ה-safety timeout (30s) ודוחה toasts אמיתיים בחינם.
+      window.dispatchEvent(new CustomEvent(LEAD_CREATION_CANCELED_EVENT));
       setError(err instanceof ApiError ? err.message : "שגיאה ביצירת הליד");
     } finally {
       setSubmitting(false);
