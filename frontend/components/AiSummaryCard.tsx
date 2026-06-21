@@ -2,13 +2,11 @@
 
 import { CalendarRange, Sparkles } from "lucide-react";
 import { parseSummaryText } from "@/lib/parseSummaryText";
-import { useLocalStorageState } from "@/lib/useLocalStorage";
 import type {
   AiSummary,
   AiSummaryOutputDaily,
   AiSummaryOutputWeekly,
 } from "@/lib/types";
-import { CollapseToggleButton } from "./CollapseToggleButton";
 
 // C.1/C.2 §6.8: כרטיס סיכום AI נרטיבי (יומי/שבועי). מתנהג זהה לשני הסוגים,
 // אבל מציג סקציות שונות לפי `summary.type`.
@@ -18,49 +16,26 @@ import { CollapseToggleButton } from "./CollapseToggleButton";
 // בודקים שהשדה עצמו לא ריק (כי במקרה הבסיסי `(string|null) === null`
 // ו-`array.length === 0` כבר מוסתרים).
 //
-// **collapsible**: כפתור chevron בכל הbreakpoints (גם דסקטופ). מצב
-// הקיפול נשמר ב-localStorage תחת `noa:summary:{type}:collapsed`.
-//
-// **visibility של הסיכום היומי:** Daily card מוסתר לחלוטין ב-default
-// בעמוד הבית — Parent (`app/page.tsx`) שולט ע"י state `showDailySummary`
-// שמתעדכן בלחיצה על ה-badge "סיכום יומי". כש-Daily כן מרונדר, הוא רנדר
-// פתוח (`collapsed: false` כברירת מחדל) — אין סיבה לקיפול נוסף אחרי
-// שהמשתמשת ביקשה לראות.
+// **visibility:** Parent (`app/page.tsx`) שולט אם הכרטיס מוצג בכלל,
+// ע"י state פר-סלוט (`showDailySummary` / `showWeeklySummary`) שמתעדכן
+// בלחיצה על badges בכותרת. ב-render — תמיד מציגים את הסיכום המלא;
+// אין יותר chevron / collapse פנימי (לא נחוץ — parent מטפל ב-toggle).
 //
 // **כפתור "לא מדויק" הוסר** (החלטת מוצר). ה-endpoint
 // `api.markAiSummaryInaccurate` נשאר ב-frontend/lib/api.ts לעתיד.
 
-export function AiSummaryCard({
-  summary,
-  collapsible = false,
-}: {
-  summary: AiSummary;
-  collapsible?: boolean;
-}) {
-  // key נגזר מ-summary.type — `noa:summary:daily:collapsed` או
-  // `noa:summary:weekly:collapsed`. default false (פתוח).
-  const [collapsed, setCollapsed] = useLocalStorageState(
-    `noa:summary:${summary.type}:collapsed`,
-    false,
-  );
-  // אם collapsible=false, אסור לערך השמור ב-localStorage לחסום את ה-body —
-  // הכפתור מוסתר וה-משתמשת לא יכולה לפתוח. ה-state עדיין נשמר ל-mode
-  // הבא בו collapsible=true.
-  const isCollapsed = collapsible && collapsed;
-
+export function AiSummaryCard({ summary }: { summary: AiSummary }) {
   const isDaily = summary.type === "daily";
   const titlePrefix = isDaily ? "סיכום יומי" : "סיכום שבועי";
   const Icon = isDaily ? Sparkles : CalendarRange;
 
   // Tailwind requires literal class names — לא להשתמש ב-`bg-${color}-X`.
   const wrapperClass = isDaily
-    ? "bg-gradient-to-bl from-indigo-500/10 to-indigo-500/5 border-indigo-300/40 text-indigo-500"
-    : "bg-gradient-to-bl from-emerald-500/10 to-emerald-500/5 border-emerald-300/40 text-emerald-600";
+    ? "bg-gradient-to-bl from-indigo-500/10 to-indigo-500/5 border-indigo-300/40"
+    : "bg-gradient-to-bl from-emerald-500/10 to-emerald-500/5 border-emerald-300/40";
 
   return (
-    <div
-      className={`border rounded-xl p-4 ${wrapperClass.replace("text-indigo-500", "").replace("text-emerald-600", "")}`}
-    >
+    <div className={`border rounded-xl p-4 ${wrapperClass}`}>
       <div className="flex items-start gap-3">
         <Icon
           size={20}
@@ -68,15 +43,7 @@ export function AiSummaryCard({
           aria-hidden
         />
         <div className="min-w-0 w-full">
-          <div className="flex items-center justify-between gap-2">
-            <div className="text-xs text-gray-600">{titlePrefix}</div>
-            {collapsible && (
-              <CollapseToggleButton
-                collapsed={isCollapsed}
-                onToggle={() => setCollapsed(!isCollapsed)}
-              />
-            )}
-          </div>
+          <div className="text-xs text-gray-600">{titlePrefix}</div>
 
           {/* bottom_line (תמיד) — headline מודגש. parseSummaryText מהפך
               markers `[[lead:<uuid>|<text>]]` ל-<Link> ל-/leads/<uuid>. */}
@@ -84,12 +51,10 @@ export function AiSummaryCard({
             {parseSummaryText(summary.output.bottom_line)}
           </div>
 
-          {!isCollapsed && (
-            isDaily ? (
-              <DailyBody output={summary.output as AiSummaryOutputDaily} />
-            ) : (
-              <WeeklyBody output={summary.output as AiSummaryOutputWeekly} />
-            )
+          {isDaily ? (
+            <DailyBody output={summary.output as AiSummaryOutputDaily} />
+          ) : (
+            <WeeklyBody output={summary.output as AiSummaryOutputWeekly} />
           )}
         </div>
       </div>
