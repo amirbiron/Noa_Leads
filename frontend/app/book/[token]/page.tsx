@@ -302,7 +302,7 @@ export default function BookingPage() {
       <CenteredCard>
         <div className="text-center space-y-3">
           <Calendar className="mx-auto text-state-green" size={48} aria-hidden />
-          <div className="text-lg font-semibold">כבר יש לך בקשת תור</div>
+          <div className="text-lg font-semibold">כבר יש לך בקשת פגישה</div>
           <div className="text-base text-gray-900">
             {fullSlotLabel(info.active_booking_at, endLabel)}
           </div>
@@ -322,7 +322,7 @@ export default function BookingPage() {
     <div className="min-h-screen bg-gray-50">
       <header className="bg-white border-b border-gray-200">
         <div className="max-w-2xl mx-auto px-4 py-5">
-          <div className="text-xs text-gray-500 mb-1">קביעת תור עם נועה</div>
+          <div className="text-xs text-gray-500 mb-1">קביעת פגישה עם נועה</div>
           <h1 className="text-xl font-semibold">{info.lead_name}</h1>
           <div className="text-sm text-gray-600 mt-0.5">
             {labelCategory(info.service_category)}
@@ -508,7 +508,7 @@ export default function BookingPage() {
               disabled={submitting}
               className="w-full rounded-lg bg-gray-900 text-white py-3 font-medium disabled:opacity-50"
             >
-              {submitting ? "שולחת בקשה…" : "אישור בקשת תור"}
+              {submitting ? "שולחת בקשה…" : "אישור בקשת פגישה"}
             </button>
             <div className="text-xs text-gray-500 text-center">
               המועד עדיין דורש אישור של נועה.

@@ -35,7 +35,7 @@ export function LeadCardRow({
   // עדיין "תגובה חדשה", לא "בקשת תור חדשה".
   const recentReplyLabel =
     lead.last_activity_type === "meeting_requested"
-      ? "בקשת תור חדשה"
+      ? "בקשת פגישה חדשה"
       : "תגובה חדשה";
   return (
     <Link

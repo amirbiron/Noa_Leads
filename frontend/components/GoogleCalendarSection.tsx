@@ -52,7 +52,7 @@ export function GoogleCalendarSection() {
   }
 
   async function disconnect() {
-    if (!confirm("לנתק את יומן Google? תורים חדשים לא יסונכרנו ליומן עד חיבור מחדש.")) {
+    if (!confirm("לנתק את יומן Google? פגישות חדשות לא יסונכרנו ליומן עד חיבור מחדש.")) {
       return;
     }
     setBusy("disconnect");
@@ -108,14 +108,14 @@ export function GoogleCalendarSection() {
                     aria-hidden
                   />
                   <span>
-                    החיבור פג תוקף. יש להתחבר מחדש כדי שתורים יסונכרנו.
+                    החיבור פג תוקף. יש להתחבר מחדש כדי שפגישות יסונכרנו.
                   </span>
                 </div>
               )}
             </>
           ) : (
             <div className="text-sm text-gray-500 mt-1">
-              לא מחובר. חיבור מאפשר סנכרון אוטומטי של תורים לפגישה.
+              לא מחובר. חיבור מאפשר סנכרון אוטומטי של פגישות ליומן.
             </div>
           )}
         </div>

@@ -547,7 +547,7 @@ function CopyBookingLinkButton({ token }: { token: string }) {
       className="w-full rounded-lg bg-white border border-gray-200 py-2.5 text-sm font-medium flex items-center justify-center gap-1.5"
     >
       <CalendarPlus size={15} aria-hidden />
-      {copied ? "הקישור הועתק ✓" : "העתקת קישור לקביעת תור"}
+      {copied ? "הקישור הועתק ✓" : "העתקת קישור לקביעת פגישה"}
     </button>
   );
 }

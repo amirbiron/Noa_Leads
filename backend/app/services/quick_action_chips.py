@@ -248,7 +248,7 @@ async def apply_chip(
     if chip.target_status in forbidden_targets:
         raise ValidationError(
             "הצ'יפ מוגדר עם סטטוס שלא ניתן להציב דרך chip "
-            "(תור / סגירה / שליחת הצעה). השתמשי ב-flow הייעודי."
+            "(פגישה / סגירה / שליחת הצעה). השתמשי ב-flow הייעודי."
         )
 
     # Lead — חייב להיות פתוח. שליפה לבדיקה + הודעה ידידותית; ה-UPDATE
@@ -338,7 +338,7 @@ async def apply_chip(
                 lead_id=lead_id,
                 activity_type=ActivityType.MEETING_REJECTED,
                 performed_by=performed_by,
-                content="בקשת תור נדחתה אוטומטית — סיכום שיחה דרך chip",
+                content="בקשת פגישה נדחתה אוטומטית — סיכום שיחה דרך chip",
                 metadata={
                     "booking_id": str(booking_id),
                     "chip_id": str(chip.id),

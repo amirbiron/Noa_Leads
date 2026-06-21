@@ -106,7 +106,7 @@ ACTIONS: dict[str, ActionDefinition] = {
         set_reply_boost=True,
         set_waiting_on="NOAH",
         last_activity_tag="meeting_requested",
-        description="בקשת תור",
+        description="בקשת פגישה",
     ),
 
     # אישור פגישה — BOOKING_PENDING → BOOKED
