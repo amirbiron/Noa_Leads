@@ -266,12 +266,57 @@ async def update_lead(
     for key, value in updates.items():
         setattr(lead, key, value)
 
+    # אם נועה בחרה service_category במפורש (אישור ההצעה או בחירה ידנית
+    # אחרת) — מנקים את ה-suggested. ה-banner ב-UI נעלם, ההחלטה סופית.
+    if "service_category" in updates and updates["service_category"] is not None:
+        lead.suggested_service_category = None
+        lead.suggested_service_subtype = None
+
     await log_activity(
         db,
         lead_id=lead.id,
         activity_type=ActivityType.LEAD_UPDATED,
         performed_by=current_user_id,
         metadata={"fields": list(updates.keys())},
+    )
+
+    await db.commit()
+    await db.refresh(lead)
+    return lead
+
+
+# ===================== אישור הצעת AI לסיווג =====================
+
+async def approve_ai_classification(
+    db: AsyncSession, lead_id: UUID, current_user_id: UUID | None
+) -> Lead:
+    """מעתיק suggested_service_category/subtype → actual + מנקה suggested.
+
+    נקרא מ-POST /leads/{id}/approve-classification בעקבות לחיצה על "אישור"
+    ב-banner. אם אין הצעה ממתינה (suggested_service_category is None) —
+    raises ValidationError. אם service_category כבר מאוכלסת (נועה כבר
+    בחרה ידנית בעבר) — מתעלמים מההצעה ומנקים אותה (idempotent).
+    """
+    lead = await get_lead_or_404(db, lead_id)
+    if lead.suggested_service_category is None:
+        raise ValidationError("אין הצעת סיווג ממתינה לליד הזה.")
+
+    if lead.service_category is None:
+        lead.service_category = lead.suggested_service_category
+        lead.service_subtype = lead.suggested_service_subtype
+    # תמיד מנקים את ה-suggested בסיום — הbanner נעלם.
+    lead.suggested_service_category = None
+    lead.suggested_service_subtype = None
+
+    await log_activity(
+        db,
+        lead_id=lead.id,
+        activity_type=ActivityType.LEAD_UPDATED,
+        performed_by=current_user_id,
+        metadata={
+            "fields": ["service_category", "service_subtype"],
+            "ai_classification_approved": True,
+        },
     )
 
     await db.commit()

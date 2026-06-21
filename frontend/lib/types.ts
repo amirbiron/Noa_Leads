@@ -103,6 +103,10 @@ export interface Lead {
   organization_name: string | null;
   service_category: string | null;  // F-04: אופציונלי
   service_subtype: string | null;
+  // הצעת AI לסיווג, ממתינה לאישור (Gmail intake). UI מציג banner כל
+  // עוד `suggested_service_category` קיים ו-`service_category` עוד null.
+  suggested_service_category: string | null;
+  suggested_service_subtype: string | null;
   status: string;
   waiting_on: string;
   priority_level: string;

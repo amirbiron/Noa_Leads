@@ -12,6 +12,7 @@ import {
   Phone,
   Plus,
   Send,
+  Sparkles,
   XCircle,
 } from "lucide-react";
 import { AddProgramModal } from "@/components/AddProgramModal";
@@ -241,6 +242,17 @@ export default function LeadDetailPage() {
               <Meta label="עדיפות" value={labelPriority(lead.priority_level)} />
               <Meta label="ערוץ" value={labelContact(lead.preferred_contact)} />
             </div>
+
+            {/* הצעת AI לסיווג ממתינה לאישור — Gmail intake לא מסווג אוטומטית,
+                אלא מציע ונועה מאשרת. עורך ידנית דרך "ערוך" → הbanner נעלם
+                אוטומטית (ה-backend מנקה את ה-suggested בשמירת PATCH). */}
+            {lead.suggested_service_category && !lead.service_category && (
+              <AiClassificationBanner
+                lead={lead}
+                onChanged={load}
+                onEditRequested={() => setEditOpen(true)}
+              />
+            )}
 
             {/* פרטי קשר */}
             <div className="mt-3 flex flex-wrap gap-2">
@@ -492,6 +504,77 @@ export default function LeadDetailPage() {
         </>
       )}
     </AppShell>
+  );
+}
+
+// Banner שמופיע בעמוד הליד כשהליד נוצר מ-Gmail intake וה-AI חילץ
+// קטגוריה. ה-AI לא מסווג אוטומטית — נועה מאשרת ידנית, או בוחרת קטגוריה
+// אחרת (פותחת את EditLeadModal). אחרי אישור או עריכה, ה-banner נעלם
+// (ה-backend מנקה את suggested_*).
+function AiClassificationBanner({
+  lead,
+  onChanged,
+  onEditRequested,
+}: {
+  lead: Lead;
+  onChanged: () => Promise<void> | void;
+  onEditRequested: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleApprove() {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.approveClassification(lead.id);
+      await onChanged();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "שגיאה באישור");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const categoryLabel = labelCategory(lead.suggested_service_category);
+  const subtypeLabel = lead.suggested_service_subtype
+    ? labelSubtype(lead.suggested_service_subtype)
+    : null;
+
+  return (
+    <div className="mt-3 bg-purple-50 border border-purple-200 rounded-lg px-3 py-2.5">
+      <div className="flex items-start gap-2 text-sm text-purple-900">
+        <Sparkles size={15} aria-hidden className="mt-0.5 shrink-0" />
+        <div className="flex-1 min-w-0">
+          <div className="font-medium">הצעת סיווג לאישור</div>
+          <div className="text-xs text-purple-800 mt-0.5">
+            ה-AI מציע: <span className="font-semibold">{categoryLabel}</span>
+            {subtypeLabel && <> · {subtypeLabel}</>}
+          </div>
+        </div>
+      </div>
+      {error && (
+        <div className="text-xs text-state-red mt-2">{error}</div>
+      )}
+      <div className="flex gap-2 mt-2.5">
+        <button
+          type="button"
+          onClick={handleApprove}
+          disabled={busy}
+          className="flex-1 rounded-lg bg-purple-700 text-white py-1.5 text-xs font-medium disabled:opacity-50"
+        >
+          {busy ? "מאשר…" : "אישור"}
+        </button>
+        <button
+          type="button"
+          onClick={onEditRequested}
+          disabled={busy}
+          className="flex-1 rounded-lg bg-white border border-purple-300 text-purple-900 py-1.5 text-xs font-medium disabled:opacity-50"
+        >
+          בחירה אחרת
+        </button>
+      </div>
+    </div>
   );
 }
 
