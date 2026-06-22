@@ -39,7 +39,7 @@ export default function LeadsPage() {
   const [loading, setLoading] = useState(true);
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState(""); // debounced
-  const [statusFilter, setStatusFilter] = useState<string>("");
+  const [statusFilter, setStatusFilter] = useState<string>("NEW");
 
   // debounce כדי לא להציף את ה-API בכל הקלדה
   useEffect(() => {
