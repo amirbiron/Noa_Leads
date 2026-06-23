@@ -465,9 +465,10 @@ export interface AiSummary {
 }
 
 export interface HomeDashboard {
-  today_actions: TodayActionItem[];
-  new_leads: LeadCard[];
-  pending: LeadCard[];
+  // "לוח בוקר" — מונים לבלוקי הסטטוס; הרשימות המלאות בדפים הייעודיים
+  // (/today, /pending, /leads).
+  new_leads_24h_count: number;
+  urgent_no_first_response_count: number;
   weekly_insights: WeeklyInsights;
   daily_summary: DailySummary | null;
   // C.1/C.2 §6.8 — null אם ה-cron של אותו טווח עוד לא רץ או נכשל ב-AI.
