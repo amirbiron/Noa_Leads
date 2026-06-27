@@ -41,7 +41,7 @@ function toastMessage(chip: QuickActionChip): string {
 // הרגיל של הפולואפ (מבחינת ה-UX, ההצעה עדיין פתוחה כמצופה).
 function preservedToastMessage(reason: ChipPreservedReason): string | null {
   if (reason === "booking_pending") {
-    return "הצ'יפ הוחל. הליד נשאר ב⁨'ממתין לאישור תור'⁩ כי יש בקשת תור פתוחה — בדקי אם לאשר/לדחות.";
+    return "הצ'יפ הוחל. הליד נשאר ב⁨'ממתין לאישור פגישה'⁩ כי יש בקשת פגישה פתוחה — בדקי אם לאשר/לדחות.";
   }
   if (reason === "booked") {
     return "הצ'יפ הוחל. הליד נשאר ב⁨'פגישה מאושרת'⁩ כי יש אירוע ביומן — בדקי אם הפגישה רלוונטית.";

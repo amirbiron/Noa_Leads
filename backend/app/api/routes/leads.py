@@ -148,6 +148,24 @@ async def reopen_lead(
 
 
 @router.post(
+    "/{lead_id}/approve-classification", response_model=LeadRead
+)
+async def approve_ai_classification(
+    lead_id: UUID, db: DbSession, user: CurrentUser
+) -> LeadRead:
+    """אישור הצעת AI לסיווג הליד.
+
+    מעתיק suggested_service_category/subtype → service_category/subtype
+    ומנקה את ה-suggested. נקרא מהbanner בעמוד הליד אחרי לחיצה על "אישור".
+    422: אין הצעה ממתינה (ValidationError).
+    """
+    lead = await leads_service.approve_ai_classification(db, lead_id, user.id)
+    # כלל 15: ה-service עושה flush בלבד, ה-route בעל הטרנזקציה.
+    await db.commit()
+    return LeadRead.model_validate(lead)
+
+
+@router.post(
     "/{lead_id}/apply-chip/{chip_id}", response_model=ApplyChipResponse
 )
 async def apply_chip(

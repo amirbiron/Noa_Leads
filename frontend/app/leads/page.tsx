@@ -39,7 +39,7 @@ export default function LeadsPage() {
   const [loading, setLoading] = useState(true);
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState(""); // debounced
-  const [statusFilter, setStatusFilter] = useState<string>("");
+  const [statusFilter, setStatusFilter] = useState<string>("NEW");
 
   // debounce כדי לא להציף את ה-API בכל הקלדה
   useEffect(() => {
@@ -101,7 +101,7 @@ export default function LeadsPage() {
           <option value="NEW">חדש</option>
           <option value="IN_PROGRESS">בטיפול</option>
           <option value="PROPOSAL_SENT">נשלחה הצעה</option>
-          <option value="BOOKING_PENDING">ממתין לאישור תור</option>
+          <option value="BOOKING_PENDING">ממתין לאישור פגישה</option>
           <option value="BOOKED">פגישה מאושרת</option>
           {/* WON/LOST/ARCHIVED הוסרו: לידים סגורים בטאב הארכיון בלבד
               לפי §12.12. שמירתם כאופציות הייתה מציגה "לא נמצאו תוצאות"

@@ -129,13 +129,13 @@ export const GLOSSARY: Record<TermKey, GlossaryEntry> = {
     description: "כבר יצרת קשר, הליד פעיל אבל עוד לא נשלחה הצעה.",
   },
   status_booking_pending: {
-    title: "ממתין לאישור תור",
+    title: "ממתין לאישור פגישה",
     description:
-      "הלקוח ביקש תור דרך דף ההזמנה, ואת צריכה לאשר או לדחות.",
+      "הלקוח ביקש פגישה דרך דף ההזמנה, ואת צריכה לאשר או לדחות.",
   },
   status_booked: {
     title: "פגישה מאושרת",
-    description: "התור אושר ונקבע ביומן.",
+    description: "הפגישה אושרה ונקבעה ביומן.",
   },
   status_closed: {
     title: "סטטוסי סגירה",
@@ -200,7 +200,7 @@ export const GLOSSARY: Record<TermKey, GlossaryEntry> = {
   page_pending: {
     title: "עמוד 'ממתין לטיפול'",
     description:
-      "רשת ביטחון — לידים תקועים 7+ ימים + בקשות תור שמחכות לאישור. לא ה-to-do השוטף, אלא ה'נופלים בין הכיסאות'.",
+      "רשת ביטחון — לידים תקועים 7+ ימים + בקשות פגישה שמחכות לאישור. לא ה-to-do השוטף, אלא ה'נופלים בין הכיסאות'.",
   },
   page_leads: {
     title: "עמוד 'לידים'",

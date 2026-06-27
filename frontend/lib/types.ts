@@ -103,6 +103,10 @@ export interface Lead {
   organization_name: string | null;
   service_category: string | null;  // F-04: אופציונלי
   service_subtype: string | null;
+  // הצעת AI לסיווג, ממתינה לאישור (Gmail intake). UI מציג banner כל
+  // עוד `suggested_service_category` קיים ו-`service_category` עוד null.
+  suggested_service_category: string | null;
+  suggested_service_subtype: string | null;
   status: string;
   waiting_on: string;
   priority_level: string;
@@ -461,9 +465,10 @@ export interface AiSummary {
 }
 
 export interface HomeDashboard {
-  today_actions: TodayActionItem[];
-  new_leads: LeadCard[];
-  pending: LeadCard[];
+  // "לוח בוקר" — מונים לבלוקי הסטטוס; הרשימות המלאות בדפים הייעודיים
+  // (/today, /pending, /leads).
+  new_leads_24h_count: number;
+  urgent_no_first_response_count: number;
   weekly_insights: WeeklyInsights;
   daily_summary: DailySummary | null;
   // C.1/C.2 §6.8 — null אם ה-cron של אותו טווח עוד לא רץ או נכשל ב-AI.

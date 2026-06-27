@@ -266,6 +266,12 @@ async def update_lead(
     for key, value in updates.items():
         setattr(lead, key, value)
 
+    # אם נועה בחרה service_category במפורש (אישור ההצעה או בחירה ידנית
+    # אחרת) — מנקים את ה-suggested. ה-banner ב-UI נעלם, ההחלטה סופית.
+    if "service_category" in updates and updates["service_category"] is not None:
+        lead.suggested_service_category = None
+        lead.suggested_service_subtype = None
+
     await log_activity(
         db,
         lead_id=lead.id,
@@ -277,6 +283,71 @@ async def update_lead(
     await db.commit()
     await db.refresh(lead)
     return lead
+
+
+# ===================== אישור הצעת AI לסיווג =====================
+
+async def approve_ai_classification(
+    db: AsyncSession, lead_id: UUID, current_user_id: UUID | None
+) -> Lead:
+    """מעתיק suggested_service_category/subtype → actual + מנקה suggested.
+
+    נקרא מ-POST /leads/{id}/approve-classification בעקבות לחיצה על "אישור"
+    ב-banner. אם אין הצעה ממתינה (suggested_service_category is None) —
+    raises ValidationError. אם service_category כבר מאוכלסת (נועה כבר
+    בחרה ידנית בעבר) — COALESCE שומר עליה, רק suggested מתנקה (idempotent).
+    """
+    # ולידציית קיום (404 vs 422). לא חלק מהאטומיות — אם הליד נמחק בין
+    # ה-SELECT ל-UPDATE, ה-UPDATE יחזיר rowcount=0 וניזרק ValidationError.
+    await get_lead_or_404(db, lead_id)
+
+    # אטומי (כלל 2): UPDATE עם WHERE suggested IS NOT NULL + rowcount.
+    # שני requests מקבילים — רק אחד יקבל rowcount=1; השני ייכשל ב-422,
+    # ולכן רק activity log אחד יירשם. COALESCE שומר על idempotency:
+    # אם service_category כבר מאוכלסת (נועה בחרה ידנית קודם) — היא
+    # נשמרת, רק ה-suggested מתנקה.
+    result = await db.execute(
+        update(Lead)
+        .where(
+            Lead.id == lead_id,
+            Lead.suggested_service_category.is_not(None),
+        )
+        .values(
+            # אם service_category ריקה — מעתיקים *את הזוג* (category +
+            # subtype) מההצעה. אם כבר מאוכלסת — שני השדות נשמרים. CASE
+            # ולא COALESCE כי subtype תלוי category: לוקחים subtype מההצעה
+            # רק אם גם category נלקחת ממנה (אחרת ייווצר זוג לא-עקבי כמו
+            # category=workshops + subtype=voice_development).
+            service_category=func.coalesce(
+                Lead.service_category, Lead.suggested_service_category
+            ),
+            service_subtype=case(
+                (Lead.service_category.is_(None), Lead.suggested_service_subtype),
+                else_=Lead.service_subtype,
+            ),
+            suggested_service_category=None,
+            suggested_service_subtype=None,
+        )
+    )
+    if result.rowcount == 0:
+        raise ValidationError("אין הצעת סיווג ממתינה לליד הזה.")
+
+    await log_activity(
+        db,
+        lead_id=lead_id,
+        activity_type=ActivityType.LEAD_UPDATED,
+        performed_by=current_user_id,
+        metadata={
+            "fields": ["service_category", "service_subtype"],
+            "ai_classification_approved": True,
+        },
+    )
+
+    # כלל 15: service עושה flush, route עושה commit. re-fetch דרך
+    # get_lead_or_404 — populate_existing מבטל את ה-identity-map cache
+    # שיכול היה להחזיק ערכים ישנים אחרי ה-Core update.
+    await db.flush()
+    return await get_lead_or_404(db, lead_id)
 
 
 # ===================== סגירה =====================

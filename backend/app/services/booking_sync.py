@@ -274,7 +274,7 @@ async def _apply_reschedule(
                 activity_type=ActivityType.MEETING_RESCHEDULED,
                 performed_by=None,
                 content=(
-                    "מועד הפגישה ביומן Google שונה אבל מתנגש עם תור פעיל "
+                    "מועד הפגישה ביומן Google שונה אבל מתנגש עם פגישה פעילה "
                     "אחר במערכת — לא ניתן לסנכרן אוטומטית. בדקי ידנית."
                 ),
                 metadata={

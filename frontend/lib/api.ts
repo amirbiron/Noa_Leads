@@ -323,6 +323,14 @@ export const api = {
   reopenLead: (leadId: string) =>
     fetcher<Lead>(`/leads/${leadId}/reopen`, { method: "POST" }),
 
+  // אישור הצעת AI לסיווג — מעתיק suggested_service_category/subtype →
+  // service_category/subtype ומנקה את ה-suggested. נקרא מהbanner בעמוד
+  // הליד אחרי לחיצה על "אישור".
+  approveClassification: (leadId: string) =>
+    fetcher<Lead>(`/leads/${leadId}/approve-classification`, {
+      method: "POST",
+    }),
+
   transferLead: (
     leadId: string,
     payload: { target_user_id: string; handoff_note?: string },

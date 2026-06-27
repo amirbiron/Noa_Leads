@@ -41,7 +41,7 @@ def _validate_chip_target_status(v: LeadStatus | None) -> LeadStatus | None:
     if v is not None and v in _CHIP_FORBIDDEN_TARGETS:
         raise ValueError(
             "הצ'יפ לא יכול להעביר ליד למצב הזה — השתמשי ב-flow הייעודי "
-            "(הזמנת תור / סגירת ליד)."
+            "(קביעת פגישה / סגירת ליד)."
         )
     return v
 

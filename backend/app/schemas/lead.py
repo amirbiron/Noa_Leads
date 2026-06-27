@@ -196,6 +196,10 @@ class LeadRead(BaseModel):
 
     service_category: str | None  # אופציונלי לפי Spec §7.1 (F-04)
     service_subtype: str | None
+    # הצעת AI לסיווג, ממתינה לאישור (Gmail intake). UI מציג banner כל
+    # עוד `suggested_service_category` קיים ו-`service_category` עוד null.
+    suggested_service_category: str | None = None
+    suggested_service_subtype: str | None = None
 
     status: str
     waiting_on: str

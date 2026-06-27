@@ -101,7 +101,7 @@ async def get_lead_by_booking_token(db: AsyncSession, token: UUID) -> Lead:
     if lead is None:
         raise NotFoundError("הקישור לא תקף או שפג תוקפו.")
     if lead.status in CLOSED_LEAD_STATUSES:
-        raise ConflictError("הפנייה כבר טופלה. צרי קשר אם רוצה לקבוע תור חדש.")
+        raise ConflictError("הפנייה כבר טופלה. צרי קשר אם רוצה לקבוע פגישה חדשה.")
     return lead
 
 
@@ -220,7 +220,7 @@ async def _expire_stale_bookings(
                 lead_id=row.lead_id,
                 activity_type=ActivityType.MEETING_CANCELED,
                 performed_by=None,  # מערכת
-                content="תור עבר זמנו ובוטל אוטומטית ע\"י המערכת",
+                content="פגישה עברה זמנה ובוטלה אוטומטית ע\"י המערכת",
                 metadata={
                     "booking_id": str(row.id),
                     "source": "expire_stale_cron",
@@ -520,7 +520,7 @@ async def create_booking_request(
     existing = await _get_active_booking(db, lead.id)
     if existing is not None:
         raise ConflictError(
-            "כבר יש לך בקשת תור פעילה. צרי קשר אם רוצה להחליף מועד."
+            "כבר יש לך בקשת פגישה פעילה. צרי קשר אם רוצה להחליף מועד."
         )
 
     # בדיקה חוזרת מול busy ranges — מגן מ-race בין הצגת הסלוט לאישור.
@@ -549,7 +549,7 @@ async def create_booking_request(
         await db.rollback()
         # שתי האפשרויות הופכות לאותה הודעה ידידותית למשתמש
         raise ConflictError(
-            "הסלוט כבר תפוס או שיש לך כבר תור פעיל. בחרי מועד אחר."
+            "הסלוט כבר תפוס או שיש לך כבר פגישה פעילה. בחרי מועד אחר."
         ) from e
 
     # סטטוס הליד → BOOKING_PENDING + עדכון CRM fields. mirror של request_meeting
@@ -750,10 +750,10 @@ async def approve_booking(
             )
         ).first()
         if existing is None:
-            raise ConflictError("בקשת התור לא נמצאה.")
+            raise ConflictError("בקשת הפגישה לא נמצאה.")
         if existing.requested_slot_end <= now_utc:
             raise ConflictError(
-                "התור חלף ולא ניתן עוד לאשרו. בקשי מהליד לבחור מועד חדש."
+                "הפגישה חלפה ולא ניתן עוד לאשרה. בקשי מהליד לבחור מועד חדש."
             )
         raise ConflictError(
             "הבקשה כבר עברה לסטטוס אחר. רעני את הדף ונסי שוב."

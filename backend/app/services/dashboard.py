@@ -12,7 +12,7 @@ from uuid import UUID
 from sqlalchemy import and_, case, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.constants import CLOSED_LEAD_STATUSES, LeadStatus, TaskStatus
+from app.constants import CLOSED_LEAD_STATUSES, LeadStatus, TaskStatus, TaskType
 from app.core.exceptions import NotFoundError
 from app.models.lead import Lead
 from app.models.task import Task
@@ -30,6 +30,16 @@ from app.utils.work_hours import ISRAEL_TZ, to_israel_tz
 # 5-7 פעולות היום לפי האפיון. נשמור up to 20 כדי לא לחתוך אם יש עומס
 TODAY_ACTIONS_LIMIT = 20
 DEFAULT_DASHBOARD_LIMIT = 50
+
+# סף "דחוף — ללא מענה ראשון" עבור בלוק הבית: ליד שנכנס לפני 48h+ ועדיין
+# יש לו FIRST_RESPONSE/LECTURE_INQUIRY task פתוח (= לא נשלח מענה ראשון).
+# **קבוע נפרד מ-stuck_threshold (7 ימים) — כלל 10**: אסור drift בין
+# הסף הזה לסף ה"תקועים" של get_pending/get_today_actions/list_stuck_tasks.
+URGENT_NO_RESPONSE_THRESHOLD = timedelta(hours=48)
+
+# סף "לידים חדשים (24h)" עבור בלוק הבית: כל הלידים שנוצרו ב-24h
+# האחרונות, ללא תלות בסטטוס (block 2 = מד נפח, לא רשימת to-do).
+NEW_LEADS_WINDOW = timedelta(hours=24)
 
 # הערה על overdue: בעבר היה כאן _OVERDUE_GRACE dict שחישב alert מ-
 # created_at + grace per-type. זה יצר בעיות:
@@ -612,6 +622,62 @@ async def get_latest_ai_summary(db: AsyncSession, summary_type: str):
         .limit(1)
     )
     return result.scalar_one_or_none()
+
+
+# ===================== Morning Dashboard Blocks =====================
+# בלוקי הסטטוס למסך הבית ("לוח בוקר") — מונים בלבד. הרשימות עצמן ממשיכות
+# לחיות בעמודים הייעודיים (/today, /pending, /leads).
+
+
+async def get_new_leads_24h_count(db: AsyncSession) -> int:
+    """Block 2 בבית — "X לידים חדשים (24 שעות)".
+
+    סופר כל ליד שנוצר ב-24h האחרונות, **ללא תלות בסטטוס או ב-outbound**.
+    זה מד נפח של פניות נכנסות, לא רשימת to-do (גם ליד שכבר הומר ל-WON
+    בתוך 24h ייספר — מועיל לחיווי "השבוע היה עומס").
+    """
+    threshold = datetime.now(timezone.utc) - NEW_LEADS_WINDOW
+    stmt = (
+        select(func.count())
+        .select_from(Lead)
+        .where(Lead.created_at >= threshold)
+    )
+    return (await db.execute(stmt)).scalar_one()
+
+
+async def get_urgent_no_first_response_count(db: AsyncSession) -> int:
+    """Block 3 בבית — "X לידים דחופים (48h ללא מענה)".
+
+    סופר לידים פתוחים שנכנסו לפני 48h+ ויש להם FIRST_RESPONSE או
+    LECTURE_INQUIRY task פתוח (OPEN/SNOOZED). מאחר ש-FIRST_RESPONSE
+    נסגר אוטומטית כשנועה מבצעת outbound (close_touchpoint_tasks
+    + AUTO_CLOSE_TASK_TYPES ב-lead_actions.py), task פתוח 48h+ אחרי
+    יצירת הליד ≡ "לא נשלח מענה ראשון".
+
+    **כלל 10:** הסף 48h הוא קבוע *נפרד* (URGENT_NO_RESPONSE_THRESHOLD)
+    מסף ה-7d של get_pending/list_stuck_tasks. אסור drift.
+    """
+    threshold = datetime.now(timezone.utc) - URGENT_NO_RESPONSE_THRESHOLD
+    stmt = (
+        select(func.count(func.distinct(Lead.id)))
+        .select_from(Lead)
+        .join(Task, Task.lead_id == Lead.id)
+        .where(
+            Lead.status.notin_([s.value for s in CLOSED_LEAD_STATUSES]),
+            Lead.created_at <= threshold,
+            Task.type.in_(
+                [TaskType.FIRST_RESPONSE.value, TaskType.LECTURE_INQUIRY.value]
+            ),
+            Task.status.in_(
+                [TaskStatus.OPEN.value, TaskStatus.SNOOZED.value]
+            ),
+            # עקביות עם שאר הdashboard — לא להציג tasks פסיביים (D.1).
+            # FIRST_RESPONSE/LECTURE_INQUIRY אינם dormant_suggestion, אבל
+            # הסינון defense-in-depth ותואם דפוס.
+            surfaceable_task_condition(),
+        )
+    )
+    return (await db.execute(stmt)).scalar_one()
 
 
 async def increment_inaccurate_count(db: AsyncSession, summary_id: UUID) -> None:

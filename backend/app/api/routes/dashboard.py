@@ -25,13 +25,16 @@ router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 @router.get("/home", response_model=HomeDashboardResponse)
 async def home(db: DbSession, user: CurrentUser) -> HomeDashboardResponse:
     """
-    תמונת מצב מרוכזת למסך הבית.
-    הסדר תואם את האפיון: פעולות היום → פניות חדשות → ממתין → תובנות.
-    daily_summary (F-07) מוצג כbubble כשיש סיכום עדכני (cron אחרי 19:00).
+    תמונת מצב למסך הבית ("לוח בוקר") — בלוקי counter + תובנות + סיכומי AI.
+
+    הרשימות המלאות (פעולות היום / פניות חדשות / ממתין) חיות בדפים
+    הייעודיים (/dashboard/today, /dashboard/pending, /leads). הבית
+    מציג רק מונים + כפתורי כניסה — כדי שהבוקר של נועה יתחיל ממיקוד.
     """
-    today_actions = await dashboard_service.get_today_actions(db)
-    new_leads = await dashboard_service.get_new_leads(db)
-    pending = await dashboard_service.get_pending(db)
+    new_leads_24h_count = await dashboard_service.get_new_leads_24h_count(db)
+    urgent_no_first_response_count = (
+        await dashboard_service.get_urgent_no_first_response_count(db)
+    )
     weekly_insights = await dashboard_service.get_weekly_insights(db)
     daily_summary = await dashboard_service.get_latest_daily_summary(db)
     ai_daily_summary = await dashboard_service.get_latest_ai_summary(
@@ -41,9 +44,8 @@ async def home(db: DbSession, user: CurrentUser) -> HomeDashboardResponse:
         db, SummaryType.WEEKLY.value
     )
     return HomeDashboardResponse(
-        today_actions=today_actions,
-        new_leads=new_leads,
-        pending=pending,
+        new_leads_24h_count=new_leads_24h_count,
+        urgent_no_first_response_count=urgent_no_first_response_count,
         weekly_insights=weekly_insights,
         daily_summary=daily_summary,
         ai_daily_summary=ai_daily_summary,

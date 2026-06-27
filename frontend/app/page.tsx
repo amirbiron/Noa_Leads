@@ -2,14 +2,11 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Sparkles, TrendingUp } from "lucide-react";
+import { AlertTriangle, CalendarRange, Sparkles, TrendingUp, UserPlus } from "lucide-react";
 import { AiSummaryCard } from "@/components/AiSummaryCard";
 import { AppShell } from "@/components/AppShell";
 import { useDashboardPollContext } from "@/components/DashboardPollProvider";
-import { EmptyState } from "@/components/EmptyState";
-import { LeadCardRow } from "@/components/LeadCardRow";
 import { SectionHeader } from "@/components/SectionHeader";
-import { TodayActionRow } from "@/components/TodayActionRow";
 import { api, ApiError } from "@/lib/api";
 import { shouldShowAiWeeklySummary, shouldShowDailySummary } from "@/lib/date";
 import { labelCategory } from "@/lib/hebrew";
@@ -22,10 +19,12 @@ export default function HomePage() {
   const [data, setData] = useState<HomeDashboard | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  // ברירת מחדל: הסיכום היומי לא מוצג כלל (אפילו לא מקופל). לחיצה על
-  // ה-badge "סיכום יומי" בכותרת חושפת אותו. session-scoped — ביקור חדש
-  // מתחיל שוב מ-hidden. אם רוצים persist, להעביר ל-localStorage.
+  // ברירת מחדל: שני הסיכומים (יומי + שבועי) לא מוצגים כלל. כל badge
+  // בכותרת מתפקד כ-toggle: click → show, click again → hide.
+  // session-scoped — ביקור חדש מתחיל שוב מ-hidden. אם רוצים persist,
+  // להעביר ל-localStorage.
   const [showDailySummary, setShowDailySummary] = useState(false);
+  const [showWeeklySummary, setShowWeeklySummary] = useState(false);
   // הערך לא בשימוש — רק מאלץ re-render דקתי כדי שבועת הסיכום תיעלם
   // אוטומטית ב-07:00 (§12.4), ראה ה-useEffect של הטיימר למטה.
   const [, setMinuteTick] = useState(0);
@@ -71,24 +70,55 @@ export default function HomePage() {
     !!data?.ai_weekly_summary &&
     shouldShowAiWeeklySummary(data.ai_weekly_summary.date_range_end);
 
-  // ה-badge "סיכום יומי" — לחיצה חושפת את AiSummaryCard. ברירת מחדל
-  // hidden לחלוטין; כל לחיצה מציבה showDailySummary=true. הbadge עצמו
-  // נשאר מוצג גם אחרי החשיפה (לא מתחלף ל"סגור"), אבל לחיצה חוזרת
-  // לא עושה כלום (state כבר true) — תואם לבקשת המשתמשת "לחיצה מראה".
+  // ה-badges בכותרת — toggle של כל סיכום בנפרד. visual feedback:
+  // כש-active (הסיכום מוצג) → רקע מלא + טקסט לבן. כש-inactive →
+  // רקע מואר + טקסט צבעוני. aria-pressed מסמן את המצב לקוראי מסך.
   const dailyTogglePill = hasAiDailyInWindow ? (
     <button
       type="button"
-      onClick={() => setShowDailySummary(true)}
-      aria-label="פתח סיכום יומי"
-      className="rounded-full bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-medium px-3 py-1 flex items-center gap-1"
+      onClick={() => setShowDailySummary((v) => !v)}
+      aria-label={showDailySummary ? "סגור סיכום יומי" : "פתח סיכום יומי"}
+      aria-pressed={showDailySummary}
+      className={`rounded-full text-xs font-medium px-3 py-1 flex items-center gap-1 ${
+        showDailySummary
+          ? "bg-indigo-600 hover:bg-indigo-700 text-white"
+          : "bg-indigo-50 hover:bg-indigo-100 text-indigo-700"
+      }`}
     >
       <Sparkles size={12} aria-hidden />
       <span>סיכום יומי</span>
     </button>
   ) : null;
 
+  const weeklyTogglePill = hasWeeklyInWindow ? (
+    <button
+      type="button"
+      onClick={() => setShowWeeklySummary((v) => !v)}
+      aria-label={showWeeklySummary ? "סגור סיכום שבועי" : "פתח סיכום שבועי"}
+      aria-pressed={showWeeklySummary}
+      className={`rounded-full text-xs font-medium px-3 py-1 flex items-center gap-1 ${
+        showWeeklySummary
+          ? "bg-emerald-600 hover:bg-emerald-700 text-white"
+          : "bg-emerald-50 hover:bg-emerald-100 text-emerald-700"
+      }`}
+    >
+      <CalendarRange size={12} aria-hidden />
+      <span>סיכום שבועי</span>
+    </button>
+  ) : null;
+
+  // שני ה-badges ב-headerActions. weekly לפני daily כי בעברית RTL
+  // הוא יופיע אחרי daily ב-flex (הקצה ה"פנימי" הוא ראשון), וזה
+  // נראה טבעי: יומי קרוב יותר לכותרת (מימין), שבועי במרחק (משמאל).
+  const summaryToggles = (dailyTogglePill || weeklyTogglePill) ? (
+    <div className="flex items-center gap-2">
+      {weeklyTogglePill}
+      {dailyTogglePill}
+    </div>
+  ) : null;
+
   return (
-    <AppShell title="בית" headerActions={dailyTogglePill}>
+    <AppShell title="בית" headerActions={summaryToggles}>
       {loading && (
         <div className="text-center text-gray-400 py-10 text-sm">טוען…</div>
       )}
@@ -102,92 +132,33 @@ export default function HomePage() {
       {data && (
         <>
           {/* C.1/C.2 §6.8: סיכומי הבית.
-              - Daily slot: AI נרטיבי בלבד (C.1). חלון 19:00→07:00.
-                **ברירת מחדל: מוסתר לחלוטין.** ה-badge "סיכום יומי" בכותרת
-                חושף — showDailySummary controls visibility.
-              - Weekly slot: AI נרטיבי, חלון ראשון 08:00→שני 07:00. פתוח
-                כברירת מחדל (קיפול פנימי דרך chevron + localStorage).
+              - Daily slot: AI נרטיבי. חלון 19:00→07:00.
+                **ברירת מחדל: מוסתר.** ה-badge "סיכום יומי" toggle.
+              - Weekly slot: AI נרטיבי. חלון ראשון 08:00→שני 07:00.
+                **ברירת מחדל: מוסתר.** ה-badge "סיכום שבועי" toggle.
+              שני הסיכומים מוסתרים עד שהמשתמשת לוחצת על ה-badge המתאים.
               Stacked בכל הbreakpoints: Daily מעל Weekly. */}
 
-          {((showDailySummary && hasAiDailyInWindow) || hasWeeklyInWindow) && (
+          {((showDailySummary && hasAiDailyInWindow) ||
+            (showWeeklySummary && hasWeeklyInWindow)) && (
             <div className="flex flex-col gap-3 lg:gap-4 mb-3">
-              {/* daily — לא collapsible (parent שולט ב-visibility דרך
-                  showDailySummary). אחרת ערך ישן ב-localStorage
-                  (`noa:summary:daily:collapsed=true`) היה גורם לחשיפה
-                  חלקית (רק bottom_line) אחרי לחיצה על ה-badge. */}
               {showDailySummary && hasAiDailyInWindow && (
                 <AiSummaryCard summary={data.ai_daily_summary!} />
               )}
 
-              {hasWeeklyInWindow && (
-                <AiSummaryCard
-                  summary={data.ai_weekly_summary!}
-                  collapsible
-                />
+              {showWeeklySummary && hasWeeklyInWindow && (
+                <AiSummaryCard summary={data.ai_weekly_summary!} />
               )}
             </div>
           )}
 
-          {/* פעולות היום */}
-          <SectionHeader
-            title={
-              data.today_actions.length > 0
-                ? `${data.today_actions.length} משימות מחכות לך היום`
-                : "אין משימות דחופות היום"
-            }
-            termKey="page_today"
+          {/* "לוח בוקר" — בלוקי סטטוס + פעולה.
+              Block 1 (פגישות מהיומן) יבוא ב-PR נפרד אחרי שאינטגרציית
+              היומן תתייצב; כאן 2 בלוקים, הגריד יעבור ל-cols-3 בעתיד. */}
+          <MorningBlocks
+            newLeadsCount={data.new_leads_24h_count}
+            urgentCount={data.urgent_no_first_response_count}
           />
-          {data.today_actions.length === 0 ? (
-            <EmptyState
-              title="אין משימות דחופות היום"
-              hint="אפשר להתחיל את היום ברוגע ✓"
-              icon={<Sparkles size={24} aria-hidden />}
-            />
-          ) : (
-            <ul className="space-y-2">
-              {data.today_actions.map((item) => (
-                <li key={item.task_id}>
-                  <TodayActionRow item={item} onChanged={load} />
-                </li>
-              ))}
-            </ul>
-          )}
-
-          {/* פניות חדשות */}
-          {data.new_leads.length > 0 && (
-            <>
-              <SectionHeader
-                title="פניות חדשות שעוד לא ענית עליהן"
-                count={data.new_leads.length}
-              />
-              <ul className="space-y-2">
-                {data.new_leads.map((lead) => (
-                  <li key={lead.id}>
-                    {/* hideStatus: כל הפניות כאן NEW — "חדש" מיותר (§12.1). */}
-                    <LeadCardRow lead={lead} hideStatus />
-                  </li>
-                ))}
-              </ul>
-            </>
-          )}
-
-          {/* ממתין לטיפול */}
-          {data.pending.length > 0 && (
-            <>
-              <SectionHeader
-                title="ממתין לטיפול"
-                count={data.pending.length}
-                termKey="page_pending"
-              />
-              <ul className="space-y-2">
-                {data.pending.map((lead) => (
-                  <li key={lead.id}>
-                    <LeadCardRow lead={lead} />
-                  </li>
-                ))}
-              </ul>
-            </>
-          )}
 
           {/* תובנות השבוע */}
           <SectionHeader title="תובנות השבוע" />
@@ -287,6 +258,62 @@ function Stat({
         {value}
       </div>
       <div className="text-xs text-gray-500 mt-0.5">{label}</div>
+    </div>
+  );
+}
+
+// "לוח בוקר" — 2 בלוקי סטטוס + פעולה. כל בלוק = מספר גדול + label +
+// כפתור כניסה לדף הייעודי. גריד 2 עמודות (Block 1 יתווסף ב-PR הבא).
+function MorningBlocks({
+  newLeadsCount,
+  urgentCount,
+}: {
+  newLeadsCount: number;
+  urgentCount: number;
+}) {
+  return (
+    <div className="grid grid-cols-2 gap-3 mb-4">
+      {/* Block 2: לידים חדשים (24h) — מד נפח, כפתור לטאב הלידים */}
+      <Link
+        href="/leads"
+        className="block bg-white rounded-xl border border-gray-200 p-4 hover:border-indigo-300 hover:shadow-sm active:opacity-70 transition"
+      >
+        <div className="flex items-center gap-2 text-indigo-600 mb-2">
+          <UserPlus size={18} aria-hidden />
+          <span className="text-xs font-medium">פניות חדשות (24 שעות)</span>
+        </div>
+        <div className="text-3xl font-bold text-gray-900 tabular-nums">
+          {newLeadsCount}
+        </div>
+        <div className="text-xs text-gray-500 mt-1">לכל הלידים ←</div>
+      </Link>
+
+      {/* Block 3: דחוף — ללא מענה ראשון 48h+. כפתור ל-/today (שם
+          ה-FIRST_RESPONSE/LECTURE_INQUIRY overdue כבר מופיעים עם כפתורי
+          one-tap טלפון/וואטסאפ/מייל). */}
+      <Link
+        href="/today"
+        className={`block rounded-xl border p-4 hover:shadow-sm active:opacity-70 transition ${
+          urgentCount > 0
+            ? "bg-state-red/5 border-state-red/30 hover:border-state-red/50"
+            : "bg-white border-gray-200 hover:border-state-red/20"
+        }`}
+      >
+        <div
+          className={`flex items-center gap-2 mb-2 ${urgentCount > 0 ? "text-state-red" : "text-gray-500"}`}
+        >
+          <AlertTriangle size={18} aria-hidden />
+          <span className="text-xs font-medium">דחוף — ללא מענה 48 שעות</span>
+        </div>
+        <div
+          className={`text-3xl font-bold tabular-nums ${urgentCount > 0 ? "text-state-red" : "text-gray-900"}`}
+        >
+          {urgentCount}
+        </div>
+        <div className="text-xs text-gray-500 mt-1">
+          {urgentCount > 0 ? "טפלי עכשיו ←" : "אין דחופים ✓"}
+        </div>
+      </Link>
     </div>
   );
 }

@@ -365,8 +365,10 @@ async def _create_lead_from_draft(
     """ממיר LeadDraft + email_msg → LeadCreate, יוצר ליד, מקשר email_msg.lead_id.
 
     Validation:
-    - service_category: רק אם ערך תקף ב-ServiceCategory enum.
-    - service_subtype: רק אם ב-SERVICE_SUBTYPES של הקטגוריה.
+    - service_category (של ה-draft): רק אם ערך תקף ב-ServiceCategory enum.
+      נשמר כ-**suggested_service_category** ולא כסיווג סופי — נועה תאשר
+      את ההצעה דרך banner בעמוד הליד (POST /leads/{id}/approve-classification).
+    - service_subtype: רק אם ב-SERVICE_SUBTYPES של הקטגוריה (אותו תיקוף).
     - phone: normalize_for_storage.
     """
     category_str = draft.service_category
@@ -381,6 +383,11 @@ async def _create_lead_from_draft(
         and draft.service_subtype in SERVICE_SUBTYPES.get(category_enum, [])
     ):
         subtype = draft.service_subtype
+
+    # ה-actual service_category נשאר None — נועה תאשר את ה-suggested ידנית
+    # דרך banner בעמוד הליד. ה-suggested נשמרים כ-strings (ערך enum).
+    suggested_category_str = category_enum.value if category_enum is not None else None
+    suggested_subtype_str = subtype
 
     # phone: AI עלול להחזיר מספר חלקי/לא תקין. ValueError ב-normalize →
     # נשמרים בלי טלפון, נועה תשלים. עדיף ליד עם שדה ריק מאשר אובדן ליד.
@@ -417,8 +424,10 @@ async def _create_lead_from_draft(
             ),
             phone=phone,
             email=lead_email,
-            service_category=category_enum,
-            service_subtype=subtype,
+            # actual נשאר None — ה-AI הוא הצעה, לא סופי. ראה שדות
+            # `suggested_*` שמתקבעים אחרי `create_lead` למטה.
+            service_category=None,
+            service_subtype=None,
             source_channel=SourceChannel.EMAIL,
             source_detail=draft.subject_summary,
             preferred_contact=PreferredContact.EMAIL,
@@ -436,8 +445,10 @@ async def _create_lead_from_draft(
             ),
             phone=phone,
             email=None,
-            service_category=category_enum,
-            service_subtype=subtype,
+            # actual נשאר None — ה-AI הוא הצעה, לא סופי. ראה שדות
+            # `suggested_*` שמתקבעים אחרי `create_lead` למטה.
+            service_category=None,
+            service_subtype=None,
             source_channel=SourceChannel.EMAIL,
             source_detail=draft.subject_summary,
             preferred_contact=PreferredContact.EMAIL,
@@ -451,12 +462,18 @@ async def _create_lead_from_draft(
         db, lead_create, current_user_id=None, commit=False, set_last_inbound=True
     )
 
-    # סימוני AI
+    # סימוני AI + הצעת סיווג ממתינה לאישור
     update_values: dict[str, Any] = {}
     if low_confidence:
         update_values["low_confidence_classification"] = True
     if manual_review:
         update_values["manual_review_needed"] = True
+    if suggested_category_str:
+        # נועה תאשר את ההצעה דרך POST /leads/{id}/approve-classification
+        # או תבחר ידנית קטגוריה אחרת (PATCH /leads/{id} מנקה את suggested).
+        update_values["suggested_service_category"] = suggested_category_str
+        if suggested_subtype_str:
+            update_values["suggested_service_subtype"] = suggested_subtype_str
     if update_values:
         from app.models.lead import Lead
         await db.execute(
