@@ -54,14 +54,8 @@ async def _mk_first_response_task(
 
 
 async def _urgent_lead_ids(db) -> set:
-    """ה-ids ברשימה שמאחורי הכרטיס — נוח לבדיקות set-based (עמיד לנתונים אחרים).
-
-    limit גבוה במכוון: ב-DB של הבדיקות עשויים לשבת לידים דחופים מהרצות
-    אחרות, וה-limit הדיפולטי (50) היה יכול לחתוך דווקא את הליד שנבדק.
-    """
-    items = await dashboard_service.get_urgent_no_first_response_leads(
-        db, limit=1000
-    )
+    """ה-ids ברשימה שמאחורי הכרטיס — נוח לבדיקות set-based (עמיד לנתונים אחרים)."""
+    items = await dashboard_service.get_urgent_no_first_response_leads(db)
     return {item.id for item in items}
 
 
@@ -278,13 +272,34 @@ async def test_urgent_count_equals_list_length(db):
     )
 
     count = await dashboard_service.get_urgent_no_first_response_count(db)
-    # limit מעל ה-count כדי שהבדיקה תמדוד את השאילתה ולא את תקרת הבטיחות.
-    items = await dashboard_service.get_urgent_no_first_response_leads(
-        db, limit=count + 5
-    )
+    items = await dashboard_service.get_urgent_no_first_response_leads(db)
     assert count == len(items)
 
     ids = {item.id for item in items}
     assert {urgent_recent.id, urgent_stuck.id} <= ids
     assert closed.id not in ids
     assert answered.id not in ids
+
+
+async def test_urgent_list_not_truncated_above_dashboard_limit(db):
+    """המונה והרשימה מסכימים גם מעל DEFAULT_DASHBOARD_LIMIT (50).
+
+    הערת ריוויו (CodeRabbit + Qodo): תקרה שקטה ברשימה הייתה מחזירה את
+    אותו באג מכיוון אחר — 51 בכרטיס, 50 במסך. לכן הרשימה הזו רצה בלי
+    limit כברירת מחדל, בשונה מ-get_pending/get_new_leads.
+    """
+    now = datetime.now(timezone.utc)
+    before = await dashboard_service.get_urgent_no_first_response_count(db)
+
+    created = dashboard_service.DEFAULT_DASHBOARD_LIMIT + 5
+    for _ in range(created):
+        lead = await _mk_lead(db, created_at=now - timedelta(hours=50))
+        await _mk_first_response_task(db, lead_id=lead.id)
+
+    count = await dashboard_service.get_urgent_no_first_response_count(db)
+    items = await dashboard_service.get_urgent_no_first_response_leads(db)
+
+    assert count - before == created
+    # ה-invariant המרכזי, דווקא מעל התקרה הישנה.
+    assert count == len(items)
+    assert len(items) > dashboard_service.DEFAULT_DASHBOARD_LIMIT

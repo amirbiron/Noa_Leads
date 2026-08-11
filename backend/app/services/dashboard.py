@@ -714,21 +714,28 @@ async def get_urgent_no_first_response_count(db: AsyncSession) -> int:
 
 
 async def get_urgent_no_first_response_leads(
-    db: AsyncSession, *, limit: int = DEFAULT_DASHBOARD_LIMIT
+    db: AsyncSession, *, limit: int | None = None
 ) -> list[LeadCard]:
     """הרשימה שמאחורי Block 3 — הלידים שהמונה סופר, בזה אחר זה.
 
     אותם תנאים כמו המונה (_urgent_no_first_response_where) + מיון
-    הדשבורד הרגיל. ה-limit הוא תקרת בטיחות בלבד; בפועל המספר קטן
-    (אם הוא גדול מ-limit יש בעיה גדולה יותר מהתצוגה).
+    הדשבורד הרגיל.
+
+    **בלי limit כברירת מחדל, בשונה מ-get_pending/get_new_leads.** הרשימות
+    האחרות הן "מה לטפל בו עכשיו" — תקרה של 50 בהן היא בסדר. הרשימה הזו
+    היא היעד של מונה שמצהיר על מספר מדויק, ותקרה שקטה הייתה מחזירה בדיוק
+    את הבאג שה-PR הזה תיקן, רק מכיוון אחר (51 בכרטיס, 50 במסך). המונה
+    לא חסום — גם הרשימה לא. הפרמטר `limit` נשאר עבור קוראים עתידיים
+    שכן רוצים חיתוך מפורש.
     """
     now_utc = datetime.now(timezone.utc)
     stmt = (
         select(Lead)
         .where(*_urgent_no_first_response_where(now_utc))
         .order_by(*_dashboard_order(now_utc))
-        .limit(limit)
     )
+    if limit is not None:
+        stmt = stmt.limit(limit)
     result = await db.execute(stmt)
     return [_lead_to_card(lead, now_utc) for lead in result.scalars().all()]
 
