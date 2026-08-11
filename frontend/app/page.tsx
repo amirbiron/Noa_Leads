@@ -288,11 +288,13 @@ function MorningBlocks({
         <div className="text-xs text-gray-500 mt-1">לכל הלידים ←</div>
       </Link>
 
-      {/* Block 3: דחוף — ללא מענה ראשון 48h+. כפתור ל-/today (שם
-          ה-FIRST_RESPONSE/LECTURE_INQUIRY overdue כבר מופיעים עם כפתורי
-          one-tap טלפון/וואטסאפ/מייל). */}
+      {/* Block 3: דחוף — ללא מענה ראשון 48h+. כפתור ל-/urgent — מסך
+          שמוזן מאותה שאילתה שמייצרת את המונה כאן, ולכן המספר והרשימה
+          לא יכולים להתפצל. (בעבר הקישור הוביל ל-/today, שמסנן חלון
+          due_at משלו: ליד תקוע 7+ ימים נספר כאן אבל הופיע רק ב"ממתין
+          לטיפול" — "3" בכרטיס מול ליד אחד במסך.) */}
       <Link
-        href="/today"
+        href="/urgent"
         className={`block rounded-xl border p-4 hover:shadow-sm active:opacity-70 transition ${
           urgentCount > 0
             ? "bg-state-red/5 border-state-red/30 hover:border-state-red/50"

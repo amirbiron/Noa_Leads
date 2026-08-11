@@ -53,6 +53,12 @@ async def _mk_first_response_task(
     return task
 
 
+async def _urgent_lead_ids(db) -> set:
+    """ה-ids ברשימה שמאחורי הכרטיס — נוח לבדיקות set-based (עמיד לנתונים אחרים)."""
+    items = await dashboard_service.get_urgent_no_first_response_leads(db)
+    return {item.id for item in items}
+
+
 # ===================== Block 2: lead 24h count =====================
 
 
@@ -98,6 +104,9 @@ async def test_urgent_no_response_includes_48h_open_first_response(db):
 
     after = await dashboard_service.get_urgent_no_first_response_count(db)
     assert after - before == 1
+    # המונה והרשימה חייבים להסכים — הרשימה היא היעד של הכרטיס.
+    ids = await _urgent_lead_ids(db)
+    assert lead.id in ids
 
 
 async def test_urgent_no_response_excludes_under_48h(db):
@@ -159,3 +168,138 @@ async def test_urgent_no_response_counts_lecture_inquiry(db):
 
     after = await dashboard_service.get_urgent_no_first_response_count(db)
     assert after - before == 1
+    assert lead.id in await _urgent_lead_ids(db)
+
+
+# ===== Block 3: המונה והרשימה = אותה שאילתה (הבאג "3 בכרטיס, 1 במסך") =====
+
+
+async def test_urgent_list_includes_stuck_over_7_days(db):
+    """**רגרסיה לבאג המקורי:** ליד שממתין 10 ימים למענה ראשון נספר בכרטיס
+    *וגם* מופיע ברשימה שנפתחת בלחיצה עליו.
+
+    קודם הכפתור הוביל ל-/today, ושם `Task.due_at > now-7d` (אקסקלוסיביות
+    §16.2) הסתיר בדיוק את הלידים הכי דחופים — המונה הראה 3 והמסך ליד אחד.
+    """
+    now = datetime.now(timezone.utc)
+    before = await dashboard_service.get_urgent_no_first_response_count(db)
+
+    lead = await _mk_lead(db, created_at=now - timedelta(days=10))
+    await _mk_first_response_task(
+        db,
+        lead_id=lead.id,
+        status=TaskStatus.OPEN.value,
+        # due_at לפני 9 ימים — מעבר לסף ה-7d שמחריג מ"פעולות היום".
+        due_at=now - timedelta(days=9),
+    )
+
+    after = await dashboard_service.get_urgent_no_first_response_count(db)
+    assert after - before == 1
+    assert lead.id in await _urgent_lead_ids(db)
+
+
+async def test_urgent_list_includes_snoozed_into_the_future(db):
+    """ליד 50h+ עם FIRST_RESPONSE ב-SNOOZED למחר — נספר וגם ברשימה.
+
+    /today מציג snoozed רק אחרי שהמועד עבר; זה היה מקור פער שני בין
+    המספר לרשימה. כאן שניהם מסכימים.
+    """
+    now = datetime.now(timezone.utc)
+    before = await dashboard_service.get_urgent_no_first_response_count(db)
+
+    lead = await _mk_lead(db, created_at=now - timedelta(hours=50))
+    await _mk_first_response_task(
+        db,
+        lead_id=lead.id,
+        status=TaskStatus.SNOOZED.value,
+        due_at=now + timedelta(days=1),
+    )
+
+    after = await dashboard_service.get_urgent_no_first_response_count(db)
+    assert after - before == 1
+    assert lead.id in await _urgent_lead_ids(db)
+
+
+async def test_urgent_list_has_no_duplicate_rows(db):
+    """ליד עם FIRST_RESPONSE *וגם* LECTURE_INQUIRY פתוחים מופיע פעם אחת.
+
+    זו הסיבה ל-EXISTS במקום JOIN — JOIN היה מייצר שתי שורות, והרשימה
+    הייתה יוצאת ארוכה מהמונה.
+    """
+    now = datetime.now(timezone.utc)
+    before = await dashboard_service.get_urgent_no_first_response_count(db)
+
+    lead = await _mk_lead(db, created_at=now - timedelta(hours=50))
+    await _mk_first_response_task(db, lead_id=lead.id, status=TaskStatus.OPEN.value)
+    await _mk_first_response_task(
+        db,
+        lead_id=lead.id,
+        status=TaskStatus.OPEN.value,
+        task_type=TaskType.LECTURE_INQUIRY.value,
+    )
+
+    after = await dashboard_service.get_urgent_no_first_response_count(db)
+    assert after - before == 1
+
+    items = await dashboard_service.get_urgent_no_first_response_leads(db)
+    assert [item.id for item in items].count(lead.id) == 1
+
+
+async def test_urgent_count_equals_list_length(db):
+    """ה-invariant המרכזי: המספר בכרטיס = אורך הרשימה שנפתחת בלחיצה.
+
+    בדיקה גלובלית (לא delta) על תערובת המקרים שנוצרת כאן: דחוף רגיל,
+    דחוף תקוע 7+ ימים, ליד סגור, וליד שכבר קיבל מענה.
+    """
+    now = datetime.now(timezone.utc)
+
+    urgent_recent = await _mk_lead(db, created_at=now - timedelta(hours=50))
+    await _mk_first_response_task(db, lead_id=urgent_recent.id)
+
+    urgent_stuck = await _mk_lead(db, created_at=now - timedelta(days=12))
+    await _mk_first_response_task(
+        db, lead_id=urgent_stuck.id, due_at=now - timedelta(days=11)
+    )
+
+    closed = await _mk_lead(
+        db, created_at=now - timedelta(days=12), status=LeadStatus.WON.value
+    )
+    await _mk_first_response_task(db, lead_id=closed.id)
+
+    answered = await _mk_lead(db, created_at=now - timedelta(hours=50))
+    await _mk_first_response_task(
+        db, lead_id=answered.id, status=TaskStatus.DONE.value
+    )
+
+    count = await dashboard_service.get_urgent_no_first_response_count(db)
+    items = await dashboard_service.get_urgent_no_first_response_leads(db)
+    assert count == len(items)
+
+    ids = {item.id for item in items}
+    assert {urgent_recent.id, urgent_stuck.id} <= ids
+    assert closed.id not in ids
+    assert answered.id not in ids
+
+
+async def test_urgent_list_not_truncated_above_dashboard_limit(db):
+    """המונה והרשימה מסכימים גם מעל DEFAULT_DASHBOARD_LIMIT (50).
+
+    הערת ריוויו (CodeRabbit + Qodo): תקרה שקטה ברשימה הייתה מחזירה את
+    אותו באג מכיוון אחר — 51 בכרטיס, 50 במסך. לכן הרשימה הזו רצה בלי
+    limit כברירת מחדל, בשונה מ-get_pending/get_new_leads.
+    """
+    now = datetime.now(timezone.utc)
+    before = await dashboard_service.get_urgent_no_first_response_count(db)
+
+    created = dashboard_service.DEFAULT_DASHBOARD_LIMIT + 5
+    for _ in range(created):
+        lead = await _mk_lead(db, created_at=now - timedelta(hours=50))
+        await _mk_first_response_task(db, lead_id=lead.id)
+
+    count = await dashboard_service.get_urgent_no_first_response_count(db)
+    items = await dashboard_service.get_urgent_no_first_response_leads(db)
+
+    assert count - before == created
+    # ה-invariant המרכזי, דווקא מעל התקרה הישנה.
+    assert count == len(items)
+    assert len(items) > dashboard_service.DEFAULT_DASHBOARD_LIMIT

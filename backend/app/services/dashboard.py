@@ -645,26 +645,38 @@ async def get_new_leads_24h_count(db: AsyncSession) -> int:
     return (await db.execute(stmt)).scalar_one()
 
 
-async def get_urgent_no_first_response_count(db: AsyncSession) -> int:
-    """Block 3 בבית — "X לידים דחופים (48h ללא מענה)".
+def _urgent_no_first_response_where(now_utc: datetime) -> tuple:
+    """תנאי ה-WHERE של "דחוף — ללא מענה 48 שעות" (Block 3 בבית).
 
-    סופר לידים פתוחים שנכנסו לפני 48h+ ויש להם FIRST_RESPONSE או
-    LECTURE_INQUIRY task פתוח (OPEN/SNOOZED). מאחר ש-FIRST_RESPONSE
-    נסגר אוטומטית כשנועה מבצעת outbound (close_touchpoint_tasks
-    + AUTO_CLOSE_TASK_TYPES ב-lead_actions.py), task פתוח 48h+ אחרי
-    יצירת הליד ≡ "לא נשלח מענה ראשון".
+    **מקור אמת אחד** למונה (get_urgent_no_first_response_count) ולרשימה
+    (get_urgent_no_first_response_leads). בעבר המונה חי לבדו והכפתור הוביל
+    ל-/today, שמסנן חלון due_at משלו (7 ימים אחורה / סוף היום קדימה /
+    snoozed רק אחרי שהמועד עבר) — התוצאה הייתה "3" בכרטיס ורק ליד אחד
+    במסך. שתי הפונקציות חייבות לצרוך את הפונקציה הזו, בלי לשכפל תנאים.
+
+    ההגדרה: ליד פתוח שנכנס לפני 48h+ ויש לו FIRST_RESPONSE או
+    LECTURE_INQUIRY task פתוח (OPEN/SNOOZED). מאחר ש-FIRST_RESPONSE נסגר
+    אוטומטית כשנועה מבצעת outbound (close_touchpoint_tasks +
+    AUTO_CLOSE_TASK_TYPES ב-lead_actions.py), task פתוח 48h+ אחרי יצירת
+    הליד ≡ "לא נשלח מענה ראשון".
+
+    **אין כאן חלון על due_at בכוונה:** ליד שממתין 10 ימים למענה ראשון
+    הוא *יותר* דחוף, לא פחות. הוא מופיע גם ב"ממתין לטיפול" (7+ ימים,
+    §16.2) — זה לא סותר, כי המסך הזה חותך לפי "אין מענה ראשון" ולא לפי
+    וותק המשימה.
 
     **כלל 10:** הסף 48h הוא קבוע *נפרד* (URGENT_NO_RESPONSE_THRESHOLD)
     מסף ה-7d של get_pending/list_stuck_tasks. אסור drift.
+
+    EXISTS ולא JOIN (דפוס get_pending): ליד עם גם FIRST_RESPONSE וגם
+    LECTURE_INQUIRY פתוחים היה מייצר שתי שורות ב-JOIN — DISTINCT היה
+    מציל את המונה, אבל ברשימה זה כפילות אמיתית בתצוגה.
     """
-    threshold = datetime.now(timezone.utc) - URGENT_NO_RESPONSE_THRESHOLD
-    stmt = (
-        select(func.count(func.distinct(Lead.id)))
-        .select_from(Lead)
-        .join(Task, Task.lead_id == Lead.id)
+    threshold = now_utc - URGENT_NO_RESPONSE_THRESHOLD
+    unanswered_task_exists = (
+        select(Task.id)
         .where(
-            Lead.status.notin_([s.value for s in CLOSED_LEAD_STATUSES]),
-            Lead.created_at <= threshold,
+            Task.lead_id == Lead.id,
             Task.type.in_(
                 [TaskType.FIRST_RESPONSE.value, TaskType.LECTURE_INQUIRY.value]
             ),
@@ -676,8 +688,56 @@ async def get_urgent_no_first_response_count(db: AsyncSession) -> int:
             # הסינון defense-in-depth ותואם דפוס.
             surfaceable_task_condition(),
         )
+        .correlate(Lead)
+        .exists()
+    )
+    return (
+        Lead.status.notin_([s.value for s in CLOSED_LEAD_STATUSES]),
+        Lead.created_at <= threshold,
+        unanswered_task_exists,
+    )
+
+
+async def get_urgent_no_first_response_count(db: AsyncSession) -> int:
+    """Block 3 בבית — "X לידים דחופים (48h ללא מענה)".
+
+    המונה של הכרטיס. ההגדרה ב-_urgent_no_first_response_where — אותם
+    תנאים בדיוק שמזינים את הרשימה, כך שהמספר בכרטיס תמיד שווה לאורך
+    הרשימה שנפתחת בלחיצה עליו.
+    """
+    stmt = (
+        select(func.count())
+        .select_from(Lead)
+        .where(*_urgent_no_first_response_where(datetime.now(timezone.utc)))
     )
     return (await db.execute(stmt)).scalar_one()
+
+
+async def get_urgent_no_first_response_leads(
+    db: AsyncSession, *, limit: int | None = None
+) -> list[LeadCard]:
+    """הרשימה שמאחורי Block 3 — הלידים שהמונה סופר, בזה אחר זה.
+
+    אותם תנאים כמו המונה (_urgent_no_first_response_where) + מיון
+    הדשבורד הרגיל.
+
+    **בלי limit כברירת מחדל, בשונה מ-get_pending/get_new_leads.** הרשימות
+    האחרות הן "מה לטפל בו עכשיו" — תקרה של 50 בהן היא בסדר. הרשימה הזו
+    היא היעד של מונה שמצהיר על מספר מדויק, ותקרה שקטה הייתה מחזירה בדיוק
+    את הבאג שה-PR הזה תיקן, רק מכיוון אחר (51 בכרטיס, 50 במסך). המונה
+    לא חסום — גם הרשימה לא. הפרמטר `limit` נשאר עבור קוראים עתידיים
+    שכן רוצים חיתוך מפורש.
+    """
+    now_utc = datetime.now(timezone.utc)
+    stmt = (
+        select(Lead)
+        .where(*_urgent_no_first_response_where(now_utc))
+        .order_by(*_dashboard_order(now_utc))
+    )
+    if limit is not None:
+        stmt = stmt.limit(limit)
+    result = await db.execute(stmt)
+    return [_lead_to_card(lead, now_utc) for lead in result.scalars().all()]
 
 
 async def increment_inaccurate_count(db: AsyncSession, summary_id: UUID) -> None:
