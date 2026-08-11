@@ -174,6 +174,13 @@ class PendingResponse(BaseModel):
     items: list[LeadCard]
 
 
+class UrgentResponse(BaseModel):
+    """הרשימה מאחורי Block 3 בבית ("דחוף — ללא מענה 48 שעות").
+    אותם לידים בדיוק ש-urgent_no_first_response_count סופר."""
+
+    items: list[LeadCard]
+
+
 class ProposalsResponse(BaseModel):
     items: list[ProposalCard]
 

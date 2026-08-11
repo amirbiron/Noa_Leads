@@ -184,6 +184,11 @@ export const api = {
   getPending: () =>
     fetcher<{ items: LeadCard[] }>("/dashboard/pending"),
 
+  // הלידים שמאחורי הכרטיס "דחוף — ללא מענה 48 שעות" בבית. אותה שאילתה
+  // שמייצרת את המונה — לכן המספר בכרטיס תמיד שווה לאורך הרשימה כאן.
+  getUrgent: () =>
+    fetcher<{ items: LeadCard[] }>("/dashboard/urgent"),
+
   getProposals: () =>
     fetcher<{ items: ProposalCard[] }>("/dashboard/proposals"),
 

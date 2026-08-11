@@ -15,6 +15,7 @@ from app.schemas.dashboard import (
     PendingResponse,
     ProposalsResponse,
     TodayResponse,
+    UrgentResponse,
     WeeklyInsights,
 )
 from app.services import dashboard as dashboard_service
@@ -63,6 +64,17 @@ async def today(db: DbSession, user: CurrentUser) -> TodayResponse:
 async def pending(db: DbSession, user: CurrentUser) -> PendingResponse:
     items = await dashboard_service.get_pending(db)
     return PendingResponse(items=items)
+
+
+@router.get("/urgent", response_model=UrgentResponse)
+async def urgent(db: DbSession, user: CurrentUser) -> UrgentResponse:
+    """היעד של Block 3 בבית — הלידים שממתינים למענה ראשון 48h+.
+
+    הרשימה נשענת על אותם תנאים שמזינים את המונה ב-/home, כך שהמספר
+    בכרטיס ומה שנפתח בלחיצה עליו לא יכולים להתפצל.
+    """
+    items = await dashboard_service.get_urgent_no_first_response_leads(db)
+    return UrgentResponse(items=items)
 
 
 @router.get("/proposals", response_model=ProposalsResponse)
