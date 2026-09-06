@@ -292,6 +292,11 @@ async def expire_all_stale_bookings(db: AsyncSession) -> int:
 async def get_booking_page_info(db: AsyncSession, token: UUID) -> BookingPageInfo:
     lead = await get_lead_by_booking_token(db, token)
     active = await _get_active_booking(db, lead.id)
+    # קריאת שעון *אחת* לשני השדות. שתי קריאות נפרדות שנופלות משני צדי
+    # חצות (שעון ישראל) היו מחזירות today מיום אחד ו-horizon מיום אחר —
+    # ביום האחרון של החודש זה מרווח של חודשיים במקום אחד, וה-UI היה בונה
+    # שלושה חודשי בחירה.
+    now_utc = datetime.now(timezone.utc)
     return BookingPageInfo(
         lead_name=lead.full_name,
         service_category=lead.service_category,
@@ -301,8 +306,8 @@ async def get_booking_page_info(db: AsyncSession, token: UUID) -> BookingPageInf
         active_booking_at=active.requested_slot_start if active else None,
         active_booking_end=active.requested_slot_end if active else None,
         active_booking_status=active.status if active else None,
-        today=to_israel_tz(datetime.now(timezone.utc)).date(),
-        booking_horizon_end=booking_horizon_end(),
+        today=to_israel_tz(now_utc).date(),
+        booking_horizon_end=booking_horizon_end(now_utc),
     )
 
 
@@ -324,7 +329,10 @@ async def get_availability(
     """
     if date_to < date_from:
         raise ValidationError("date_to חייב להיות אחרי date_from.")
-    if (date_to - date_from).days > MAX_AVAILABILITY_RANGE_DAYS:
+    # +1 כי שני הקצוות נכללים: 01/10→31/10 הוא חודש של 31 ימים, לא 30.
+    # בלי זה התקרה מתירה בפועל יום אחד יותר ממה ששמה מבטיח.
+    requested_days = (date_to - date_from).days + 1
+    if requested_days > MAX_AVAILABILITY_RANGE_DAYS:
         raise ValidationError(
             f"ניתן לבקש זמינות לטווח של עד {MAX_AVAILABILITY_RANGE_DAYS} ימים."
         )

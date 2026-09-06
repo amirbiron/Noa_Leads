@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import {
   AlertCircle,
@@ -199,12 +199,21 @@ export default function BookingPage() {
       .finally(() => setLoading(false));
   }, [token]);
 
-  // טעינת חודש בודד. אין race guard מסוג "הבקשה האחרונה מנצחת" כמו
-  // בגרסה הקודמת, כי כאן כל תגובה נכתבת למפתח החודש שלה — שתי בקשות
-  // מקבילות לחודשים שונים לא יכולות לדרוס זו את זו.
+  // מונה בקשות פר-חודש — "הבקשה האחרונה מנצחת". חודשים *שונים* לא
+  // יכולים לדרוס זה את זה (כל תגובה נכתבת למפתח שלה), אבל שתי בקשות
+  // לאותו חודש כן: לחיצה כפולה על "נסי שוב" ברשת חלשה יכולה להחזיר
+  // קודם את ההצלחה ואז את הכישלון הישן, והלקוח היה רואה שגיאה על חודש
+  // שנטען בסדר. תגובה שאינה של הבקשה האחרונה נזרקת בשקט.
+  const monthRequestIdRef = useRef<Record<string, number>>({});
+
+  // טעינת חודש בודד.
   const fetchMonth = useMemo(
     () => async (month: BookingMonth) => {
       if (!token) return;
+      const requestId = (monthRequestIdRef.current[month.key] ?? 0) + 1;
+      monthRequestIdRef.current[month.key] = requestId;
+      const isStale = () => monthRequestIdRef.current[month.key] !== requestId;
+
       setMonthLoading((prev) => ({ ...prev, [month.key]: true }));
       setMonthError((prev) => ({ ...prev, [month.key]: null }));
       try {
@@ -213,8 +222,10 @@ export default function BookingPage() {
           month.from,
           month.to,
         );
+        if (isStale()) return;
         setMonthAvailability((prev) => ({ ...prev, [month.key]: result }));
       } catch (err) {
+        if (isStale()) return;
         setMonthAvailability((prev) => {
           const next = { ...prev };
           delete next[month.key];
@@ -225,7 +236,11 @@ export default function BookingPage() {
           [month.key]: err instanceof ApiError ? err.message : "שגיאה בטעינת זמינות",
         }));
       } finally {
-        setMonthLoading((prev) => ({ ...prev, [month.key]: false }));
+        // רק הבקשה הפעילה מכבה את מצב הטעינה; בקשה stale מותירה אותו
+        // דולק עבור הבקשה שעדיין רצה.
+        if (!isStale()) {
+          setMonthLoading((prev) => ({ ...prev, [month.key]: false }));
+        }
       }
     },
     [token],

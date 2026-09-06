@@ -74,10 +74,12 @@ def test_range_cap_covers_a_full_calendar_month():
 
     זו מגבלה *נפרדת* מהאופק: היא מגנה על FreeBusy, לא מגדירה עד מתי
     אפשר לקבוע. ה-frontend שולף חודש בכל קריאה, אז היא חייבת לכסות
-    את החודש הארוך ביותר.
+    את החודש הארוך ביותר — כשהוא נספר inclusive, כפי שהשאילתה מחזירה
+    אותו (01/10→31/10 = 31 ימים, לא 30).
     """
-    longest_month_span = (date(2026, 10, 31) - date(2026, 10, 1)).days
-    assert MAX_AVAILABILITY_RANGE_DAYS >= longest_month_span
+    longest_month_days = (date(2026, 10, 31) - date(2026, 10, 1)).days + 1
+    assert longest_month_days == 31
+    assert MAX_AVAILABILITY_RANGE_DAYS >= longest_month_days
 
 
 # ===================== אכיפה בשני ה-endpoints =====================
@@ -86,9 +88,14 @@ def test_range_cap_covers_a_full_calendar_month():
 
 async def _mk_lead_with_token(db):
     """ליד מינימלי עם booking_token (server_default מייצר אותו ב-flush)."""
+    from app.constants import LeadStatus
     from app.models.lead import Lead
 
-    lead = Lead(full_name="בדיקת אופק", source_channel="manual", status="NEW")
+    lead = Lead(
+        full_name="בדיקת אופק",
+        source_channel="manual",
+        status=LeadStatus.NEW.value,
+    )
     db.add(lead)
     await db.flush()
     await db.refresh(lead)
@@ -173,3 +180,31 @@ async def test_page_info_exposes_the_bounds_for_the_ui(db):
     assert (info.booking_horizon_end.year - info.today.year) * 12 + (
         info.booking_horizon_end.month - info.today.month
     ) == 1
+
+
+async def test_availability_range_cap_counts_both_endpoints(db):
+    """טווח של MAX+1 *תאריכים* נדחה, גם כשההפרש בימים הוא בדיוק MAX.
+
+    הבדיקה נועלת את הספירה ה-inclusive: בלעדיה הגבול היה מתיר יום אחד
+    יותר ממה ששם הקבוע מבטיח, וההגנה על FreeBusy הייתה חלשה מהמתועד.
+    """
+    from app.core.exceptions import ValidationError
+    from app.services import booking as booking_service
+
+    lead = await _mk_lead_with_token(db)
+    # מעגנים את הטווח בסוף האופק כדי שהדחייה תגיע מתקרת הטווח ולא ממנו.
+    horizon = booking_service.booking_horizon_end()
+    too_wide_from = horizon - timedelta(
+        days=booking_service.MAX_AVAILABILITY_RANGE_DAYS
+    )
+
+    with pytest.raises(ValidationError):
+        await booking_service.get_availability(
+            db, lead.booking_token, too_wide_from, horizon
+        )
+
+    # יום אחד פחות — בדיוק MAX תאריכים — עובר.
+    days, _ = await booking_service.get_availability(
+        db, lead.booking_token, too_wide_from + timedelta(days=1), horizon
+    )
+    assert len(days) == booking_service.MAX_AVAILABILITY_RANGE_DAYS
