@@ -152,6 +152,10 @@ export interface BookingPageInfo {
   active_booking_at: string | null;
   active_booking_end: string | null;
   active_booking_status: string | null;
+  // גבולות בחירת התאריך — YYYY-MM-DD בשעון ישראל, מחושבים בשרת.
+  // `booking_horizon_end` = היום האחרון שאפשר לקבוע בו (סוף החודש הבא).
+  today: string;
+  booking_horizon_end: string;
 }
 
 export interface TimeSlot {
