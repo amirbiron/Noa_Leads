@@ -22,6 +22,12 @@ class BookingPageInfo(BaseModel):
     active_booking_at: datetime | None = None
     active_booking_end: datetime | None = None
     active_booking_status: str | None = None
+    # גבולות בחירת התאריך, מחושבים בשרת לפי שעון ישראל. ה-UI בונה מהם
+    # את הגריד במקום לגזור "היום" ו"סוף החודש הבא" משעון המכשיר — מכשיר
+    # שמוגדר לטוקיו או עם תאריך שגוי היה מייצר גריד שלא תואם למה שהשרת
+    # מוכן לקבל, והלקוח היה נתקל בשגיאה רק אחרי שבחר מועד.
+    today: date
+    booking_horizon_end: date
 
 
 class TimeSlot(BaseModel):

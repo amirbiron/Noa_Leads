@@ -2,7 +2,14 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
-import { AlertCircle, Calendar, CheckCircle2, Clock, Info } from "lucide-react";
+import {
+  AlertCircle,
+  Calendar,
+  CheckCircle2,
+  ChevronDown,
+  Clock,
+  Info,
+} from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import { toIsraelISODate } from "@/lib/date";
 import { labelCategory, labelSubtype, pluralizeMinutes } from "@/lib/hebrew";
@@ -17,13 +24,51 @@ import { cn } from "@/lib/utils";
 // לו ב-WhatsApp/מייל. הtoken בURL הוא ה-credential היחיד.
 
 const ISRAEL_TZ = "Asia/Jerusalem";
-const DAYS_TO_SHOW = 14;
 
 // formatDate היה wrapper מקומי; הוחלף ב-toIsraelISODate המשותף ב-
 // `lib/date.ts`. הוא משתמש באותו `en-CA` עם options מפורשות (year/
 // month/day) — כך שהפלט יציב לפורמט YYYY-MM-DD בכל הדפדפנים, ללא
 // חשש מ-CLDR defaults שעלולים להחזיר M/d/yyyy.
 const formatDate = toIsraelISODate;
+
+// ===== עזרי תאריך לגריד החודשי =====
+// כל יום נבנה כ-12:00 UTC. בישראל (UTC+2/+3) זה תמיד אותו תאריך קלנדרי,
+// כך שהגריד זהה לחישוב של השרת גם כשהמכשיר מוגדר לאזור זמן אחר. בניית
+// `new Date()` מקומי הייתה יכולה להזיז את היום הראשון ביום שלם.
+function dateAtNoonUTC(year: number, month: number, day: number): Date {
+  return new Date(Date.UTC(year, month - 1, day, 12));
+}
+
+function parseISODate(iso: string): { year: number; month: number; day: number } {
+  const [year, month, day] = iso.split("-").map(Number);
+  return { year, month, day };
+}
+
+// יום 0 של החודש הבא = היום האחרון של החודש המבוקש.
+function daysInMonth(year: number, month: number): number {
+  return new Date(Date.UTC(year, month, 0)).getUTCDate();
+}
+
+function monthLabel(year: number, month: number): string {
+  return dateAtNoonUTC(year, month, 1).toLocaleDateString("he-IL", {
+    month: "long",
+    timeZone: ISRAEL_TZ,
+  });
+}
+
+function monthKeyOf(iso: string): string {
+  const { year, month } = parseISODate(iso);
+  return `${year}-${month}`;
+}
+
+// חודש בחירה אחד בגריד: התוויות שלו והטווח לשליפה מהשרת.
+type BookingMonth = {
+  key: string;
+  label: string;
+  dates: Date[];
+  from: string;
+  to: string;
+};
 
 function shortDayName(d: Date): string {
   return d.toLocaleDateString("he-IL", {
@@ -66,49 +111,74 @@ export default function BookingPage() {
   const token = params.token;
 
   const [info, setInfo] = useState<BookingPageInfo | null>(null);
-  const [availability, setAvailability] = useState<AvailabilityResponse | null>(
-    null,
-  );
   const [loading, setLoading] = useState(true);
-  const [loadingSlots, setLoadingSlots] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // מצב שגיאה נפרד לטעינת זמינות. חיוני להבחין בין "אין סלוטים פנויים"
-  // (יום עמוס לגיטימי) לבין "ה-fetch נכשל" (רשת/שרת/גוגל). אחרת הליד
-  // רואה "אין סלוטים" ומניח שאין מועדים כלל ב-14 הימים.
-  const [availabilityError, setAvailabilityError] = useState<string | null>(null);
 
-  // טווח ימים זמין ל"בחירה מהירה" — מהיום ועד DAYS_TO_SHOW. תאריכים
-  // מעבר לטווח נבחרים דרך ה-`<input type="date">` (customDateAvailability).
-  const allDates = useMemo(() => {
-    const today = new Date();
-    const arr: Date[] = [];
-    for (let i = 0; i < DAYS_TO_SHOW; i++) {
-      const d = new Date(today);
-      d.setDate(today.getDate() + i);
-      arr.push(d);
+  // זמינות נשמרת פר-חודש. שגיאה וטעינה גם הן פר-חודש: כישלון בטעינת
+  // החודש הבא לא צריך למחוק את החודש הנוכחי שכבר נטען בהצלחה.
+  //
+  // ההפרדה בין "אין סלוטים פנויים" (יום עמוס לגיטימי) לבין "ה-fetch נכשל"
+  // נשמרת — אחרת הלקוח רואה "אין סלוטים" ומסיק שאין מועדים כלל בחודש.
+  const [monthAvailability, setMonthAvailability] = useState<
+    Record<string, AvailabilityResponse>
+  >({});
+  const [monthLoading, setMonthLoading] = useState<Record<string, boolean>>({});
+  const [monthError, setMonthError] = useState<Record<string, string | null>>({});
+  // כמה חודשים פתוחים בגריד. מתחילים בחודש הנוכחי בלבד; הכפתור פותח
+  // את החודש הבא, שהוא גם הסוף — אין חודש שלישי.
+  const [openMonthCount, setOpenMonthCount] = useState(1);
+
+  // חודשי הבחירה נגזרים מ-`info.today` ומ-`info.booking_horizon_end` —
+  // שני ערכים שהשרת חישב בשעון ישראל. כך הגריד מתאר בדיוק את מה שהשרת
+  // מוכן לקבל, ולא את מה ששעון המכשיר מנחש. הלולאה על החודשים כללית
+  // בכוונה: אם האופק בשרת ישתנה אי-פעם, ה-UI יעקוב בלי שינוי קוד.
+  const months = useMemo<BookingMonth[]>(() => {
+    if (!info) return [];
+    const today = parseISODate(info.today);
+    const horizon = parseISODate(info.booking_horizon_end);
+    const result: BookingMonth[] = [];
+    let year = today.year;
+    let month = today.month;
+    while (year < horizon.year || (year === horizon.year && month <= horizon.month)) {
+      const isFirstMonth = year === today.year && month === today.month;
+      const isLastMonth = year === horizon.year && month === horizon.month;
+      const fromDay = isFirstMonth ? today.day : 1;
+      const toDay = isLastMonth ? horizon.day : daysInMonth(year, month);
+      const dates: Date[] = [];
+      for (let day = fromDay; day <= toDay; day++) {
+        dates.push(dateAtNoonUTC(year, month, day));
+      }
+      if (dates.length > 0) {
+        result.push({
+          key: `${year}-${month}`,
+          label: monthLabel(year, month),
+          dates,
+          from: formatDate(dates[0]),
+          to: formatDate(dates[dates.length - 1]),
+        });
+      }
+      month += 1;
+      if (month > 12) {
+        month = 1;
+        year += 1;
+      }
     }
-    return arr;
-  }, []);
+    return result;
+  }, [info]);
 
-  const todayISO = useMemo(() => formatDate(new Date()), []);
+  const visibleMonths = useMemo(
+    () => months.slice(0, openMonthCount),
+    [months, openMonthCount],
+  );
+  const nextMonth = months[openMonthCount] ?? null;
+  // היום האחרון שאפשר לקבוע בו — לתווית "אפשר לקבוע פגישה עד X".
+  const lastBookableDate = useMemo(() => {
+    if (!info) return null;
+    const { year, month, day } = parseISODate(info.booking_horizon_end);
+    return dateAtNoonUTC(year, month, day);
+  }, [info]);
 
-  const [selectedDate, setSelectedDate] = useState<string>(formatDate(new Date()));
-  // availability לתאריך יחיד מחוץ ל-grid. נטען לפי דרישה כש-input
-  // type="date" בוחר תאריך > today+13. נפרד מ-availability הראשי
-  // (שמכסה רק את 14 הימים) — backend מוגבל ל-14 ימים פר call.
-  const [customDateAvailability, setCustomDateAvailability] = useState<{
-    date: string;
-    slots: TimeSlot[];
-  } | null>(null);
-  const [loadingCustomDate, setLoadingCustomDate] = useState(false);
-  const [customDateError, setCustomDateError] = useState<string | null>(null);
-  // ref ל-"הבקשה האחרונה" של תאריך מותאם — מונע race של תגובות
-  // לא-בסדר. אם המשתמש בוחר A ואז במהירות B, התגובה של A יכולה
-  // להגיע אחרי B; בלי ה-ref היא הייתה דורסת את ה-state עם slots
-  // לתאריך הלא נכון. הערך מעודכן ב-fetchCustomDateAvailability לפני
-  // ה-await, ומתאופס ל-null בקליק על תאריך ב-grid (לסגור fetch in-
-  // flight של תאריך מותאם).
-  const lastCustomFetchRef = useRef<string | null>(null);
+  const [selectedDate, setSelectedDate] = useState<string>("");
   const [selectedSlot, setSelectedSlot] = useState<TimeSlot | null>(null);
   const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -129,105 +199,99 @@ export default function BookingPage() {
       .finally(() => setLoading(false));
   }, [token]);
 
-  const fetchAvailability = useMemo(
-    () => async () => {
-      if (!token || !info || info.has_active_booking) return;
-      setLoadingSlots(true);
-      setAvailabilityError(null);
-      const first = allDates[0];
-      const last = allDates[allDates.length - 1];
+  // מונה בקשות פר-חודש — "הבקשה האחרונה מנצחת". חודשים *שונים* לא
+  // יכולים לדרוס זה את זה (כל תגובה נכתבת למפתח שלה), אבל שתי בקשות
+  // לאותו חודש כן: לחיצה כפולה על "נסי שוב" ברשת חלשה יכולה להחזיר
+  // קודם את ההצלחה ואז את הכישלון הישן, והלקוח היה רואה שגיאה על חודש
+  // שנטען בסדר. תגובה שאינה של הבקשה האחרונה נזרקת בשקט.
+  const monthRequestIdRef = useRef<Record<string, number>>({});
+
+  // טעינת חודש בודד.
+  const fetchMonth = useMemo(
+    () => async (month: BookingMonth) => {
+      if (!token) return;
+      const requestId = (monthRequestIdRef.current[month.key] ?? 0) + 1;
+      monthRequestIdRef.current[month.key] = requestId;
+      const isStale = () => monthRequestIdRef.current[month.key] !== requestId;
+
+      setMonthLoading((prev) => ({ ...prev, [month.key]: true }));
+      setMonthError((prev) => ({ ...prev, [month.key]: null }));
       try {
         const result = await api.getBookingAvailability(
           token,
-          formatDate(first),
-          formatDate(last),
+          month.from,
+          month.to,
         );
-        setAvailability(result);
+        if (isStale()) return;
+        setMonthAvailability((prev) => ({ ...prev, [month.key]: result }));
       } catch (err) {
-        setAvailability(null);
-        setAvailabilityError(
-          err instanceof ApiError ? err.message : "שגיאה בטעינת זמינות",
-        );
+        if (isStale()) return;
+        setMonthAvailability((prev) => {
+          const next = { ...prev };
+          delete next[month.key];
+          return next;
+        });
+        setMonthError((prev) => ({
+          ...prev,
+          [month.key]: err instanceof ApiError ? err.message : "שגיאה בטעינת זמינות",
+        }));
       } finally {
-        setLoadingSlots(false);
-      }
-    },
-    [token, info, allDates],
-  );
-
-  useEffect(() => {
-    void fetchAvailability();
-  }, [fetchAvailability]);
-
-  // בודק אם תאריך ב-grid 14 הימים (משתמש ב-availability הראשי) או
-  // מחוצה לו (משתמש ב-customDateAvailability שנטען בנפרד).
-  const isDateInGrid = useMemo(() => {
-    const inGrid = new Set(allDates.map((d) => formatDate(d)));
-    return (date: string) => inGrid.has(date);
-  }, [allDates]);
-
-  const slotsForSelectedDate = useMemo(() => {
-    // תאריך מותאם (מחוץ ל-grid) — slots מ-customDateAvailability.
-    if (customDateAvailability?.date === selectedDate) {
-      return customDateAvailability.slots;
-    }
-    if (!availability) return [];
-    const day = availability.days.find((d) => d.date === selectedDate);
-    return day?.slots ?? [];
-  }, [availability, customDateAvailability, selectedDate]);
-
-  // בחירת תאריך מ-input type="date". אם בתוך ה-grid — פשוט מסונכרן.
-  // אם מחוצה לו — fetch נפרד לתאריך יחיד (יעיל; backend מוגבל ל-14
-  // ימים פר call, אז יום בודד = 1 day-range).
-  //
-  // race guard: לפני ה-await מסמנים `lastCustomFetchRef.current = date`.
-  // אחרי ה-await בודקים שהערך עוד שווה לתאריך הזה. אם לא — בקשה
-  // מאוחרת יותר (תאריך אחר / קליק על grid) רצה במקביל, והתגובה
-  // הנוכחית stale → דורסים אותה בשקט. ה-`finally` מנקה loading רק
-  // אם זו עדיין הבקשה הפעילה — אחרת הוא ינוקה ע"י הבקשה המאוחרת.
-  const fetchCustomDateAvailability = useMemo(
-    () => async (date: string) => {
-      if (!token) return;
-      lastCustomFetchRef.current = date;
-      setLoadingCustomDate(true);
-      setCustomDateError(null);
-      try {
-        const result = await api.getBookingAvailability(token, date, date);
-        if (lastCustomFetchRef.current !== date) return; // stale
-        const day = result.days.find((d) => d.date === date);
-        setCustomDateAvailability({ date, slots: day?.slots ?? [] });
-      } catch (err) {
-        if (lastCustomFetchRef.current !== date) return; // stale
-        setCustomDateError(
-          err instanceof ApiError ? err.message : "שגיאה בטעינת זמינות",
-        );
-        setCustomDateAvailability({ date, slots: [] });
-      } finally {
-        // רק הבקשה הפעילה מנקה loading; בקשה stale מתעלמת.
-        if (lastCustomFetchRef.current === date) {
-          setLoadingCustomDate(false);
+        // רק הבקשה הפעילה מכבה את מצב הטעינה; בקשה stale מותירה אותו
+        // דולק עבור הבקשה שעדיין רצה.
+        if (!isStale()) {
+          setMonthLoading((prev) => ({ ...prev, [month.key]: false }));
         }
       }
     },
     [token],
   );
 
-  function handleCustomDateChange(value: string) {
-    if (!value) return;
-    setSelectedDate(value);
-    setSelectedSlot(null);
-    if (isDateInGrid(value)) {
-      // התאריך בטווח ה-grid — ה-availability הראשי כבר מכיל אותו.
-      // מנקים את ה-custom כדי שלא ידרוס. ה-ref מסומן null כדי לבטל
-      // fetch תלוי-תאריך-קודם שעוד in-flight.
-      lastCustomFetchRef.current = null;
-      setCustomDateAvailability(null);
-      setCustomDateError(null);
-      setLoadingCustomDate(false);
-    } else {
-      void fetchCustomDateAvailability(value);
+  // טעינה ראשונית: החודש הנוכחי בלבד. החודש הבא נטען רק אם הלקוח
+  // פותח אותו — רוב הלקוחות קובעים בחודש הקרוב, ואין טעם בקריאה
+  // שנייה ל-FreeBusy בכל כניסה לדף.
+  useEffect(() => {
+    if (!info || info.has_active_booking) return;
+    const first = months[0];
+    if (!first) return;
+    setSelectedDate((prev) => prev || info.today);
+    void fetchMonth(first);
+  }, [info, months, fetchMonth]);
+
+  function showNextMonth() {
+    if (!nextMonth) return;
+    setOpenMonthCount((count) => count + 1);
+    if (!monthAvailability[nextMonth.key] && !monthLoading[nextMonth.key]) {
+      void fetchMonth(nextMonth);
     }
   }
+
+  // חיפוש יום בכל החודשים שנטענו — התאריך הנבחר יכול להיות בכל אחד מהם.
+  const dayLookup = useMemo(() => {
+    const map = new Map<string, TimeSlot[]>();
+    for (const response of Object.values(monthAvailability)) {
+      for (const day of response.days) {
+        map.set(day.date, day.slots);
+      }
+    }
+    return map;
+  }, [monthAvailability]);
+
+  const slotsForSelectedDate = useMemo(
+    () => dayLookup.get(selectedDate) ?? [],
+    [dayLookup, selectedDate],
+  );
+
+  // מצב הטעינה/שגיאה של החודש שאליו שייך התאריך הנבחר.
+  const selectedMonthKey = selectedDate ? monthKeyOf(selectedDate) : "";
+  const selectedMonthLoading = !!monthLoading[selectedMonthKey];
+  const selectedMonthError = monthError[selectedMonthKey] ?? null;
+  const selectedMonth = months.find((m) => m.key === selectedMonthKey) ?? null;
+
+  // ההערה על סנכרון היומן מגיעה מכל חודש שנטען — הדגל זהה לכולם.
+  const includesGoogleBusy = useMemo(() => {
+    const loaded = Object.values(monthAvailability);
+    return loaded.length === 0 || loaded.every((r) => r.includes_google_busy);
+  }, [monthAvailability]);
 
   async function submit() {
     if (!selectedSlot) return;
@@ -336,7 +400,7 @@ export default function BookingPage() {
       </header>
 
       <main className="max-w-2xl mx-auto p-4 space-y-5">
-        {availability && !availability.includes_google_busy && (
+        {!includesGoogleBusy && (
           <div className="text-xs text-state-orange bg-state-orange/10 rounded-lg px-3 py-2 flex items-start gap-2">
             <Info size={14} className="mt-0.5 shrink-0" aria-hidden />
             סנכרון יומן זמני לא פעיל. ייתכן שחלק מהסלוטים יתבררו כתפוסים
@@ -349,63 +413,79 @@ export default function BookingPage() {
           <div className="text-sm font-semibold text-gray-700 mb-2">
             בחרי יום
           </div>
-          {/* בחירה מהירה: 14 הימים הקרובים. */}
-          <div className="grid grid-cols-7 gap-1.5">
-            {allDates.map((d) => {
-              const key = formatDate(d);
-              const dayData = availability?.days.find((x) => x.date === key);
-              const hasSlots = (dayData?.slots.length ?? 0) > 0;
-              const isSelected = selectedDate === key;
-              return (
-                <button
-                  key={key}
-                  onClick={() => {
-                    setSelectedDate(key);
-                    setSelectedSlot(null);
-                    // יוצאים ממצב "תאריך מותאם" אם הקליק חוזר ל-grid.
-                    // ה-ref מסומן null כדי לבטל fetch in-flight של
-                    // תאריך מותאם — תגובתו תזוהה כ-stale ותידחה.
-                    lastCustomFetchRef.current = null;
-                    setCustomDateAvailability(null);
-                    setCustomDateError(null);
-                    setLoadingCustomDate(false);
-                  }}
-                  // כשיש שגיאת fetch — לא מכבים את הכפתורים, אחרת כל
-                  // השבועיים נראים אפורים כאילו אין זמינות אמיתית.
-                  disabled={
-                    !hasSlots && !loadingSlots && !availabilityError
-                  }
-                  className={cn(
-                    "flex flex-col items-center py-2 rounded-lg text-xs border",
-                    isSelected
-                      ? "bg-gray-900 text-white border-gray-900"
-                      : hasSlots || availabilityError
-                      ? "bg-white border-gray-200 text-gray-700"
-                      : "bg-gray-50 border-gray-100 text-gray-300",
-                  )}
-                >
-                  <span>{shortDayName(d)}</span>
-                  <span className="font-semibold mt-0.5">{shortDate(d)}</span>
-                </button>
-              );
-            })}
-          </div>
 
-          {/* תאריך חופשי מעבר ל-14 הימים. ה-input משתמש ב-native
-              date picker של הדפדפן/מערכת ההפעלה — תומך בכל תאריך עתידי.
-              min={todayISO} חוסם תאריכים בעבר. */}
-          <div className="mt-3">
-            <label className="block text-xs text-gray-600 mb-1.5">
-              או תאריך אחר:
-            </label>
-            <input
-              type="date"
-              min={todayISO}
-              value={!isDateInGrid(selectedDate) ? selectedDate : ""}
-              onChange={(e) => handleCustomDateChange(e.target.value)}
-              className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm focus:outline-none focus:border-gray-900"
-            />
-          </div>
+          {/* גריד לכל חודש פתוח. החודש הנוכחי מוצג מהיום ועד סופו;
+              החודש הבא נפתח בכפתור ומוצג במלואו. מעבר לזה אין — האופק
+              מגיע מהשרת (`booking_horizon_end`) ולא מחושב כאן. */}
+          {visibleMonths.map((month) => (
+            <div key={month.key} className="mb-3 last:mb-0">
+              {/* כותרת החודש מוצגת רק כששני החודשים פתוחים — בחודש
+                  יחיד היא רעש, כי אין ממה להבדיל. */}
+              {visibleMonths.length > 1 && (
+                <div className="text-xs font-medium text-gray-500 mb-1.5">
+                  {month.label}
+                </div>
+              )}
+              <div className="grid grid-cols-7 gap-1.5">
+                {month.dates.map((d, indexInMonth) => {
+                  const key = formatDate(d);
+                  // היום הראשון בכל חודש מוצב בעמודה של יום השבוע שלו,
+                  // כך שהגריד נקרא כלוח שנה: כל השבתות בעמודה אחת. שאר
+                  // הימים זורמים אחריו. ב-RTL עמודה 1 היא הימנית, ולכן
+                  // ראשון=1 ... שבת=7 מייצר בדיוק את הסדר העברי.
+                  // getUTCDay נכון כאן כי כל יום נבנה כ-12:00 UTC.
+                  const gridColumnStart =
+                    indexInMonth === 0 ? d.getUTCDay() + 1 : undefined;
+                  const slots = dayLookup.get(key);
+                  const hasSlots = (slots?.length ?? 0) > 0;
+                  const isSelected = selectedDate === key;
+                  const isLoading = !!monthLoading[month.key];
+                  const hasError = !!monthError[month.key];
+                  return (
+                    <button
+                      key={key}
+                      style={{ gridColumnStart }}
+                      onClick={() => {
+                        setSelectedDate(key);
+                        setSelectedSlot(null);
+                      }}
+                      // כשיש שגיאת fetch — לא מכבים את הכפתורים, אחרת כל
+                      // החודש נראה אפור כאילו אין זמינות אמיתית.
+                      disabled={!hasSlots && !isLoading && !hasError}
+                      className={cn(
+                        "flex flex-col items-center py-2 rounded-lg text-xs border",
+                        isSelected
+                          ? "bg-gray-900 text-white border-gray-900"
+                          : hasSlots || hasError
+                          ? "bg-white border-gray-200 text-gray-700"
+                          : "bg-gray-50 border-gray-100 text-gray-300",
+                      )}
+                    >
+                      <span>{shortDayName(d)}</span>
+                      <span className="font-semibold mt-0.5">{shortDate(d)}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+
+          {/* פתיחת החודש הבא — האפשרות היחידה להתקדם קדימה. אין בורר
+              תאריכים חופשי: הוא אפשר לבחור כל תאריך בכל שנה, והשרת ממילא
+              דוחה כל מועד מעבר לאופק. */}
+          {nextMonth ? (
+            <button
+              onClick={showNextMonth}
+              className="mt-1 w-full rounded-lg border border-gray-200 bg-white py-2.5 text-sm text-gray-700 flex items-center justify-center gap-1.5 active:bg-gray-50"
+            >
+              <ChevronDown size={14} aria-hidden />
+              הצגת {nextMonth.label}
+            </button>
+          ) : lastBookableDate ? (
+            <div className="mt-1 text-xs text-gray-500 text-center">
+              אפשר לקבוע פגישה עד {shortDate(lastBookableDate)}.
+            </div>
+          ) : null}
         </section>
 
         {/* סלוטים */}
@@ -413,32 +493,18 @@ export default function BookingPage() {
           <div className="text-sm font-semibold text-gray-700 mb-2">
             בחרי שעה
           </div>
-          {loadingSlots || loadingCustomDate ? (
+          {selectedMonthLoading ? (
             <div className="text-center text-gray-400 text-sm py-6">טוען…</div>
-          ) : customDateError ? (
-            // שגיאה ספציפית לתאריך מותאם — retry על אותו תאריך.
+          ) : selectedMonthError ? (
+            // שגיאה אמיתית בטעינת החודש — לא מציגים "אין סלוטים", כי זה
+            // מטעה: אולי היומן עמוס באמת ואולי הקריאה נכשלה. retry לאותו חודש.
             <div className="bg-white rounded-xl border border-state-red/30 px-4 py-5 flex flex-col items-center gap-3">
               <div className="flex items-start gap-2 text-state-red text-sm">
                 <AlertCircle size={16} className="mt-0.5 shrink-0" aria-hidden />
-                <span>{customDateError}</span>
+                <span>{selectedMonthError}</span>
               </div>
               <button
-                onClick={() => void fetchCustomDateAvailability(selectedDate)}
-                className="text-sm rounded-lg border border-gray-200 px-4 py-2 hover:bg-gray-50"
-              >
-                נסי שוב
-              </button>
-            </div>
-          ) : availabilityError && isDateInGrid(selectedDate) ? (
-            // שגיאה אמיתית בטעינת ה-grid — לא מציגים "אין סלוטים", כי זה
-            // מטעה: אולי היומן עמוס באמת ואולי הקריאה נכשלה. retry על ה-grid.
-            <div className="bg-white rounded-xl border border-state-red/30 px-4 py-5 flex flex-col items-center gap-3">
-              <div className="flex items-start gap-2 text-state-red text-sm">
-                <AlertCircle size={16} className="mt-0.5 shrink-0" aria-hidden />
-                <span>{availabilityError}</span>
-              </div>
-              <button
-                onClick={() => void fetchAvailability()}
+                onClick={() => selectedMonth && void fetchMonth(selectedMonth)}
                 className="text-sm rounded-lg border border-gray-200 px-4 py-2 hover:bg-gray-50"
               >
                 נסי שוב
