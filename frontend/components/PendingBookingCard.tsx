@@ -53,7 +53,7 @@ export function PendingBookingCard({
   }
 
   async function handleReject() {
-    if (!confirm("לדחות את בקשת התור? הליד יחזור לסטטוס 'בטיפול'.")) return;
+    if (!confirm("לדחות את בקשת הפגישה? הליד יחזור לסטטוס 'בטיפול'.")) return;
     setError(null);
     setSubmitting("reject");
     try {
@@ -73,7 +73,7 @@ export function PendingBookingCard({
       <div className="flex items-start gap-2 mb-2">
         <Calendar size={18} className="text-state-orange mt-0.5" aria-hidden />
         <div className="text-sm font-semibold text-state-orange">
-          בקשת תור ממתינה לאישור
+          בקשת פגישה ממתינה לאישור
         </div>
       </div>
       <div className="text-sm text-gray-800 mb-3">

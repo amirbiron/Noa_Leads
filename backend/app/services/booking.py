@@ -19,7 +19,6 @@ import asyncio
 import logging
 from datetime import date, datetime, time, timedelta, timezone
 from uuid import UUID
-from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -53,6 +52,7 @@ from app.utils.work_hours import (
     is_holiday,
     is_holiday_eve,
     is_saturday,
+    to_israel_tz,
 )
 
 logger = logging.getLogger(__name__)
@@ -85,6 +85,50 @@ def default_duration_minutes(service_category: str) -> int:
     return _DEFAULT_BOOKING_DURATION_MIN.get(service_category, _FALLBACK_DURATION)
 
 
+# ===== אופק ההזמנה =====
+# הלקוח יכול לקבוע עד סוף החודש *הבא* (שעון ישראל), כלומר: החודש הנוכחי
+# פתוח כולו + חודש אחד קדימה. ב-30 בספטמבר עדיין אפשר ספטמבר ואוקטובר,
+# אבל לא נובמבר; ב-1 באוקטובר האופק מתגלגל ל-30 בנובמבר.
+#
+# למה החישוב הזה חי בשרת ולא רק ב-UI: הדף הציבורי שולח POST עם slot_start
+# שהלקוח בחר, ו-token ב-URL הוא ה-credential היחיד. הסתרת תאריכים בממשק
+# היא נוחות, לא אכיפה — בלי הבדיקה כאן אפשר לקבוע לנובמבר בקריאת API ישירה.
+#
+# תקרת הטווח פר-קריאה (31) מגינה מ-query כבד ל-Google FreeBusy. היא *לא*
+# האופק — היא רק אומרת כמה ימים אפשר לשלוף במכה אחת, ולכן מספיקה בדיוק
+# לחודש קלנדרי שלם. ה-frontend שולף חודש בכל קריאה.
+MAX_AVAILABILITY_RANGE_DAYS = 31
+
+
+def _first_of_month(d: date) -> date:
+    return d.replace(day=1)
+
+
+def _add_one_month(first_of_month: date) -> date:
+    """מקדם ב-חודש קלנדרי אחד מתוך היום הראשון בחודש (בלי תלות באורך החודש)."""
+    if first_of_month.month == 12:
+        return date(first_of_month.year + 1, 1, 1)
+    return date(first_of_month.year, first_of_month.month + 1, 1)
+
+
+def booking_horizon_end(now_utc: datetime | None = None) -> date:
+    """היום האחרון שאפשר לקבוע בו פגישה — סוף החודש הבא (שעון ישראל).
+
+    מחושב כ"תחילת החודש שאחרי הבא, מינוס יום", כדי לא להתעסק באורכי
+    חודשים ובשנים מעוברות.
+    """
+    now_utc = now_utc or datetime.now(timezone.utc)
+    today_israel = to_israel_tz(now_utc).date()
+    next_month = _add_one_month(_first_of_month(today_israel))
+    month_after_next = _add_one_month(next_month)
+    return month_after_next - timedelta(days=1)
+
+
+# הודעת החריגה — זהה בשני מקומות האכיפה (זמינות + יצירה), כדי שהלקוח
+# יראה את אותו הסבר בלי קשר לאיפה נעצר.
+_BEYOND_HORIZON_MESSAGE = "אפשר לקבוע פגישה עד סוף החודש הבא בלבד."
+
+
 # ===== Lead lookup by booking_token =====
 
 
@@ -102,7 +146,7 @@ async def get_lead_by_booking_token(db: AsyncSession, token: UUID) -> Lead:
     if lead is None:
         raise NotFoundError("הקישור לא תקף או שפג תוקפו.")
     if lead.status in CLOSED_LEAD_STATUSES:
-        raise ConflictError("הפנייה כבר טופלה. צרי קשר אם רוצה לקבוע תור חדש.")
+        raise ConflictError("הפנייה כבר טופלה. צרי קשר אם רוצה לקבוע פגישה חדשה.")
     return lead
 
 
@@ -221,7 +265,7 @@ async def _expire_stale_bookings(
                 lead_id=row.lead_id,
                 activity_type=ActivityType.MEETING_CANCELED,
                 performed_by=None,  # מערכת
-                content="תור עבר זמנו ובוטל אוטומטית ע\"י המערכת",
+                content="פגישה עברה זמנה ובוטלה אוטומטית ע\"י המערכת",
                 metadata={
                     "booking_id": str(row.id),
                     "source": "expire_stale_cron",
@@ -248,6 +292,11 @@ async def expire_all_stale_bookings(db: AsyncSession) -> int:
 async def get_booking_page_info(db: AsyncSession, token: UUID) -> BookingPageInfo:
     lead = await get_lead_by_booking_token(db, token)
     active = await _get_active_booking(db, lead.id)
+    # קריאת שעון *אחת* לשני השדות. שתי קריאות נפרדות שנופלות משני צדי
+    # חצות (שעון ישראל) היו מחזירות today מיום אחד ו-horizon מיום אחר —
+    # ביום האחרון של החודש זה מרווח של חודשיים במקום אחד, וה-UI היה בונה
+    # שלושה חודשי בחירה.
+    now_utc = datetime.now(timezone.utc)
     return BookingPageInfo(
         lead_name=lead.full_name,
         service_category=lead.service_category,
@@ -257,6 +306,8 @@ async def get_booking_page_info(db: AsyncSession, token: UUID) -> BookingPageInf
         active_booking_at=active.requested_slot_start if active else None,
         active_booking_end=active.requested_slot_end if active else None,
         active_booking_status=active.status if active else None,
+        today=to_israel_tz(now_utc).date(),
+        booking_horizon_end=booking_horizon_end(now_utc),
     )
 
 
@@ -271,12 +322,22 @@ async def get_availability(
 ) -> tuple[list[DayAvailability], bool]:
     """
     מחזיר זמינות בטווח [date_from, date_to] (שניהם inclusive).
-    מגביל ל-14 ימים מקסימום למניעת query מאסיבי מ-Google.
+
+    שתי מגבלות *נפרדות* על הטווח (אסור לבלבל ביניהן):
+    - MAX_AVAILABILITY_RANGE_DAYS — כמה ימים בקריאה אחת (הגנה על FreeBusy).
+    - booking_horizon_end() — עד מתי בכלל אפשר לקבוע (סוף החודש הבא).
     """
     if date_to < date_from:
         raise ValidationError("date_to חייב להיות אחרי date_from.")
-    if (date_to - date_from).days > 14:
-        raise ValidationError("ניתן לבקש זמינות לטווח של עד 14 ימים.")
+    # +1 כי שני הקצוות נכללים: 01/10→31/10 הוא חודש של 31 ימים, לא 30.
+    # בלי זה התקרה מתירה בפועל יום אחד יותר ממה ששמה מבטיח.
+    requested_days = (date_to - date_from).days + 1
+    if requested_days > MAX_AVAILABILITY_RANGE_DAYS:
+        raise ValidationError(
+            f"ניתן לבקש זמינות לטווח של עד {MAX_AVAILABILITY_RANGE_DAYS} ימים."
+        )
+    if date_to > booking_horizon_end():
+        raise ValidationError(_BEYOND_HORIZON_MESSAGE)
 
     lead = await get_lead_by_booking_token(db, token)
     duration = default_duration_minutes(lead.service_category)
@@ -486,6 +547,10 @@ async def create_booking_request(
         raise ValidationError("הסלוט שנבחר כבר עבר. רעני את הדף וכבחרי שוב.")
     if slot_end <= slot_start:
         raise ValidationError("נתוני זמן לא תקינים.")
+    # אופק ההזמנה — האכיפה האמיתית. ה-UI מסתיר תאריכים רחוקים, אבל
+    # ה-endpoint ציבורי וה-token הוא ה-credential היחיד.
+    if slot_start.astimezone(ISRAEL_TZ).date() > booking_horizon_end(now_utc):
+        raise ValidationError(_BEYOND_HORIZON_MESSAGE)
 
     # ולידציה מחמירה: הסלוט חייב להתאים לכללי הזמינות (שעות עבודה,
     # יום עבודה, אורך לפי קטגוריה, יישור ל-grid 30 דק'). אחרת קלינט
@@ -521,7 +586,7 @@ async def create_booking_request(
     existing = await _get_active_booking(db, lead.id)
     if existing is not None:
         raise ConflictError(
-            "כבר יש לך בקשת תור פעילה. צרי קשר אם רוצה להחליף מועד."
+            "כבר יש לך בקשת פגישה פעילה. צרי קשר אם רוצה להחליף מועד."
         )
 
     # בדיקה חוזרת מול busy ranges — מגן מ-race בין הצגת הסלוט לאישור.
@@ -550,7 +615,7 @@ async def create_booking_request(
         await db.rollback()
         # שתי האפשרויות הופכות לאותה הודעה ידידותית למשתמש
         raise ConflictError(
-            "הסלוט כבר תפוס או שיש לך כבר תור פעיל. בחרי מועד אחר."
+            "הסלוט כבר תפוס או שיש לך כבר פגישה פעילה. בחרי מועד אחר."
         ) from e
 
     # סטטוס הליד → BOOKING_PENDING + עדכון CRM fields. mirror של request_meeting
@@ -606,6 +671,15 @@ async def create_booking_request(
             "slot_end": slot_end.isoformat(),
         },
     )
+
+    # בקשת תור = touchpoint inbound (הלקוח חזר אלינו). סוגרת tasks תקועים
+    # — בעיקר warm_followup ("הלקוח לא חזר") שכבר לא רלוונטי. ה-bypass
+    # שתוקן: לפני כן ה-UPDATE לא סגר tasks, ו-warm_followup שרד אחרי שהלקוח
+    # קבע תור. booking לא pure-inbound (transition ל-BOOKING_PENDING), אז
+    # חולק רק את Layer 1 (close_touchpoint_tasks), לא register_inbound המלא.
+    from app.services.lead_actions import close_touchpoint_tasks
+
+    await close_touchpoint_tasks(db, lead.id, now_utc)
 
     # extract primitives לפני commit — אחרי commit ה-ORM attributes עלולים
     # להיות expired/lazy ולגרור MissingGreenlet ב-async session (כלל 5 ב-CLAUDE.md).
@@ -742,10 +816,10 @@ async def approve_booking(
             )
         ).first()
         if existing is None:
-            raise ConflictError("בקשת התור לא נמצאה.")
+            raise ConflictError("בקשת הפגישה לא נמצאה.")
         if existing.requested_slot_end <= now_utc:
             raise ConflictError(
-                "התור חלף ולא ניתן עוד לאשרו. בקשי מהליד לבחור מועד חדש."
+                "הפגישה חלפה ולא ניתן עוד לאשרה. בקשי מהליד לבחור מועד חדש."
             )
         raise ConflictError(
             "הבקשה כבר עברה לסטטוס אחר. רעני את הדף ונסי שוב."

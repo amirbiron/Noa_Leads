@@ -20,18 +20,6 @@
 1. **קודם מתכננים** – לפני כל מימוש, יש להציג תוכנית עבודה ברורה (עם הסברים בשפה פשוטה ומובנת לכל)
 2. **אחר כך מממשים** – המימוש מתחיל רק לאחר אישור התוכנית.
 
-## ⚠️ תזכורת זמנית: לבטל `auto` mode ב-Claude Code
-
-> **הוספה זמנית עד שאנתרופיק יתקנו את הבאג ב-auto mode.**
->
-> **לפני שליחת הצעת תכנון של plan mode (או מיד אחריה)** — חובה להזכיר למשתמש:
-> 1. **בצ'אט**: שורה בולטת קצרה, "תזכורת: לבטל את `auto` mode ב-Claude Code לפני אישור התוכנית". לא בתחתית של הודעה ארוכה.
-> 2. **בטלגרם** (אם הכלי `PushNotification` / MCP טלגרם מחובר): הודעה דחופה בכל פעם שעוברים plan mode.
->
-> **סיבה:** יש כרגע חשש לבאגים חמורים במצב `auto` — עלולים לגרום לפעולות לא צפויות, push חלקי, או דילוג על שלבי אימות.
->
-> **לא** לשלוח את התזכורת מחוץ למעבר plan mode (לא בכל הודעה רגילה).
-
 ## כלל חשוב: 
 
 אם נמצאו באגים כלשהם בריפו - תמיד נחפש פיתרונות שורשיים לבעיה, ולא פיתרונות "טלאי".
@@ -99,6 +87,19 @@
 
 ### כלל 15: Service functions עושים flush, לא commit — ה-route/caller הוא בעל הטרנזקציה
 > פונקציות service שמשנות DB לעולם לא קוראות ל-`await db.commit()`. עושות `await db.flush()` בלבד (או אפילו רק `execute` עבור UPDATE/INSERT שלא דורש re-read), וה-route (ב-API) או ה-job (ב-cron) הוא היחיד שעושה commit. זה: (1) הופך את גבול-הטרנזקציה לנקודה אחת ניתנת-לחיזוי; (2) מאפשר ל-rollback-based test fixture (`backend/tests/conftest.py`) לנקות נתונים בין בדיקות — commit אי-אפשר ל-rollback, ושורה שנותרת ב-DB גורמת ל-`UniqueViolationError` בהרצה הבאה; (3) מאפשר composition של מספר service calls באותו endpoint תחת טרנזקציה אחת. **דוגמה נכונה:** `_store_summary` ב-`backend/app/services/summaries.py` עושה flush; `jobs/weekly_summary.py` עושה commit. **דוגמה שגויה שתוקנה:** סבב ו' של `increment_inaccurate_count` עשה commit פנימי — 3 בדיקות נכשלו בגלל זיהום-בין-הרצות. **הערה:** בקוד הקיים יש services נוספים שעדיין עושים commit (`leads`, `intake`, `tasks`, `templates` וכו') — הם לא במצב שובר-בדיקות כעת, אבל ייושרו לדפוס בעת המגע הבא בהם.
+
+### כלל 16: עדכון מסמכי setup/deploy בכל הוספה רלוונטית לקוד
+> שני מסמכים מתחזקים את ידע ה-deploy עבור לקוח חדש, ושניהם **חייבים** להיות מסונכרנים עם הקוד. לפני commit שמוסיף משהו רלוונטי — עדכן אותם, אחרת deploy לכל לקוח חדש ישבר בשקט.
+>
+> **`docs/ENV-VARS-REFERENCE.md`** — reference מלא של כל ה-env vars (חובה + אופציונליים). **חובה לעדכן** בכל הוספה/הסרה/שינוי של env var, עם: שם, תיאור קצר למה הוא משמש, איפה משיגים את הערך (Anthropic console, Google Cloud Console, וכו'), ודוגמת ערך תקין. מסודר לפי קטגוריות (DB, Auth, AI models, integrations חיצוניות, וכו').
+>
+> **`docs/SETUP-CHECKLIST.md`** — checklist ממוקד **רק לפעולות ידניות** של מתאם המערכת ב-deploy ראשון (לא דברים אוטומטיים). **חובה לעדכן** כשמתווסף משהו שדורש פעולה ידנית: אינטגרציה חיצונית חדשה (Gmail OAuth, Telegram bot, ספק AI חדש), שינוי ב-Render config שלא נתפס ע"י `render.yaml` אוטומטית, צורך ב-initial data, סוג חדש של smoke test, וכו'. **אל תוסיף** דברים אוטומטיים (migrations רצות `alembic upgrade head` ב-`preDeployCommand`, cron jobs נטענים מ-render.yaml — לא ב-checklist).
+>
+> **טריגרים פרקטיים שדורשים עדכון:**
+> 1. הוספת env var → ENV-VARS-REFERENCE.md (תמיד) + SETUP-CHECKLIST.md (אם חובה).
+> 2. אינטגרציה חיצונית חדשה → SETUP-CHECKLIST.md (פעולות בצד הספק) + ENV-VARS-REFERENCE.md (env vars שלה).
+> 3. טבלה חדשה שדורשת seed → SETUP-CHECKLIST.md (סעיף "Initial Data").
+> 4. סוג חדש של webhook / OAuth callback → SETUP-CHECKLIST.md (callback URLs ב-Render).
 
 ---
 

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
+  Bell,
   ChevronLeft,
   Coins,
   FileText,
@@ -19,14 +20,6 @@ import { SectionHeader } from "@/components/SectionHeader";
 import { api, ApiError } from "@/lib/api";
 import { clearTokens } from "@/lib/auth";
 import type { User } from "@/lib/types";
-
-const FOLLOWUP_RULES = [
-  { label: "פולואפ הצעה תקועה", value: "אחרי 3 ימים ללא תגובה" },
-  { label: "סימון ליד רדום", value: "60 ימים ללא אינטראקציה" },
-  { label: "סוף יום עבודה", value: "שישי 16:00 — ערב חג גם" },
-  { label: "סיכום יומי לטלגרם", value: "כל יום 19:00" },
-  { label: "סיכום שבועי", value: "ראשון 08:00" },
-];
 
 const ROLE_LABEL: Record<string, string> = {
   owner: "בעלים",
@@ -104,6 +97,13 @@ export default function SettingsPage() {
             label="תעריפי שירות"
           />
         )}
+        {/* חוקי פולואף (§17.1) — תת-עמוד ייעודי (היה inline ומתפזר). owner
+            עורך, assistant readonly; ה-enforcement ב-backend. */}
+        <NavRow
+          href="/settings/followup-rules"
+          icon={<Bell size={18} />}
+          label="חוקי פולואף"
+        />
         <NavRow href="/proposals" icon={<Send size={18} className="rtl:-scale-x-100" />} label="הצעות פתוחות" />
       </ul>
 
@@ -130,24 +130,6 @@ export default function SettingsPage() {
           <AssistantSetupForm onCreated={loadUsers} />
         </>
       )}
-
-      {/* חוקי פולואפ */}
-      <SectionHeader
-        title="חוקי פולואפ"
-        hint="נקבע במערכת — עריכה תתווסף"
-      />
-      <ul className="bg-white rounded-xl border border-gray-200 divide-y divide-gray-100">
-        {FOLLOWUP_RULES.map((r) => (
-          <li
-            key={r.label}
-            className="flex items-baseline justify-between gap-3 px-3.5 py-2.5 text-sm"
-          >
-            <span className="text-gray-700">{r.label}</span>
-            <span className="text-gray-500 text-xs text-end">{r.value}</span>
-          </li>
-        ))}
-      </ul>
-
 
       {/* AI status — נכבה תמיד בפאזה 1 */}
       <SectionHeader title="פיצ'רים עתידיים" />

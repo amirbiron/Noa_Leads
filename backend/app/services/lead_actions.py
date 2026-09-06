@@ -12,7 +12,14 @@ from uuid import UUID
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.constants import OPEN_LEAD_STATUSES, LeadStatus, TaskStatus, TaskType
+from app.constants import (
+    OPEN_LEAD_STATUSES,
+    ActivityType,
+    LeadStatus,
+    TaskStatus,
+    TaskType,
+    WaitingOn,
+)
 from app.core.exceptions import (
     InvalidStateTransitionError,
     NotFoundError,
@@ -52,6 +59,22 @@ async def perform_action(
     """
     action = _resolve_action(action_type)
     now = datetime.now(timezone.utc)
+
+    # inbound על ליד קיים → chokepoint יחיד `register_inbound`. זה ה-action
+    # היחיד עם activity_type=INBOUND_MESSAGE_LOGGED (request_meeting הוא
+    # MEETING_REQUESTED — transition נפרד). ה-delegation מבטיח שה-UI הידני,
+    # booking, ו-webhooks עתידיים חולקים את אותה לוגיקת inbound — אי אפשר
+    # לרשום "חצי inbound". register_inbound flush-only; כאן עושים commit.
+    if action.activity_type == ActivityType.INBOUND_MESSAGE_LOGGED:
+        await register_inbound(
+            db,
+            lead_id,
+            content=content,
+            metadata=metadata,
+            performed_by=current_user_id,
+        )
+        await db.commit()
+        return await _get_lead(db, lead_id)
 
     # ===== הכנת UPDATE statement =====
     # שלב א': בונים values בלי updated_at — כדי לזהות פעולות "סטריליות"
@@ -290,27 +313,20 @@ AUTO_CLOSE_TASK_TYPES = (
 )
 
 
-async def _close_addressed_tasks(
-    db: AsyncSession,
-    *,
-    lead_id: UUID,
-    action: ActionDefinition,
-    now: datetime,
+async def close_touchpoint_tasks(
+    db: AsyncSession, lead_id: UUID, now: datetime
 ) -> None:
     """
-    סוגר אוטומטית פעולות פתוחות כשנועה ביצעה touchpoint על ליד.
+    ה-Layer המשותף של "touchpoint סגר tasks": סוגר כל task פתוח/דחוי
+    מ-`AUTO_CLOSE_TASK_TYPES` (כולל WARM_FOLLOWUP) + מסנכרן cache.
 
-    Trigger: action שמסומן set_last_outbound (נועה שלחה משהו) או
-    set_last_inbound (תיעוד תגובה מהלקוח). שני המקרים מסיימים את
-    הצורך ב-FIRST_RESPONSE / FOLLOWUP — הליד לא "תקוע".
+    chokepoint יחיד — נקרא מ-`_close_addressed_tasks` (perform_action),
+    מ-`register_inbound` (inbound chokepoint), ומ-`booking.create_booking_request`
+    (בקשת תור ציבורית). בלי המיקום היחיד הזה, כל מסלול touchpoint חדש
+    היה צריך לזכור לסגור tasks בעצמו — drift (Pattern 6, recurring-bug-patterns).
 
-    לפני התיקון: סימון "שלחתי הצעה" עדכן status ל-PROPOSAL_SENT אבל
-    השאיר את FIRST_RESPONSE פתוח, ונועה ראתה תזכורת תקועה לטיפול
-    בליד שכבר טיפלה בו.
+    flush-implied (execute בלבד) — ה-caller עושה commit (כלל 15).
     """
-    if not (action.set_last_outbound or action.set_last_inbound):
-        return
-
     from app.models.task import Task  # local import — מונע circular
     from app.services.tasks import sync_lead_next_action_cache
 
@@ -333,6 +349,125 @@ async def _close_addressed_tasks(
     await sync_lead_next_action_cache(db, lead_id)
 
 
+async def _close_addressed_tasks(
+    db: AsyncSession,
+    *,
+    lead_id: UUID,
+    action: ActionDefinition,
+    now: datetime,
+) -> None:
+    """
+    Wrapper דק סביב `close_touchpoint_tasks` — מסנן לפי דגלי ה-action.
+
+    Trigger: action שמסומן set_last_outbound (נועה שלחה משהו) או
+    set_last_inbound (תיעוד תגובה מהלקוח). שני המקרים מסיימים את
+    הצורך ב-FIRST_RESPONSE / FOLLOWUP — הליד לא "תקוע".
+
+    לפני התיקון: סימון "שלחתי הצעה" עדכן status ל-PROPOSAL_SENT אבל
+    השאיר את FIRST_RESPONSE פתוח, ונועה ראתה תזכורת תקועה לטיפול
+    בליד שכבר טיפלה בו.
+    """
+    if not (action.set_last_outbound or action.set_last_inbound):
+        return
+    await close_touchpoint_tasks(db, lead_id, now)
+
+
+async def register_inbound(
+    db: AsyncSession,
+    lead_id: UUID,
+    *,
+    content: str | None = None,
+    metadata: dict[str, Any] | None = None,
+    performed_by: UUID | None = None,
+) -> None:
+    """
+    Chokepoint יחיד ל-**inbound על ליד קיים** (קטגוריה A במיפוי).
+
+    כל ערוץ שמתעד "הלקוח חזר אלינו על ליד קיים" — UI ידני
+    (perform_action), בקשת תור, webhook עתידי — חייב לעבור כאן, כך שאי
+    אפשר לרשום "חצי inbound" שמדלג על חלק מה-side-effects. ראה
+    docs/recurring-bug-patterns.md Pattern 6.
+
+    side-effects (זהים ל-perform_action "log_inbound_message" הרפרנס):
+    - last_inbound_at = now
+    - reply_boost_until = now + REPLY_BOOST_HOURS (קופץ לראש הדשבורד)
+    - waiting_on = NOAH (הכדור חוזר לנועה)
+    - last_activity_type = "inbound_message"
+    - auto-progress NEW → IN_PROGRESS (אטומי)
+    - activity INBOUND_MESSAGE_LOGGED (+ status_changed אם התקדם)
+    - close_touchpoint_tasks (סוגר warm_followup וכו')
+
+    flush-only — ה-caller עושה commit (כלל 15). מאפשר composition
+    (booking, intake) תחת טרנזקציה אחת.
+
+    זורק InvalidStateTransitionError אם הליד סגור (אי אפשר לתעד inbound
+    על ליד WON/LOST/ARCHIVED), NotFoundError אם לא קיים.
+    """
+    now = datetime.now(timezone.utc)
+    inbound_values: dict[str, Any] = {
+        "last_inbound_at": now,
+        "reply_boost_until": now + timedelta(hours=REPLY_BOOST_HOURS),
+        "waiting_on": WaitingOn.NOAH.value,
+        "last_activity_type": "inbound_message",
+    }
+
+    # ניסיון 1 — auto-progress: אם הליד עוד NEW, מעבירים ל-IN_PROGRESS אטומית.
+    progressed = await db.execute(
+        update(Lead)
+        .where(Lead.id == lead_id, Lead.status == LeadStatus.NEW.value)
+        .values(
+            **inbound_values,
+            status=LeadStatus.IN_PROGRESS.value,
+            updated_at=func.now(),
+        )
+        .returning(Lead.id)
+    )
+    if progressed.scalar_one_or_none() is not None:
+        await log_activity(
+            db,
+            lead_id=lead_id,
+            activity_type=ActivityType.INBOUND_MESSAGE_LOGGED,
+            performed_by=performed_by,
+            content=content,
+            metadata=metadata,
+        )
+        # status_changed ל-timeline — עקבי עם _perform_with_optional_progress.
+        await log_activity(
+            db,
+            lead_id=lead_id,
+            activity_type="status_changed",
+            performed_by=performed_by,
+            metadata={"from": "NEW", "to": "IN_PROGRESS", "trigger": "auto_progress"},
+        )
+        await close_touchpoint_tasks(db, lead_id, now)
+        return
+
+    # ניסיון 2 — הליד כבר פתוח (לא NEW). UPDATE מוגבל לסטטוסים פתוחים.
+    open_statuses = [s.value for s in OPEN_LEAD_STATUSES]
+    updated = await db.execute(
+        update(Lead)
+        .where(Lead.id == lead_id, Lead.status.in_(open_statuses))
+        .values(**inbound_values, updated_at=func.now())
+        .returning(Lead.id)
+    )
+    if updated.scalar_one_or_none() is None:
+        # ליד לא קיים, או סגור — inbound על ליד סגור אינו חוקי.
+        await _ensure_lead_exists(db, lead_id)
+        raise InvalidStateTransitionError(
+            "לא ניתן לתעד הודעה נכנסת על ליד סגור."
+        )
+
+    await log_activity(
+        db,
+        lead_id=lead_id,
+        activity_type=ActivityType.INBOUND_MESSAGE_LOGGED,
+        performed_by=performed_by,
+        content=content,
+        metadata=metadata,
+    )
+    await close_touchpoint_tasks(db, lead_id, now)
+
+
 async def _create_followup_task_if_needed(
     db: AsyncSession,
     *,
@@ -343,7 +478,8 @@ async def _create_followup_task_if_needed(
     """
     יוצר task פולואפ אוטומטי אחרי פעולות מסוימות:
     - mark_proposal_sent (set_proposal_sent_at=True) → PROPOSAL_FOLLOWUP
-      עם grace של FOLLOWUP_GRACE_PROPOSAL_ORG (4 ימים, האפיון יב §484).
+      עם grace שנקרא live מ-FollowupRule (`proposal_followup`).
+      ברירת מחדל = FOLLOWUP_GRACE_PROPOSAL_ORG (4 ימים, §17.1).
 
     אינדמפוטנטי: אם כבר קיים PROPOSAL_FOLLOWUP פתוח לליד, מדלגים.
     """
@@ -352,6 +488,7 @@ async def _create_followup_task_if_needed(
 
     from app.constants import FOLLOWUP_GRACE_PROPOSAL_ORG
     from app.models.task import Task
+    from app.services.followup_rules import get_rule_interval_seconds
     from app.services.tasks import sync_lead_next_action_cache
 
     existing = await db.execute(
@@ -366,11 +503,16 @@ async def _create_followup_task_if_needed(
     if existing.scalar_one_or_none() is not None:
         return
 
+    interval_sec = await get_rule_interval_seconds(
+        db,
+        TaskType.PROPOSAL_FOLLOWUP.value,
+        default_seconds=int(FOLLOWUP_GRACE_PROPOSAL_ORG.total_seconds()),
+    )
     db.add(
         Task(
             lead_id=lead_id,
             type=TaskType.PROPOSAL_FOLLOWUP.value,
-            due_at=now + FOLLOWUP_GRACE_PROPOSAL_ORG,
+            due_at=now + timedelta(seconds=interval_sec),
             status=TaskStatus.OPEN.value,
             origin_rule="auto_proposal_followup",
         )

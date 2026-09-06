@@ -15,6 +15,7 @@ from app.api.routes import auth as auth_routes
 from app.api.routes import booking_page as booking_routes
 from app.api.routes import bookings as bookings_routes
 from app.api.routes import dashboard as dashboard_routes
+from app.api.routes import followup_rules as followup_rules_routes
 from app.api.routes import quick_action_chips as chips_routes
 from app.api.routes import google_calendar as google_routes
 from app.api.routes import gmail_webhook as gmail_webhook_routes
@@ -27,6 +28,7 @@ from app.api.routes import settings as settings_routes
 from app.api.routes import setup as setup_routes
 from app.api.routes import tasks as tasks_routes
 from app.api.routes import templates as templates_routes
+from app.api.routes import transcription as transcription_routes
 from app.api.routes import users as users_routes
 from app.config import get_settings
 from app.core.exceptions import AppException
@@ -36,7 +38,14 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # מקום עתידי ל-init של חיבורי DB / clients חיצוניים
+    # eager validation: encryption חייב להיות תקין לפני שנותנים traffic.
+    # אם SECRETS_ENCRYPTION_KEY חסר/invalid או APP_ENV != "development",
+    # זה זורק RuntimeError והservice לא יעלה. בלי זה, deploy "מצליח"
+    # ו-OAuth flow ראשון נופל שעות מאוחר יותר עם stack trace שקשה
+    # לקריאה. ראה: docs/recurring-bug-patterns.md Pattern 5 Variant 5c.
+    from app.utils.encryption import assert_encryption_ready
+
+    assert_encryption_ready()
     yield
 
 
@@ -169,6 +178,7 @@ def create_app() -> FastAPI:
     app.include_router(users_routes.router)
     app.include_router(programs_routes.router)
     app.include_router(settings_routes.router)
+    app.include_router(followup_rules_routes.router)
     app.include_router(setup_routes.router)
     app.include_router(chips_routes.router)
     app.include_router(google_routes.router)
@@ -177,6 +187,7 @@ def create_app() -> FastAPI:
     app.include_router(gmail_webhook_routes.router)
     app.include_router(booking_routes.router)
     app.include_router(bookings_routes.router)
+    app.include_router(transcription_routes.router)
     app.include_router(admin_routes.router)
 
     return app

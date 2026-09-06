@@ -16,7 +16,6 @@ from app.constants import (
     CLOSED_LEAD_STATUSES,
     OPEN_LEAD_STATUSES,
     ActivityType,
-    ClosureReason,
     LeadStatus,
 )
 from app.core.exceptions import (
@@ -47,6 +46,7 @@ async def create_lead(
     *,
     create_first_response_task: bool = True,
     commit: bool = True,
+    set_last_inbound: bool = False,
 ) -> Lead:
     """
     יוצרת ליד חדש + רישום ב-audit log + (כברירת מחדל) משימת first_response.
@@ -54,10 +54,17 @@ async def create_lead(
 
     commit=False — מאפשר לקוראים להוסיף activities נוספים לפני commit,
     כדי לשמור על אטומיות (ראה intake_after_hours_whatsapp).
+
+    set_last_inbound=True — לליד שנוצר *מ-inbound* של הלקוח (WhatsApp
+    after-hours, Gmail intake): קובע last_inbound_at=now ביצירה. בלי זה
+    silence-break detection ומיון הדשבורד מתבססים על NULL. *לא* סוגר
+    FIRST_RESPONSE — נועה עדיין צריכה לענות (זה קטגוריה B במיפוי, לא
+    register_inbound; ראה inbound chokepoint).
     """
     # אם לא צוין owner מפורש, מקצים לפי המשתמש שיצר
     owner_id = payload.owner_id or current_user_id
 
+    now = datetime.now(timezone.utc)
     lead = Lead(
         full_name=payload.full_name,
         phone=payload.phone,
@@ -80,9 +87,15 @@ async def create_lead(
         priority_level=str(payload.priority_level),
         owner_id=owner_id,
         personal_note=payload.personal_note,
+        # §7.2 — נמסר מ-NewLeadModal (expand section). cursor bugbot
+        # caught: בלי השורה הזו השדה אובד בשתיקה והליד נשמר תמיד עם
+        # default False של המודל.
+        is_returning_customer=payload.is_returning_customer,
         lead_message=payload.lead_message,
         status=LeadStatus.NEW.value,
         waiting_on="NOAH",
+        # ליד שנוצר מ-inbound — last_inbound_at=now. ברירת מחדל None.
+        last_inbound_at=now if set_last_inbound else None,
     )
     db.add(lead)
     await db.flush()  # כדי לקבל id
@@ -150,18 +163,31 @@ async def list_leads(
 ) -> tuple[list[Lead], int]:
     """מחזיר (items, total).
 
-    closed=True → רק לידים סגורים (WON/LOST/ARCHIVED) ממוינים לפי closed_at
-    יורד (תצוגת הארכיון). אחרת המיון הרגיל לפי updated_at יורד.
+    `closed`:
+    - **True** → רק לידים סגורים (WON/LOST/ARCHIVED), ממוינים לפי
+      `closed_at` יורד. תצוגת טאב הארכיון (§12.12).
+    - **None / False** → רק לידים **פתוחים**. לידים סגורים לעולם לא
+      מופיעים ברשימה הראשית (§12.12 — "סגורים בארכיון בלבד"). cursor
+      bugbot: הגרסה הישנה `if closed:` החזירה הכל כש-closed=None וגרמה
+      ל-WON/LOST/ARCHIVED להיחשף ב-/leads.
+
+    סינון לפי `status` מופעל בנפרד מעל ה-default — אם user שולח
+    `status=WON` ב-main list, התוצאה ריקה (closed תמיד נחסם).
     """
     from sqlalchemy import or_
 
     base = select(Lead)
     if status:
         base = base.where(Lead.status == status)
-    if closed:
+    if closed is True:
         # טאב הארכיון — שלושת הסטטוסים הסגורים יחד (status יחיד לא מספיק).
         base = base.where(
             Lead.status.in_([s.value for s in CLOSED_LEAD_STATUSES])
+        )
+    else:
+        # רשימה ראשית — closed=None ו-False כאחד מוציאים סגורים (§12.12).
+        base = base.where(
+            Lead.status.notin_([s.value for s in CLOSED_LEAD_STATUSES])
         )
     if waiting_on:
         base = base.where(Lead.waiting_on == waiting_on)
@@ -240,6 +266,12 @@ async def update_lead(
     for key, value in updates.items():
         setattr(lead, key, value)
 
+    # אם נועה בחרה service_category במפורש (אישור ההצעה או בחירה ידנית
+    # אחרת) — מנקים את ה-suggested. ה-banner ב-UI נעלם, ההחלטה סופית.
+    if "service_category" in updates and updates["service_category"] is not None:
+        lead.suggested_service_category = None
+        lead.suggested_service_subtype = None
+
     await log_activity(
         db,
         lead_id=lead.id,
@@ -251,6 +283,71 @@ async def update_lead(
     await db.commit()
     await db.refresh(lead)
     return lead
+
+
+# ===================== אישור הצעת AI לסיווג =====================
+
+async def approve_ai_classification(
+    db: AsyncSession, lead_id: UUID, current_user_id: UUID | None
+) -> Lead:
+    """מעתיק suggested_service_category/subtype → actual + מנקה suggested.
+
+    נקרא מ-POST /leads/{id}/approve-classification בעקבות לחיצה על "אישור"
+    ב-banner. אם אין הצעה ממתינה (suggested_service_category is None) —
+    raises ValidationError. אם service_category כבר מאוכלסת (נועה כבר
+    בחרה ידנית בעבר) — COALESCE שומר עליה, רק suggested מתנקה (idempotent).
+    """
+    # ולידציית קיום (404 vs 422). לא חלק מהאטומיות — אם הליד נמחק בין
+    # ה-SELECT ל-UPDATE, ה-UPDATE יחזיר rowcount=0 וניזרק ValidationError.
+    await get_lead_or_404(db, lead_id)
+
+    # אטומי (כלל 2): UPDATE עם WHERE suggested IS NOT NULL + rowcount.
+    # שני requests מקבילים — רק אחד יקבל rowcount=1; השני ייכשל ב-422,
+    # ולכן רק activity log אחד יירשם. COALESCE שומר על idempotency:
+    # אם service_category כבר מאוכלסת (נועה בחרה ידנית קודם) — היא
+    # נשמרת, רק ה-suggested מתנקה.
+    result = await db.execute(
+        update(Lead)
+        .where(
+            Lead.id == lead_id,
+            Lead.suggested_service_category.is_not(None),
+        )
+        .values(
+            # אם service_category ריקה — מעתיקים *את הזוג* (category +
+            # subtype) מההצעה. אם כבר מאוכלסת — שני השדות נשמרים. CASE
+            # ולא COALESCE כי subtype תלוי category: לוקחים subtype מההצעה
+            # רק אם גם category נלקחת ממנה (אחרת ייווצר זוג לא-עקבי כמו
+            # category=workshops + subtype=voice_development).
+            service_category=func.coalesce(
+                Lead.service_category, Lead.suggested_service_category
+            ),
+            service_subtype=case(
+                (Lead.service_category.is_(None), Lead.suggested_service_subtype),
+                else_=Lead.service_subtype,
+            ),
+            suggested_service_category=None,
+            suggested_service_subtype=None,
+        )
+    )
+    if result.rowcount == 0:
+        raise ValidationError("אין הצעת סיווג ממתינה לליד הזה.")
+
+    await log_activity(
+        db,
+        lead_id=lead_id,
+        activity_type=ActivityType.LEAD_UPDATED,
+        performed_by=current_user_id,
+        metadata={
+            "fields": ["service_category", "service_subtype"],
+            "ai_classification_approved": True,
+        },
+    )
+
+    # כלל 15: service עושה flush, route עושה commit. re-fetch דרך
+    # get_lead_or_404 — populate_existing מבטל את ה-identity-map cache
+    # שיכול היה להחזיק ערכים ישנים אחרי ה-Core update.
+    await db.flush()
+    return await get_lead_or_404(db, lead_id)
 
 
 # ===================== סגירה =====================

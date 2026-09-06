@@ -24,6 +24,9 @@ bcrypt>=4.1.0,<5.0
 # ===== HTTP & external APIs =====
 httpx==0.28.1
 anthropic==0.42.0
+# OpenAI — ספק AI שני, בלעדי לתמלול קולי (§13.3, gpt-4o-transcribe).
+# נפרד מ-anthropic — שני מפתחות, שני לוגי עלות.
+openai>=1.0
 
 # ===== Phase 3 Stage 16: ניקוי תוכן מייל לפני AI =====
 # beautifulsoup4 לפרסור HTML. lxml = parser מהיר; fallback ל-html.parser

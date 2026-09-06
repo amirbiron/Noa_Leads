@@ -3,7 +3,6 @@
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import {
-  ArrowRightLeft,
   CalendarPlus,
   FileText,
   Mail,
@@ -13,6 +12,7 @@ import {
   Phone,
   Plus,
   Send,
+  Sparkles,
   XCircle,
 } from "lucide-react";
 import { AddProgramModal } from "@/components/AddProgramModal";
@@ -22,15 +22,21 @@ import { useDashboardPollContext } from "@/components/DashboardPollProvider";
 import { DynamicActionButton } from "@/components/DynamicActionButton";
 import { EditLeadModal } from "@/components/EditLeadModal";
 import { IncomingEmailsSection } from "@/components/IncomingEmailsSection";
+import { LogInboundButton } from "@/components/LogInboundButton";
 import { PendingBookingCard } from "@/components/PendingBookingCard";
 import { ProgramCard } from "@/components/ProgramCard";
 import { QuickActions } from "@/components/QuickActions";
 import { SectionHeader } from "@/components/SectionHeader";
 import { StateBadge } from "@/components/StateBadge";
 import { TemplatePickerSheet } from "@/components/TemplatePickerSheet";
+import { TermHint } from "@/components/TermHint";
 import { Timeline } from "@/components/Timeline";
-import { TransferLeadModal } from "@/components/TransferLeadModal";
 import { api, ApiError } from "@/lib/api";
+import {
+  statusToTermKey,
+  waitingOnToTermKey,
+  type TermKey,
+} from "@/lib/glossary";
 import { toWhatsAppDigits } from "@/lib/phone";
 import {
   labelCategory,
@@ -49,7 +55,6 @@ import type {
   Lead,
   Program,
   StateColor,
-  User,
 } from "@/lib/types";
 
 // צבע מצב — לוגיקה פשוטה (Spec §12.9):
@@ -83,12 +88,9 @@ export default function LeadDetailPage() {
   const [loading, setLoading] = useState(true);
   const [templateOpen, setTemplateOpen] = useState(false);
   const [closeOpen, setCloseOpen] = useState(false);
-  const [transferOpen, setTransferOpen] = useState(false);
   const [programOpen, setProgramOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [reopening, setReopening] = useState(false);
-  // רשימת משתמשים — כדי לדעת אם קיימת עוזרת (כפתור "העברה" disabled אם אין).
-  const [users, setUsers] = useState<User[]>([]);
 
   async function load() {
     setError(null);
@@ -138,14 +140,6 @@ export default function LeadDetailPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
-  // טעינת משתמשים פעם אחת — לקביעת זמינות כפתור "העברה". כשל זניח (best-effort):
-  // הכפתור פשוט יישאר disabled.
-  useEffect(() => {
-    api.listUsers().then(setUsers).catch(() => {});
-  }, []);
-
-  const hasAssistant = users.some((u) => u.role === "assistant");
-
   // Refetch בחזרה מטאב/אפליקציה אחרת — קריטי לתרחיש פגישה: נועה
   // עזבה את הדף לטלפון, הפגישה הסתיימה, חוזרת — צריכה לראות את
   // כפתור "סמני שהפגישה התקיימה" שמופיע אחרי slot_end.
@@ -175,7 +169,10 @@ export default function LeadDetailPage() {
   }, [pollVersion, id]);
 
   return (
-    <AppShell>
+    // title="ליד" כללי — נדרש כדי שה-header של AppShell יתרנדר ויציג
+    // את גלגל ההגדרות (בלי title ה-header כולו לא רנדר). שם הליד עצמו
+    // נשאר בולט בכרטיס הפנימי למטה.
+    <AppShell title="ליד">
       {loading && (
         <div className="text-center text-gray-400 py-10 text-sm">טוען…</div>
       )}
@@ -232,11 +229,30 @@ export default function LeadDetailPage() {
             </div>
 
             <div className="grid grid-cols-2 gap-2 mt-3 text-xs">
-              <Meta label="סטטוס" value={labelStatus(lead.status)} />
-              <Meta label="ממתין" value={labelWaiting(lead.waiting_on)} />
+              <Meta
+                label="סטטוס"
+                value={labelStatus(lead.status)}
+                valueTermKey={statusToTermKey(lead.status)}
+              />
+              <Meta
+                label="ממתין"
+                value={labelWaiting(lead.waiting_on)}
+                valueTermKey={waitingOnToTermKey(lead.waiting_on)}
+              />
               <Meta label="עדיפות" value={labelPriority(lead.priority_level)} />
               <Meta label="ערוץ" value={labelContact(lead.preferred_contact)} />
             </div>
+
+            {/* הצעת AI לסיווג ממתינה לאישור — Gmail intake לא מסווג אוטומטית,
+                אלא מציע ונועה מאשרת. עורך ידנית דרך "ערוך" → הbanner נעלם
+                אוטומטית (ה-backend מנקה את ה-suggested בשמירת PATCH). */}
+            {lead.suggested_service_category && !lead.service_category && (
+              <AiClassificationBanner
+                lead={lead}
+                onChanged={load}
+                onEditRequested={() => setEditOpen(true)}
+              />
+            )}
 
             {/* פרטי קשר */}
             <div className="mt-3 flex flex-wrap gap-2">
@@ -301,6 +317,7 @@ export default function LeadDetailPage() {
               <div className="flex items-center gap-1.5 text-sm font-medium text-purple-900">
                 <MoonStar size={15} aria-hidden />
                 הצעת פעולה: {labelDormantAction(dormantSuggestion.action)}
+                <TermHint termKey="concept_ai_suggestion" />
               </div>
               <p className="mt-1 text-xs text-purple-800 leading-relaxed">
                 {dormantSuggestion.reasoning}
@@ -333,28 +350,28 @@ export default function LeadDetailPage() {
             </div>
           )}
 
-          {/* כפתורי תבנית + העברה — רק לליד פתוח */}
+          {/* כפתור בחירת תבנית — רק לליד פתוח */}
           {!["WON", "LOST", "ARCHIVED"].includes(lead.status) && (
-            <div className="grid grid-cols-2 gap-2">
+            <div className="flex items-center gap-2">
               <button
                 onClick={() => setTemplateOpen(true)}
-                className="rounded-lg bg-white border border-gray-200 py-2.5 text-sm font-medium flex items-center justify-center gap-1.5"
+                className="flex-1 rounded-lg bg-white border border-gray-200 py-2.5 text-sm font-medium flex items-center justify-center gap-1.5"
               >
                 {/* Send הוא מטוס נייר — "חץ שליחה" שצריך להישקף ב-RTL
                     לפי הסקיל (docs/Skills/hebrew-rtl-best-practices). */}
                 <Send size={15} aria-hidden className="rtl:-scale-x-100" />
                 בחירת תבנית
               </button>
-              <button
-                onClick={() => setTransferOpen(true)}
-                disabled={!hasAssistant}
-                title={hasAssistant ? undefined : "אין עוזרת מוגדרת"}
-                className="rounded-lg bg-white border border-gray-200 py-2.5 text-sm font-medium flex items-center justify-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <ArrowRightLeft size={15} aria-hidden />
-                העברה
-              </button>
+              <TermHint termKey="concept_template" />
             </div>
+          )}
+
+          {/* תיעוד הודעה נכנסת — ה-trigger ל-perform_action("log_inbound_message").
+              כשהלקוח עונה בוואטסאפ/טלפון, נועה מסמנת כאן; ה-chokepoint סוגר
+              warm_followup ומבצע את שאר ה-side-effects. רק לליד פתוח
+              (allowed_from=OPEN_LEAD_STATUSES ב-backend). */}
+          {!["WON", "LOST", "ARCHIVED"].includes(lead.status) && (
+            <LogInboundButton leadId={lead.id} onLogged={load} />
           )}
 
           {/* קישור לדף קביעת תור — להעתקה ושיתוף עם הליד */}
@@ -427,7 +444,7 @@ export default function LeadDetailPage() {
 
           {/* צ'יפים לסיכום שיחה */}
           <div>
-            <SectionHeader title="סיכומי שיחה" />
+            <SectionHeader title="סיכומי שיחה" termKey="concept_chip" />
             <QuickActions lead={lead} onActionDone={load} />
           </div>
 
@@ -472,12 +489,6 @@ export default function LeadDetailPage() {
             onClose={() => setCloseOpen(false)}
             onClosed={load}
           />
-          <TransferLeadModal
-            lead={lead}
-            open={transferOpen}
-            onClose={() => setTransferOpen(false)}
-            onTransferred={load}
-          />
           <AddProgramModal
             leadId={lead.id}
             open={programOpen}
@@ -496,13 +507,96 @@ export default function LeadDetailPage() {
   );
 }
 
-function Meta({ label, value }: { label: string; value: string }) {
+// Banner שמופיע בעמוד הליד כשהליד נוצר מ-Gmail intake וה-AI חילץ
+// קטגוריה. ה-AI לא מסווג אוטומטית — נועה מאשרת ידנית, או בוחרת קטגוריה
+// אחרת (פותחת את EditLeadModal). אחרי אישור או עריכה, ה-banner נעלם
+// (ה-backend מנקה את suggested_*).
+function AiClassificationBanner({
+  lead,
+  onChanged,
+  onEditRequested,
+}: {
+  lead: Lead;
+  onChanged: () => Promise<void> | void;
+  onEditRequested: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleApprove() {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.approveClassification(lead.id);
+      await onChanged();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "שגיאה באישור");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const categoryLabel = labelCategory(lead.suggested_service_category);
+  const subtypeLabel = lead.suggested_service_subtype
+    ? labelSubtype(lead.suggested_service_subtype)
+    : null;
+
+  return (
+    <div className="mt-3 bg-purple-50 border border-purple-200 rounded-lg px-3 py-2.5">
+      <div className="flex items-start gap-2 text-sm text-purple-900">
+        <Sparkles size={15} aria-hidden className="mt-0.5 shrink-0" />
+        <div className="flex-1 min-w-0">
+          <div className="font-medium">הצעת סיווג לאישור</div>
+          <div className="text-xs text-purple-800 mt-0.5">
+            ה-AI מציע: <span className="font-semibold">{categoryLabel}</span>
+            {subtypeLabel && <> · {subtypeLabel}</>}
+          </div>
+        </div>
+      </div>
+      {error && (
+        <div className="text-xs text-state-red mt-2">{error}</div>
+      )}
+      <div className="flex gap-2 mt-2.5">
+        <button
+          type="button"
+          onClick={handleApprove}
+          disabled={busy}
+          className="flex-1 rounded-lg bg-purple-700 text-white py-1.5 text-xs font-medium disabled:opacity-50"
+        >
+          {busy ? "מאשר…" : "אישור"}
+        </button>
+        <button
+          type="button"
+          onClick={onEditRequested}
+          disabled={busy}
+          className="flex-1 rounded-lg bg-white border border-purple-300 text-purple-900 py-1.5 text-xs font-medium disabled:opacity-50"
+        >
+          בחירה אחרת
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function Meta({
+  label,
+  value,
+  valueTermKey,
+}: {
+  label: string;
+  value: string;
+  // ⓘ קופץ ליד הערך — מסביר את המושג (סטטוס/waiting). undefined → אין ⓘ.
+  valueTermKey?: TermKey;
+}) {
   return (
     <div className="bg-gray-50 rounded-lg px-2.5 py-1.5">
       <div className="text-[10px] uppercase tracking-wide text-gray-400">
         {label}
       </div>
-      <div className="text-xs font-medium text-gray-800 mt-0.5">{value}</div>
+      <div className="text-xs font-medium text-gray-800 mt-0.5 flex items-center">
+        {value}
+        {valueTermKey && <TermHint termKey={valueTermKey} />}
+      </div>
     </div>
   );
 }
@@ -536,7 +630,7 @@ function CopyBookingLinkButton({ token }: { token: string }) {
       className="w-full rounded-lg bg-white border border-gray-200 py-2.5 text-sm font-medium flex items-center justify-center gap-1.5"
     >
       <CalendarPlus size={15} aria-hidden />
-      {copied ? "הקישור הועתק ✓" : "העתקת קישור לקביעת תור"}
+      {copied ? "הקישור הועתק ✓" : "העתקת קישור לקביעת פגישה"}
     </button>
   );
 }

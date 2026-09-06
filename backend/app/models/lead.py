@@ -38,6 +38,16 @@ class Lead(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     service_category: Mapped[str | None] = mapped_column(String(50), nullable=True)
     # voice_development / public_speaking / וכו'
     service_subtype: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    # הצעת AI לסיווג, ממתינה לאישור נועה. נשמרת מ-Gmail intake (חל גם על
+    # intake עתידי שיוסיף AI). UI מציג banner בעמוד הליד כל עוד יש
+    # `suggested_*` וה-`service_category` עוד null. בעת אישור: ערך
+    # ה-suggested מועתק ל-service_category/subtype וה-suggested מתאפס.
+    suggested_service_category: Mapped[str | None] = mapped_column(
+        String(50), nullable=True
+    )
+    suggested_service_subtype: Mapped[str | None] = mapped_column(
+        String(100), nullable=True
+    )
 
     # ===== מצב =====
     status: Mapped[str] = mapped_column(

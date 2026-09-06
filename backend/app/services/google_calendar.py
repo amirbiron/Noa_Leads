@@ -366,7 +366,7 @@ async def _mark_auth_invalid(should_alert: bool) -> None:
             alert_sent_ok = bool(
                 await telegram_service.send_message(
                     "⚠️ <b>חיבור היומן ל-Google פג תוקף</b>\n"
-                    "תורים חדשים לא יסונכרנו ליומן עד שתתחברי מחדש ב-/settings.\n"
+                    "פגישות חדשות לא יסונכרנו ליומן עד שתתחברי מחדש ב-/settings.\n"
                     "ההודעה הזו תישלח פעם אחת בלבד."
                 )
             )

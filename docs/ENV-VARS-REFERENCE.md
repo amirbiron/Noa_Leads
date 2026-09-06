@@ -104,10 +104,17 @@
 - **מקור:** `backend/app/config.py:93`
 
 ### `BACKEND_URL`
-- **סטטוס:** **חובה אם משתמשים ב-Google Calendar sync.**
+- **סטטוס:** **חובה בפרודקשן — incident-grade.** הגדר תמיד, גם אם
+  הלקוח לא מתחבר ל-Google Calendar ביום הראשון. ברגע שמחברים, בלי
+  ה-var האינטגרציה תישבר אחרי 7 ימים בשקט.
 - **תיאור:** כתובת ציבורית של ה-backend (HTTPS). נדרשת לרישום Google
-  Calendar watch channels (Google שולח אליו push notifications). אם
-  לא מוגדר → watch channel לא נוצר ו-sync הפוך כבוי.
+  Calendar watch channels (Google שולח push notifications ל-
+  `<BACKEND_URL>/webhooks/google-calendar`). cron `renew_calendar_watch`
+  מחדש את ה-channel יומית; אם `BACKEND_URL` לא מוגדר → ה-cron
+  מדלג בשקט, ה-watch הקיים פג תוקף תוך ~7 ימים → sync הפוך
+  (Google → DB) נשבר ללא error הנראה למשתמש.
+- **incident report:** קרה בפרודקשן — sync הפסיק לעבוד בשבוע השני,
+  לקח זמן לאתר כי אין error log קולני.
 - **ערך לדוגמה:** `https://noa-leads-backend.onrender.com`
 - **Default:** `None`
 - **מקור:** `backend/app/config.py:99`
@@ -290,6 +297,34 @@
 
 ---
 
+## 7.5 OpenAI (תמלול קולי — ספק AI שני)
+
+המערכת משתמשת ב-**שני ספקי AI נפרדים**: Anthropic (כל הניסוח/סיווג —
+סעיף 7) ו-OpenAI (תמלול קולי בלבד, §13.3). כל ספק עם מפתח נפרד, billing
+נפרד, ולוג עלות נפרד.
+
+### `OPENAI_API_KEY`
+- **סטטוס:** חובה אם הלקוח מפעיל תמלול קולי (§13.3).
+- **תיאור:** API key ל-OpenAI לתמלול קולי דרך `gpt-4o-transcribe`
+  (המודל הכי מדויק לעברית). **ספק AI שני — נפרד מ-Anthropic, רק לתמלול.**
+- **איפה משיגים:** `platform.openai.com` → API Keys → Create new
+  secret key. שמור בצד את המחרוזת — היא לא תוצג שוב.
+- **ערך לדוגמה:** `sk-proj-...`
+- **Default:** `None` — בלעדיו ה-endpoint `/leads/{id}/transcribe-note`
+  יחזיר 503 ו-UI יציג הודעת שגיאה. שאר ה-app עובד תקין (לא קריטי
+  למצב running).
+- **עלות:** $0.006/דקה (≈ $0.002 לתמלול ממוצע של 20 שניות). מאוד נמוך
+  לעומת קריאות Claude.
+- **מעקב עלות:** לוג per-call ב-`backend/app/services/transcription.py`
+  עם `lead_id`, `duration_sec`, `cost_usd`. **נפרד ממעקב Anthropic**
+  ב-`services/ai.py` — `grep "transcription usage:"` מבודד את עלויות
+  OpenAI בלבד.
+- **פרטיות:** קובץ האודיו נמחק מיד אחרי תמלול. לא נשמר ב-R2/DB/FS קבוע.
+  רק הטקסט המתומלל נכנס ל-`personal_note` של הליד.
+- **מקור:** `backend/app/config.py:43`
+
+---
+
 ## 8. Telegram
 
 ### `TELEGRAM_BOT_TOKEN`
@@ -344,6 +379,24 @@
 - **ערך לדוגמה:** `https://noa-leads-backend.onrender.com`
 - **Default:** `http://localhost:8000`
 - **מקור:** `frontend/lib/api.ts:45`, `frontend/.env.example:2`
+
+### `NEXT_PUBLIC_SHOW_TERM_HINTS`
+- **סטטוס:** אופציונלי.
+- **תיאור:** הצגת אייקוני ⓘ ליד מושגי המערכת (סוגי משימות, סטטוסים,
+  "אצל מי הכדור", שמות דפים) עם popover הסבר קצר. מיועד לתקופת היכרות
+  ראשונית (~חודש-חודשיים). לכיבוי גלובלי: `false` + redeploy.
+- **ערכים מקובלים:** `true` / `false` / (ריק = מופעל).
+- **Default:** מופעל (כש-var ריק).
+- **מקור:** `frontend/lib/glossary.ts` (TERM_HINTS_ENABLED).
+
+---
+
+## 11. (?) לעתיד — לא ממומש כיום
+
+סעיף זה מתעד env vars שיתווספו כשפיצ'רים עתידיים ייכנסו למימוש.
+**אין צורך להגדיר אותם ב-deploy הנוכחי** — להוסיף רק כשהפיצ'ר נכנס לקוד.
+
+_(כרגע ריק — `OPENAI_API_KEY` הועבר לסעיף 7.5 כשהתמלול הקולי נכנס למימוש.)_
 
 ---
 

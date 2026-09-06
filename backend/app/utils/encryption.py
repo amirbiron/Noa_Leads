@@ -6,8 +6,15 @@
 base64 url-safe). ייצור: `python -c "from cryptography.fernet import Fernet;
 print(Fernet.generate_key().decode())"`.
 
-ב-dev/test אם המפתח לא מוגדר — לוג WARN ושמירה plaintext (לא נעצרים).
-בפרוד חובה להגדיר; אחרת tokens של חיבור Google ייחשפו ל-DBA.
+**Strict by default (06/2026 hardening):** plaintext fallback מותר *רק*
+כש-`APP_ENV == "development"` במפורש. כל ערך אחר — כולל `APP_ENV` חסר,
+typo (`"prod"`, `"Production"`), `"staging"`, `"test"` — זורק
+RuntimeError. הסיבה: הקוד הקודם הניח ש-`app_env == "production"` הוא
+ה-default האמיתי בענן. בפועל, ה-default ב-config.py הוא `"development"`,
+ולכן typo או חסר ב-Render = plaintext silent fallback בפרודקשן. עכשיו
+ההגנה הפוכה: opt-in מפורש ל-dev fallback, fail-safe לכל השאר.
+
+ראה: docs/recurring-bug-patterns.md Pattern 5 Variant 5c.
 """
 
 import logging
@@ -21,25 +28,31 @@ logger = logging.getLogger(__name__)
 _FERNET: Fernet | None = None
 _FERNET_CHECKED = False
 
+# רק ערך זה מאפשר plaintext fallback. כל הערכים האחרים → raise.
+# explicit opt-in: מי שרוצה fallback חייב להוסיף APP_ENV=development במפורש.
+_DEV_ENV_VALUE = "development"
+
 
 def _get_fernet() -> Fernet | None:
     """
-    lazy-init של Fernet. מחזיר None אם המפתח לא מוגדר *ב-dev*.
-    בפרודקשן — fail-closed: זריקת RuntimeError כדי שה-app לא יתחיל לאחסן
-    secrets ב-plaintext בלי שמישהו ישים לב.
+    lazy-init של Fernet. מחזיר None *רק* כש-`APP_ENV == "development"`
+    במפורש. כל ערך אחר (כולל missing, typo, "staging", "prod") → raise.
+
+    הסיבה: ה-default של `app_env` ב-config.py הוא "development". אם מתאם
+    שוכח להוסיף `APP_ENV=production` ל-cron service ב-Render, ה-cron
+    יקבל "development" → fallback → tokens נכתבים כ-plaintext בשקט.
+    כעת ה-default האפליקטיבי הוא strict, ומישהו חייב לבחור dev במפורש.
 
     חשוב: _FERNET_CHECKED מסומן True רק במסלולי החזרת ערך, לא במסלולי
-    raise. אחרת באג שקט: קריאה ראשונה בפרוד בלי מפתח זורקת RuntimeError
-    (500), השנייה (למשל retry של OAuth) רואה _FERNET_CHECKED=True
-    ומחזירה _FERNET=None — encrypt_secret נופל ל-"plain:" prefix
-    ושומר refresh_token של Google כplaintext ב-DB.
+    raise. אחרת באג שקט: קריאה ראשונה זורקת RuntimeError, השנייה רואה
+    _FERNET_CHECKED=True ומחזירה _FERNET=None — encrypt_secret נופל
+    ל-"plain:" prefix ושומר refresh_token של Google כplaintext ב-DB.
     """
     global _FERNET, _FERNET_CHECKED
     if _FERNET_CHECKED:
         return _FERNET
 
     settings = get_settings()
-    is_production = settings.app_env == "production"
     key = settings.secrets_encryption_key
 
     if not key:
@@ -48,10 +61,18 @@ def _get_fernet() -> Fernet | None:
             "python -c \"from cryptography.fernet import Fernet; "
             "print(Fernet.generate_key().decode())\""
         )
-        if is_production:
+        # strict by default — fallback רק עם APP_ENV=development מפורש.
+        if settings.app_env != _DEV_ENV_VALUE:
             # raise לפני סימון checked — קריאות הבאות יזרקו שוב, לא יחזירו None.
-            raise RuntimeError(msg + " — required in production.")
-        logger.warning(msg + " Falling back to plaintext (dev only).")
+            raise RuntimeError(
+                f"{msg} — required when APP_ENV={settings.app_env!r}. "
+                f"Plaintext fallback is only allowed with APP_ENV={_DEV_ENV_VALUE!r} "
+                "(explicit opt-in). Set SECRETS_ENCRYPTION_KEY or change APP_ENV."
+            )
+        logger.warning(
+            "%s Falling back to plaintext (APP_ENV=development opt-in only).",
+            msg,
+        )
         _FERNET_CHECKED = True
         return None
 
@@ -64,14 +85,30 @@ def _get_fernet() -> Fernet | None:
             "python -c \"from cryptography.fernet import Fernet; "
             "print(Fernet.generate_key().decode())\""
         )
-        if is_production:
-            # אותו עיקרון — raise בלי לסמן checked.
+        # אותו עיקרון של strict by default — invalid key הוא משחית כמו
+        # missing, וגם רק dev מורשה fallback.
+        if settings.app_env != _DEV_ENV_VALUE:
+            # raise בלי לסמן checked.
             raise RuntimeError(msg) from e
-        logger.error(msg + " Falling back to plaintext (dev only).")
+        logger.error("%s Falling back to plaintext (development only).", msg)
         _FERNET = None
 
     _FERNET_CHECKED = True
     return _FERNET
+
+
+def assert_encryption_ready() -> None:
+    """eager validation — נכשל מיד בstartup אם encryption לא תקין.
+
+    משמש ב-`main.py` (lifespan של FastAPI) וב-`jobs/_runner.py` כדי
+    שכל service יתחיל עם בדיקה מפורשת, במקום lazy-init בקריאה ראשונה
+    ל-decrypt. cron שאמור לקרוא tokens אחרי 10 דקות, לא צריך לחכות
+    עד שמגיע לקריאה כדי להבין שאין מפתח.
+
+    זה משלים את ה-`_get_fernet` strict-by-default: גם המהפך של הלוגיקה
+    *וגם* eager — defense in depth.
+    """
+    _get_fernet()
 
 
 def encrypt_secret(plaintext: str) -> str:
