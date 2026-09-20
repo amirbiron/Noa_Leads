@@ -61,8 +61,7 @@ async def perform_action(
     now = datetime.now(timezone.utc)
 
     # inbound על ליד קיים → chokepoint יחיד `register_inbound`. זה ה-action
-    # היחיד עם activity_type=INBOUND_MESSAGE_LOGGED (request_meeting הוא
-    # MEETING_REQUESTED — transition נפרד). ה-delegation מבטיח שה-UI הידני,
+    # היחיד עם activity_type=INBOUND_MESSAGE_LOGGED. ה-delegation מבטיח שה-UI הידני,
     # booking, ו-webhooks עתידיים חולקים את אותה לוגיקת inbound — אי אפשר
     # לרשום "חצי inbound". register_inbound flush-only; כאן עושים commit.
     if action.activity_type == ActivityType.INBOUND_MESSAGE_LOGGED:

@@ -142,16 +142,24 @@ export interface Lead {
 
 // ===== Booking page (ציבורי) =====
 
+export interface UpcomingBooking {
+  start: string;
+  end: string;
+  status: BookingStatus;
+}
+
 export interface BookingPageInfo {
   lead_name: string;
   service_category: string | null;  // F-04: אופציונלי
   service_subtype: string | null;
   default_duration_minutes: number;
   timezone: string;
-  has_active_booking: boolean;
-  active_booking_at: string | null;
-  active_booking_end: string | null;
-  active_booking_status: string | null;
+  // הפגישות שכבר קבועות ללקוח. עד לשינוי הזה פגישה קיימת *חסמה* את
+  // הדף; עכשיו היא באנר מעל בורר המועדים, והלקוח יכול לקבוע עוד אחת.
+  upcoming_bookings: UpcomingBooking[];
+  // false כשהלקוח הגיע לתקרה — הבורר מוסתר.
+  can_book_more: boolean;
+  max_bookings: number;
   // גבולות בחירת התאריך — YYYY-MM-DD בשעון ישראל, מחושבים בשרת.
   // `booking_horizon_end` = היום האחרון שאפשר לקבוע בו (סוף החודש הבא).
   today: string;
@@ -180,8 +188,10 @@ export interface CreateBookingResponse {
   slot_end: string;
 }
 
-// ===== Booking admin (אישור/דחייה ע"י נועה/עוזרת) =====
+// ===== Booking admin (צפייה וביטול ע"י נועה/עוזרת) =====
 
+// `pending_approval` ו-`rejected` נשארים בטיפוס עבור שורות שנוצרו לפני
+// ביטול שלב האישור. המערכת לא מייצרת אותם יותר.
 export type BookingStatus =
   | "pending_approval"
   | "approved"
@@ -195,25 +205,12 @@ export interface BookingRead {
   requested_slot_end: string;
   status: BookingStatus;
   google_calendar_event_id: string | null;
+  // מה שהליד הזין בדף קביעת הפגישה. null בפגישות ישנות.
+  contact_phone: string | null;
+  notes: string | null;
   created_at: string;
   approved_at: string | null;
   rejected_at: string | null;
-}
-
-export interface PendingBookingItem {
-  id: string;
-  lead_id: string;
-  lead_name: string;
-  lead_phone: string | null;
-  service_category: string | null;  // F-04: אופציונלי
-  service_subtype: string | null;
-  requested_slot_start: string;
-  requested_slot_end: string;
-  created_at: string;
-}
-
-export interface PendingBookingsResponse {
-  items: PendingBookingItem[];
 }
 
 export interface LeadCreate {
@@ -632,4 +629,33 @@ export interface FollowupRuleUpdate {
   repeat_count?: number;
   repeat_interval_value?: number;
   repeat_interval_unit?: FollowupTimeUnit;
+}
+
+// ===== Google Calendar — חיבור ובחירת יומנים =====
+
+export interface GoogleCalendarStatus {
+  connected: boolean;
+  google_account_email?: string | null;
+  // יומן היעד — היומן שאליו נכתבות הפגישות ושעליו רשום ה-watch.
+  calendar_id?: string | null;
+  // יומנים *נוספים* שנחשבים "תפוס" בחישוב הזמינות בלבד.
+  busy_calendar_ids: string[];
+  timezone?: string | null;
+  connected_at?: string | null;
+  auth_invalid: boolean;
+}
+
+// accessRole של Google: freeBusyReader רואה רק פנוי/תפוס; רק writer
+// ו-owner מאפשרים ליצור אירוע, ולכן רק הם יכולים לשמש כיומן יעד.
+export type GoogleCalendarAccessRole =
+  | "freeBusyReader"
+  | "reader"
+  | "writer"
+  | "owner";
+
+export interface GoogleCalendarListItem {
+  id: string;
+  summary: string;
+  primary: boolean;
+  access_role: GoogleCalendarAccessRole | string;
 }

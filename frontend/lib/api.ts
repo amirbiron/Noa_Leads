@@ -2,6 +2,7 @@
 // ו-refresh אוטומטי כשה-access pokens פג.
 
 import { clearTokens, getAccessToken, getRefreshToken, setTokens } from "./auth";
+import { decideAuthRecovery, singleFlight } from "./authRetry";
 import type {
   Activity,
   ApplyChipResponse,
@@ -14,7 +15,8 @@ import type {
   EmailMessage,
   FollowupRule,
   FollowupRuleUpdate,
-  PendingBookingsResponse,
+  GoogleCalendarListItem,
+  GoogleCalendarStatus,
   HomeDashboard,
   QuickActionChip,
   QuickActionChipCreate,
@@ -61,13 +63,25 @@ interface FetcherOpts extends Omit<RequestInit, "body"> {
   // הראשון "אוכל" את הbody, ובלי factory ה-retry שולח בקשה ריקה.
   // עדיפות: `bodyFactory` קודם ל-`body` אם שניהם נשלחו.
   bodyFactory?: () => BodyInit;
-  // האם לנסות refresh אם מקבלים 401 (מנוטרל בקריאה ל-/auth/refresh כדי
-  // למנוע לולאה אינסופית)
+  // האם לנסות להתאושש מ-401 (מנוטרל ב-/auth/refresh, ב-/auth/public-access
+  // וב-endpoints ציבוריים, כדי למנוע רקורסיה).
   retryAuth?: boolean;
+  // דגלי "כבר ניסיתי" — **לכל בקשה בנפרד**, לא גלובליים. מועברים
+  // ברקורסיה כדי שכל בקשה תקבל לכל היותר ניסיון אחד מכל סוג.
+  // ראה `lib/authRetry.ts` להסבר על המעגל שזה עוצר.
+  refreshAttempted?: boolean;
+  publicAccessAttempted?: boolean;
 }
 
 async function fetcher<T>(path: string, opts: FetcherOpts = {}): Promise<T> {
-  const { body, bodyFactory, retryAuth = true, ...rest } = opts;
+  const {
+    body,
+    bodyFactory,
+    retryAuth = true,
+    refreshAttempted = false,
+    publicAccessAttempted = false,
+    ...rest
+  } = opts;
   const headers = new Headers(rest.headers);
   headers.set("Accept", "application/json");
 
@@ -104,17 +118,35 @@ async function fetcher<T>(path: string, opts: FetcherOpts = {}): Promise<T> {
     // app/services/google_calendar.py:encode_oauth_state.
   });
 
-  // 401 → ננסה refresh פעם אחת ואז retry
-  if (res.status === 401 && retryAuth) {
-    const refreshed = await tryRefreshToken();
-    if (refreshed) {
-      return fetcher<T>(path, { ...opts, retryAuth: false });
+  // 401 → refresh, ואם זה לא עובד — כניסה אוטומטית. כל אחד מהם פעם
+  // אחת לכל בקשה; ההחלטה עצמה ב-`decideAuthRecovery` כדי שתהיה
+  // ניתנת לבדיקה בלי רשת.
+  if (res.status === 401) {
+    const step = decideAuthRecovery({
+      status: res.status,
+      retryAuth,
+      refreshAttempted,
+      publicAccessAttempted,
+      hasRefreshToken: getRefreshToken() !== null,
+    });
+
+    if (step === "refresh") {
+      // גם כשה-refresh נכשל משדרים מחדש: `tryRefreshToken` כבר ניקה
+      // את ה-tokens, ולכן הסיבוב הבא יקבל `hasRefreshToken=false`
+      // ויבחר בכניסה אוטומטית. `refreshAttempted` מבטיח שלא נחזור
+      // לכאן פעם שנייה.
+      await tryRefreshToken();
+      return fetcher<T>(path, { ...opts, refreshAttempted: true });
     }
-    clearTokens();
-    // ה-refresh נכשל — מנווטים ל-login. בלי זה הדף נשאר במצב שבור
-    // (כל קריאה הבאה תיכשל גם היא ב-401).
-    if (typeof window !== "undefined" && window.location.pathname !== "/login") {
-      window.location.href = "/login";
+
+    if (step === "public-access") {
+      const entered = await enterPublicAccess();
+      if (entered) {
+        return fetcher<T>(path, { ...opts, publicAccessAttempted: true });
+      }
+      // גם הכניסה האוטומטית נכשלה. מנקים tokens ונופלים לשגיאה
+      // למטה — **בלי** הפניה ובלי רענון עצמי, שהיו מייצרים לולאה.
+      clearTokens();
     }
   }
 
@@ -141,9 +173,32 @@ async function tryRefreshToken(): Promise<boolean> {
     setTokens(data.access_token, data.refresh_token);
     return true;
   } catch {
+    // ה-refresh token לא תקף יותר — מסלקים אותו, אחרת `decideAuthRecovery`
+    // היה בוחר "refresh" שוב בבקשה הבאה במקום לעבור לכניסה אוטומטית.
+    clearTokens();
     return false;
   }
 }
+
+/**
+ * כניסה אוטומטית כבעלים. אין מסך התחברות — פתיחת הכתובת היא הכניסה.
+ *
+ * עטוף ב-`singleFlight`: דף שטוען כמה endpoints במקביל ונופל ב-401
+ * בכולם ייצר קריאה **אחת** ל-`/auth/public-access`, לא אחת לכל בקשה.
+ * בלי זה היינו מגיעים למגבלת הקצב בשרת בטעינת דף אחת.
+ */
+export const enterPublicAccess = singleFlight(async (): Promise<boolean> => {
+  try {
+    const data = await fetcher<TokenResponse>("/auth/public-access", {
+      method: "POST",
+      retryAuth: false,
+    });
+    setTokens(data.access_token, data.refresh_token);
+    return true;
+  } catch {
+    return false;
+  }
+});
 
 // ===== API surface =====
 
@@ -451,21 +506,28 @@ export const api = {
     }),
 
   // ----- Google Calendar -----
-  getGoogleStatus: () =>
-    fetcher<{
-      connected: boolean;
-      google_account_email?: string | null;
-      calendar_id?: string | null;
-      timezone?: string | null;
-      connected_at?: string | null;
-      auth_invalid: boolean;
-    }>("/google/status"),
+  getGoogleStatus: () => fetcher<GoogleCalendarStatus>("/google/status"),
 
   startGoogleAuth: () =>
     fetcher<{ auth_url: string }>("/google/auth/start"),
 
   disconnectGoogle: () =>
     fetcher<void>("/google/disconnect", { method: "POST" }),
+
+  // רשימת היומנים של החשבון המחובר — מזינה את הבורר ב-/settings.
+  listGoogleCalendars: () =>
+    fetcher<{ items: GoogleCalendarListItem[] }>("/google/calendars"),
+
+  // שמירת יומן היעד + היומנים שנחשבים "תפוס". מחזיר את הסטטוס המעודכן
+  // כדי שה-UI יתרענן מהשרת ולא יסתמך על ה-state המקומי שלו.
+  setGoogleCalendars: (payload: {
+    target_calendar_id: string;
+    busy_calendar_ids: string[];
+  }) =>
+    fetcher<GoogleCalendarStatus>("/google/calendars", {
+      method: "PUT",
+      body: payload,
+    }),
 
   // ----- Gmail (Phase 3 Stage 17) -----
   getGmailStatus: () =>
@@ -501,7 +563,12 @@ export const api = {
 
   createBooking: (
     token: string,
-    payload: { slot_start: string; slot_end: string; notes?: string },
+    payload: {
+      slot_start: string;
+      slot_end: string;
+      contact_phone: string;
+      notes?: string;
+    },
   ) =>
     fetcher<CreateBookingResponse>(`/booking/${token}`, {
       method: "POST",
@@ -509,16 +576,11 @@ export const api = {
       retryAuth: false,
     }),
 
-  // ----- Booking admin (אישור/דחייה ע"י נועה/עוזרת) -----
-  listPendingBookings: () =>
-    fetcher<PendingBookingsResponse>(`/bookings/pending`),
+  // ----- Booking admin (צפייה וביטול ע"י נועה/עוזרת) -----
+  // רשימה ולא פגישה בודדת: ליד יכול להחזיק כמה פגישות עתידיות.
+  listBookingsForLead: (leadId: string) =>
+    fetcher<BookingRead[]>(`/bookings/lead/${leadId}`),
 
-  getActiveBookingForLead: (leadId: string) =>
-    fetcher<BookingRead | null>(`/bookings/lead/${leadId}/active`),
-
-  approveBooking: (id: string) =>
-    fetcher<BookingRead>(`/bookings/${id}/approve`, { method: "POST" }),
-
-  rejectBooking: (id: string) =>
-    fetcher<BookingRead>(`/bookings/${id}/reject`, { method: "POST" }),
+  cancelBooking: (id: string) =>
+    fetcher<BookingRead>(`/bookings/${id}/cancel`, { method: "POST" }),
 };

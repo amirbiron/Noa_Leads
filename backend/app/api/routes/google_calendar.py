@@ -20,6 +20,9 @@ from app.api.deps import DbSession, OwnerOnly
 from app.config import get_settings
 from app.core.exceptions import ValidationError
 from app.schemas.google_calendar import (
+    CalendarListItem,
+    CalendarListResponse,
+    CalendarSelectionRequest,
     GoogleAuthStartResponse,
     GoogleConnectionStatus,
 )
@@ -111,6 +114,60 @@ async def auth_callback(
 
     qs = urlencode({"google": "connected"})
     return RedirectResponse(f"{redirect_to_settings}?{qs}")
+
+
+@router.get("/calendars", response_model=CalendarListResponse)
+async def list_calendars(
+    db: DbSession, user: OwnerOnly
+) -> CalendarListResponse:
+    """כל היומנים שברשימת היומנים של החשבון המחובר.
+
+    מזין את הבורר ב-/settings: נועה מסמנת אילו יומנים נחשבים "תפוס"
+    ולאיזה מהם ייקבעו הפגישות.
+    """
+    items = await gc_service.list_account_calendars(db)
+    return CalendarListResponse(
+        items=[CalendarListItem(**item) for item in items]
+    )
+
+
+@router.put("/calendars", response_model=GoogleConnectionStatus)
+async def set_calendars(
+    payload: CalendarSelectionRequest, db: DbSession, user: OwnerOnly
+) -> GoogleConnectionStatus:
+    """שומר את יומן היעד ואת רשימת היומנים ה"תפוסים".
+
+    מחזיר את הסטטוס המעודכן כדי שה-UI יתרענן מהשרת ולא יסתמך על
+    ה-state המקומי שלו אחרי השמירה.
+    """
+    target_changed = await gc_service.set_calendar_selection(
+        db,
+        target_id=payload.target_calendar_id,
+        busy_ids=payload.busy_calendar_ids,
+    )
+    # ה-route הוא בעל הטרנזקציה (CLAUDE.md כלל 15).
+    await db.commit()
+
+    if target_changed:
+        # אחרי ה-commit, ובכוונה: הזזת ה-watch היא קריאה חיצונית
+        # best-effort. `create_watch` עוצר את הישן בעצמו וכותב
+        # sync_token חדש שמתאים ליומן החדש; בלעדיו ה-cursor היה ממשיך
+        # להצביע ליומן הקודם. כישלון כאן לא מבטל את הבחירה — הסנכרון
+        # ההפוך אופציונלי, בדיוק כמו בחיבור הראשוני.
+        try:
+            await gc_service.create_watch(db)
+        except gc_service.WatchNotConfiguredError:
+            logger.info(
+                "Calendar target changed but BACKEND_URL not configured — "
+                "reverse sync stays off"
+            )
+        except Exception:
+            logger.exception(
+                "Failed to move watch channel to new target calendar %s",
+                payload.target_calendar_id,
+            )
+
+    return GoogleConnectionStatus(**await gc_service.get_status(db))
 
 
 @router.post("/disconnect", status_code=204)

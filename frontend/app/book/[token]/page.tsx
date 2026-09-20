@@ -180,6 +180,7 @@ export default function BookingPage() {
 
   const [selectedDate, setSelectedDate] = useState<string>("");
   const [selectedSlot, setSelectedSlot] = useState<TimeSlot | null>(null);
+  const [phone, setPhone] = useState("");
   const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [success, setSuccess] = useState<{
@@ -250,7 +251,10 @@ export default function BookingPage() {
   // פותח אותו — רוב הלקוחות קובעים בחודש הקרוב, ואין טעם בקריאה
   // שנייה ל-FreeBusy בכל כניסה לדף.
   useEffect(() => {
-    if (!info || info.has_active_booking) return;
+    // בעבר היה כאן גם `|| info.has_active_booking`, וזה מה שעצר את
+    // טעינת הזמינות כשללקוח כבר הייתה פגישה — הדף לא היה מציע מועדים
+    // בכלל. עכשיו רק התקרה עוצרת.
+    if (!info || !info.can_book_more) return;
     const first = months[0];
     if (!first) return;
     setSelectedDate((prev) => prev || info.today);
@@ -301,6 +305,7 @@ export default function BookingPage() {
       const result = await api.createBooking(token, {
         slot_start: selectedSlot.start,
         slot_end: selectedSlot.end,
+        contact_phone: phone.trim(),
         notes: notes.trim() || undefined,
       });
       setSuccess({ start: result.slot_start, end: result.slot_end });
@@ -329,7 +334,7 @@ export default function BookingPage() {
 
   if (!info) return null;
 
-  // 1) הצלחה — אחרי submit
+  // 1) הצלחה — אחרי submit. הפגישה כבר קבועה; אין שלב אישור.
   if (success) {
     return (
       <CenteredCard>
@@ -339,49 +344,48 @@ export default function BookingPage() {
             size={56}
             aria-hidden
           />
-          <div className="text-xl font-semibold">הבקשה התקבלה</div>
-          <div className="text-sm text-gray-600">
-            המועד המבוקש:
-          </div>
+          <div className="text-xl font-semibold">הפגישה נקבעה</div>
           <div className="text-base font-medium text-gray-900">
             {fullSlotLabel(success.start, success.end)}
           </div>
           <div className="text-sm text-gray-500 mt-4">
-            נועה תאשר את הפגישה ותחזור אליך בהקדם. תקבלי הודעה בערוץ שלך.
+            הפגישה נכנסה ליומן של נועה. אם משהו משתנה, היא תיצור איתך
+            קשר בטלפון שהשארת.
           </div>
         </div>
       </CenteredCard>
     );
   }
 
-  // 2) כבר יש תור פעיל
-  if (info.has_active_booking && info.active_booking_at) {
-    const statusLabel =
-      info.active_booking_status === "approved"
-        ? "אושר ע\"י נועה"
-        : "ממתין לאישור";
-    // active_booking_end עשוי להיות null בלידים ישנים מאוד; fallback ל-start
-    const endLabel = info.active_booking_end ?? info.active_booking_at;
+  // 2) הגעת לתקרת הפגישות — המצב היחיד שחוסם את הדף.
+  //    פגישה קיימת לבדה **אינה** חוסמת יותר: היא מוצגת כבאנר למטה,
+  //    והלקוח יכול לקבוע מועד נוסף. זו הייתה המגבלה שהוסרה.
+  if (!info.can_book_more) {
     return (
       <CenteredCard>
         <div className="text-center space-y-3">
           <Calendar className="mx-auto text-state-green" size={48} aria-hidden />
-          <div className="text-lg font-semibold">כבר יש לך בקשת פגישה</div>
-          <div className="text-base text-gray-900">
-            {fullSlotLabel(info.active_booking_at, endLabel)}
+          <div className="text-lg font-semibold">
+            {info.upcoming_bookings.length === 1
+              ? "כבר קבועה לך פגישה"
+              : `כבר קבועות לך ${info.upcoming_bookings.length} פגישות`}
           </div>
-          <div className="text-sm text-state-orange bg-state-orange/10 rounded-lg px-3 py-2 mt-2">
-            {statusLabel}
+          <div className="space-y-1">
+            {info.upcoming_bookings.map((b) => (
+              <div key={b.start} className="text-base text-gray-900">
+                {fullSlotLabel(b.start, b.end)}
+              </div>
+            ))}
           </div>
           <div className="text-sm text-gray-500 mt-3">
-            אם רוצה להחליף מועד, צרי קשר עם נועה ישירות.
+            כדי לקבוע פגישה נוספת או לשנות מועד, צרי קשר עם נועה ישירות.
           </div>
         </div>
       </CenteredCard>
     );
   }
 
-  // 3) טופס קביעת תור
+  // 3) טופס קביעת פגישה
   return (
     <div className="min-h-screen bg-gray-50">
       <header className="bg-white border-b border-gray-200">
@@ -404,7 +408,36 @@ export default function BookingPage() {
           <div className="text-xs text-state-orange bg-state-orange/10 rounded-lg px-3 py-2 flex items-start gap-2">
             <Info size={14} className="mt-0.5 shrink-0" aria-hidden />
             סנכרון יומן זמני לא פעיל. ייתכן שחלק מהסלוטים יתבררו כתפוסים
-            לאחר האישור.
+            בהמשך.
+          </div>
+        )}
+
+        {/* פגישות שכבר קבועות. באנר בלבד — הבורר נשאר פתוח מתחתיו,
+            כי אפשר לקבוע פגישה נוספת. */}
+        {info.upcoming_bookings.length > 0 && (
+          <div className="bg-white border border-gray-200 rounded-xl px-4 py-3">
+            <div className="flex items-start gap-2">
+              <Calendar
+                size={15}
+                className="text-state-green mt-0.5 shrink-0"
+                aria-hidden
+              />
+              <div className="text-sm">
+                <div className="font-medium text-gray-900">
+                  {info.upcoming_bookings.length === 1
+                    ? "כבר קבועה לך פגישה"
+                    : `כבר קבועות לך ${info.upcoming_bookings.length} פגישות`}
+                </div>
+                <ul className="text-gray-600 mt-1 space-y-0.5">
+                  {info.upcoming_bookings.map((b) => (
+                    <li key={b.start}>{fullSlotLabel(b.start, b.end)}</li>
+                  ))}
+                </ul>
+                <div className="text-xs text-gray-500 mt-1.5">
+                  אפשר לקבוע פגישה נוספת למטה.
+                </div>
+              </div>
+            </div>
           </div>
         )}
 
@@ -551,6 +584,31 @@ export default function BookingPage() {
             </div>
             <label className="block">
               <div className="text-xs text-gray-500 mb-1">
+                טלפון ליצירת קשר <span className="text-state-red">*</span>
+              </div>
+              {/* dir="ltr" + textAlign start: מספר טלפון הוא רצף LTR
+                  בתוך דף RTL. בלי זה הסימנים בקצוות (+, מקף) קופצים
+                  לצד הלא נכון בזמן ההקלדה.
+                  inputMode="tel" פותח מקלדת ספרות בנייד, ו-autoComplete
+                  מאפשר מילוי אוטומטי. */}
+              <input
+                type="tel"
+                inputMode="tel"
+                autoComplete="tel"
+                dir="ltr"
+                value={phone}
+                onChange={(e) => setPhone(e.target.value)}
+                maxLength={32}
+                placeholder="050-0000000"
+                className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-start focus:outline-none focus:border-gray-900"
+              />
+              <div className="text-xs text-gray-500 mt-1">
+                כדי שנועה תוכל ליצור קשר אם משהו משתנה.
+              </div>
+            </label>
+
+            <label className="block">
+              <div className="text-xs text-gray-500 mb-1">
                 הערה לנועה (אופציונלי)
               </div>
               <textarea
@@ -571,13 +629,13 @@ export default function BookingPage() {
 
             <button
               onClick={submit}
-              disabled={submitting}
+              disabled={submitting || phone.trim().length === 0}
               className="w-full rounded-lg bg-gray-900 text-white py-3 font-medium disabled:opacity-50"
             >
-              {submitting ? "שולחת בקשה…" : "אישור בקשת פגישה"}
+              {submitting ? "קובעת…" : "קביעת הפגישה"}
             </button>
             <div className="text-xs text-gray-500 text-center">
-              המועד עדיין דורש אישור של נועה.
+              הפגישה תיקבע מיד ותיכנס ליומן.
             </div>
           </section>
         )}

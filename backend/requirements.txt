@@ -43,6 +43,12 @@ cryptography>=42.0.0
 google-api-python-client==2.157.0
 google-auth==2.37.0
 google-auth-oauthlib==1.2.1
+# מיובאים ברמת המודול ב-services/google_calendar.py כדי לקבוע timeout
+# מפורש ל-transport. הם מגיעים כתלות עקיפה של google-api-python-client,
+# אבל import ברמת מודול הופך אותם לתנאי לעליית השרת כולו — שינוי
+# בעץ התלויות היה מפיל את ה-boot במקום את פיצ'ר היומן בלבד.
+google-auth-httplib2==0.4.2
+httplib2==0.32.0
 
 # ===== Telegram =====
 python-telegram-bot==21.9

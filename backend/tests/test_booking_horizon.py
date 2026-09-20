@@ -158,6 +158,7 @@ async def test_create_booking_rejects_slot_beyond_horizon(db):
             token=lead.booking_token,
             slot_start=start.astimezone(timezone.utc),
             slot_end=end.astimezone(timezone.utc),
+            contact_phone="052-1234567",
         )
 
 

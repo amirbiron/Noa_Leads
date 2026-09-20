@@ -1,7 +1,45 @@
 # מצב הפרויקט
 
 מסמך חי שמסכם מה נבנה, מה פתוח, ואיך להמשיך.
-**עדכון אחרון:** סוף שלב 15 (פאזה 2 הושלמה — Post-meeting update).
+**עדכון אחרון:** ספטמבר 2026 — סבב "פגישה בלי אישור + כניסה בלי סיסמה".
+
+---
+
+## הסבב האחרון (ספטמבר 2026) — מה השתנה ולמה
+
+שש בקשות של המתאם, כולן באותו אזור בקוד. הפירוט המלא באפיון (`SpecV2.1.md`
+§11, §22.1.1, §10.2); כאן רק מה שצריך לדעת כשנוגעים בקוד הזה שוב.
+
+| # | מה השתנה | איפה |
+|---|---|---|
+| 0 | **אין מסך התחברות.** פתיחת הכתובת היא הכניסה. `/login` נמחק. | `routes/auth.py`, `components/AuthGuard.tsx`, `lib/authRetry.ts` |
+| 1 | **אין שלב אישור.** הפגישה נקבעת מאושרת מיד והאירוע נוצר ביומן באותה טרנזקציה. | `services/booking.py::create_booking_request` |
+| 2 | **טלפון חובה** בדף הפגישה, נשמר על הפגישה ומופיע ביומן. | `bookings.contact_phone` |
+| 3 | **הקישור ניתן לשימוש חוזר** — עד 3 פגישות עתידיות לליד. | מיגרציה 0032 (הסרת `idx_bookings_active_lead`) |
+| 4 | **ההערה מגיעה ליומן.** היא נשמרה קודם רק ב-activity log. | `bookings.notes`, `build_event_description` |
+| 5 | **כמה יומנים.** בורר ב-`/settings`; זמינות נבדקת בכולם, הפגישה נכתבת לאחד. | `credentials.busy_calendar_ids` + `calendar_id` |
+
+**שלוש נקודות שחשוב לזכור לפני שנוגעים בקוד הזה:**
+
+1. **`release_lead_if_no_active_booking` היא נקודת חנק.** כל מסלול שמבטל
+   פגישה (Google sync, ביטול ידני, cron הניקוי, סגירת ליד) חייב לעבור
+   דרכה. היא היחידה שיודעת שליד עם פגישה נוספת **לא** יוצא מ-`BOOKED`.
+2. **`BookingCancelSource` ב-`constants.py` מרכז את מקורות הביטול.**
+   מסלול ביטול חדש חייב להוסיף ערך שם ולהחליט אם הוא שייך ל-
+   `BOOKING_CANCEL_SOURCES_MEETING_NOT_HELD`. אחרת `post_meeting_tasks`
+   ייצור משימת "עדכני מה היה בפגישה" לפגישה שלא התקיימה.
+3. **`create_booking_request` עושה commit בעצמו** (חריגה מכלל 15),
+   כי ה-compensation שמוחק אירוע יתום מ-Google חייב לדעת מתי ה-commit
+   נכשל. אל "תתקנו" את זה בלי להחליף את ה-compensation.
+
+### ממצא בתשתית הבדיקות (חשוב)
+
+ה-fixture ב-`backend/tests/conftest.py` תפס שגיאת event-loop ב-`except`
+רחב ודיווח עליה כ-"DB not available" → **דילוג**. בפועל רצה בדיקת DB
+אחת בכל קובץ וכל השאר דולגו בשקט: `125 passed, 54 skipped` כשה-DB היה
+זמין לחלוטין. אחרי התיקון (engine עם `NullPool` + `join_transaction_mode=
+"create_savepoint"`): **221 עוברות, אפס דילוגים.** אם בדיקות מתחילות
+לדלג שוב — זו הנקודה לבדוק ראשונה.
 
 ---
 
@@ -27,7 +65,7 @@
 |---|---|---|
 | **11 — OAuth + credentials** | ✅ | cookieless flow (JWT state), Fernet encryption, owner-only |
 | **12 — דף קביעת תור ציבורי** | ✅ | `/book/{token}`, FreeBusy + DB busy, EXCLUDE constraint למניעת overlap |
-| **13 — אישור/דחייה ע"י נועה** | ✅ | `PendingBookingCard` בדף הליד, `/bookings/{id}/approve\|reject`, אירוע נוצר ביומן עם `extendedProperties.private.bookingId` כעוגן לשלב 14. fail-safe ל-rollback אם Google נכשל. |
+| **13 — הפגישה נקבעת מיד** | ✅ | אין שלב אישור. `create_booking_request` יוצר `status=approved` וכותב את האירוע ליומן באותה טרנזקציה, עם `extendedProperties.private.bookingId` כעוגן לשלב 14. fail-safe ל-rollback אם Google נכשל. `BookingCard` בדף הליד מציג את הפגישה עם כפתור ביטול; **רק ביטול הפגישה הפעילה האחרונה** מחזיר את הליד ל-`IN_PROGRESS` (`release_lead_if_no_active_booking`). |
 | **14 — סנכרון הפוך** | ✅ | Watch channels (auto על OAuth), `/webhooks/google-calendar`, syncToken + 410 resync, BackgroundTasks ל-ack מהיר, FOR UPDATE lock לסידור webhook מקבילים. ביטול ב-Google → ליד `IN_PROGRESS`+NOAH. שינוי זמן → עדכון שקט + activity log. cron `renew_calendar_watch` יומי. דורש `BACKEND_URL`. |
 | **15 — Post-meeting update** | ✅ | `jobs/post_meeting_tasks.py` יומי ב-02:00 (לפני expire_stale ב-03:30). יוצר Task `POST_MEETING_UPDATE` לכל ליד שהפגישה שלו עברה ב-48h האחרונות, status approved/canceled, ועדיין לא נסגר. מסנן ביטולים מ-Google sync (הפגישה לא קרתה). אינדמפוטנטי דרך NOT EXISTS. UI: בלי שינוי, ה-/today מציג כל ה-tasks. סגירת ליד מבטלת את ה-task אוטומטית דרך `close_lead`. |
 
@@ -66,10 +104,10 @@
 - [ ] לוחצים `Deploy` → migrations רצות אוטומטית (`preDeployCommand: alembic upgrade head`)
 
 ### אחרי deploy ראשון
-1. גולשים ל-`/login`
-2. אם אין משתמשים → redirect אוטומטי ל-`/setup`
-3. ממלאים שם/מייל/סיסמה → מחוברים אוטומטית
-4. ב-`/settings` → "אינטגרציית Google Calendar" → התחברות
+1. גולשים לכתובת הראשית (`/`) — אין מסך התחברות. `AuthGuard` מבקש token מהשרת ונכנס אוטומטית.
+2. אם אין עדיין משתמשים → `AuthGuard` מפנה ל-`/setup`
+3. ממלאים שם/מייל/סיסמה → ה-Owner נוצר והמשתמש מחובר אוטומטית. הסיסמה נקבעת פעם אחת ואינה משמשת לכניסה.
+4. ב-`/settings` → "אינטגרציית Google Calendar" → התחברות, ואז בחירת יומן היעד והיומנים ה"תפוסים"
 
 ---
 
@@ -83,7 +121,7 @@
 | Timezones | כל הדאטה ב-UTC ב-DB; UI ב-Asia/Jerusalem; חישובי שבוע/יום עם `datetime.combine` עצמאי | מניעת DST shift באביב/סתיו |
 | מיגרציות | Alembic, אוטומטי דרך `preDeployCommand: alembic upgrade head` | אפס terminal לdeploy |
 | Cron jobs | 5 jobs נפרדים (~$5/חודש ב-Render) | פתוחה אפשרות לconsolidation לscheduler אחד אם עלות מטרידה — תוכנית קיימת |
-| Booking races | EXCLUDE USING gist + UNIQUE(lead_id) WHERE active | DB-level enforcement, לא הסתמכות על application logic |
+| Booking races | EXCLUDE USING gist על חפיפת זמנים + נעילת שורת הליד (`SELECT ... FOR UPDATE`) לפני בדיקת התקרה | ה-EXCLUDE הוא DB-level ומונע שתי פגישות חופפות גם בין לידים שונים. האינדקס `UNIQUE(lead_id) WHERE active` **הוסר** במיגרציה 0032 — ליד יכול להחזיק עד 3 פגישות עתידיות, והנעילה מסדרת בקשות מקבילות של אותו ליד בטור |
 | RTL | logical CSS bgmrt (`ms-`, `me-`, `border-s`), Tailwind v4 עם `@theme` | אומת בsweep — נקי לחלוטין |
 
 ---

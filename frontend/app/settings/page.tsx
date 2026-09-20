@@ -1,14 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
   Bell,
   ChevronLeft,
   Coins,
   FileText,
-  LogOut,
   Send,
   Sparkles,
   UserPlus,
@@ -18,7 +16,6 @@ import { GmailConnectionSection } from "@/components/GmailConnectionSection";
 import { GoogleCalendarSection } from "@/components/GoogleCalendarSection";
 import { SectionHeader } from "@/components/SectionHeader";
 import { api, ApiError } from "@/lib/api";
-import { clearTokens } from "@/lib/auth";
 import type { User } from "@/lib/types";
 
 const ROLE_LABEL: Record<string, string> = {
@@ -27,7 +24,6 @@ const ROLE_LABEL: Record<string, string> = {
 };
 
 export default function SettingsPage() {
-  const router = useRouter();
   const [me, setMe] = useState<User | null>(null);
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
@@ -52,15 +48,6 @@ export default function SettingsPage() {
   }, []);
 
   const hasAssistant = users.some((u) => u.role === "assistant");
-
-  function handleLogout() {
-    if (!confirm("להתנתק מהמערכת?")) return;
-    // התנתקות מקומית: מחיקת tokens. הקריאה ל-/auth/logout אופציונלית
-    // כי השרת stateless עם JWT.
-    void api.logout().catch(() => {}); // best-effort
-    clearTokens();
-    router.replace("/login");
-  }
 
   return (
     <AppShell title="הגדרות" hideSettings>
@@ -148,16 +135,8 @@ export default function SettingsPage() {
         </div>
       </div>
 
-      {/* התנתקות */}
-      <div className="mt-6">
-        <button
-          onClick={handleLogout}
-          className="w-full inline-flex items-center justify-center gap-2 bg-white border border-state-red/40 text-state-red rounded-xl py-3 font-medium"
-        >
-          <LogOut size={18} aria-hidden />
-          התנתקות
-        </button>
-      </div>
+      {/* אין כפתור התנתקות: המערכת נכנסת אוטומטית, ולכן מחיקת ה-tokens
+          הייתה מחזירה את המשתמשת פנימה מיד — כפתור שלא עושה כלום. */}
     </AppShell>
   );
 }
