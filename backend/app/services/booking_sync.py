@@ -101,14 +101,34 @@ async def _apply_cancellation(
     applied = booking_update.rowcount == 1
 
     # ה-lead_id נדרש גם כשה-UPDATE לא תפס — כדי לרשום את ה-activity.
-    lead_id = (
+    # ה-status נשלף יחד איתו כדי להבחין בין שני מצבים שונים לגמרי
+    # שמגיעים שניהם כ-`rowcount=0` (ראה למטה).
+    existing = (
         await db.execute(
-            select(Booking.lead_id).where(Booking.id == change.booking_id)
+            select(Booking.lead_id, Booking.status).where(
+                Booking.id == change.booking_id
+            )
         )
-    ).scalar_one_or_none()
-    if lead_id is None:
+    ).one_or_none()
+    if existing is None:
         # ה-booking לא קיים בכלל (נמחק, או אירוע שלא שייך לנו) — אין
         # למי לרשום activity.
+        await db.commit()
+        return "skipped"
+    lead_id, existing_status = existing
+
+    # **הד של ביטול שאנחנו עצמנו ביצענו — לא נרשם שוב.**
+    #
+    # `cancel_booking` ו-`close_lead` מוחקים את האירוע מ-Google אחרי
+    # שהם מסמנים את הפגישה כמבוטלת ורושמים activity. Google מחזיר את
+    # המחיקה הזו ב-webhook, ואז ה-UPDATE כאן לא תופס (הפגישה כבר
+    # `canceled`) — כלומר **כל ביטול ידני היה מייצר שורה שנייה**
+    # בציר הזמן של הליד, על אותו אירוע בדיוק.
+    #
+    # הרישום ב-`rowcount=0` (כלל 9) נשאר במקומו ונועד למצב אחר:
+    # פגישה שעדיין לא מבוטלת אצלנו, ש-Google אומר שבוטלה. שם ה-
+    # activity הוא המידע היחיד שמתעד שזה קרה.
+    if not applied and existing_status == BookingStatus.CANCELED.value:
         await db.commit()
         return "skipped"
 

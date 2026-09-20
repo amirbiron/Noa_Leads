@@ -972,7 +972,6 @@ async def create_booking_request(
             )
         )
 
-    # ===== 6. activity אחת — **אחרי** הניסיון ליצור את האירוע =====
     # `MEETING_APPROVED` ולא `MEETING_REQUESTED`, ורשומה אחת ולא שתיים:
     # - זה ה-signal הקנוני ל"הליד עבר ל-BOOKED", ושני צרכנים נשענים
     #   עליו — `jobs/post_meeting_tasks.py` (דרך `metadata.booking_id`)
@@ -991,36 +990,41 @@ async def create_booking_request(
     # ה-activity מתעד את הכוונה, והדגל מבדיל בין "ניסינו" ל"הצלחנו".
     # הסדר הנעול נשמר — ה-UPDATE על הליד עדיין רץ *לפני* הקריאה
     # לגוגל, ולכן `rowcount=0` עדיין לא מדליף אירוע יתום.
-    await log_activity(
-        db,
-        lead_id=lead.id,
-        activity_type=ActivityType.MEETING_APPROVED,
-        performed_by=None,  # public — אין user מחובר
-        content=notes,
-        metadata={
-            "booking_id": str(booking_id),
-            "slot_start": slot_start.isoformat(),
-            "slot_end": slot_end.isoformat(),
-            "contact_phone": contact_phone,
-            # מבדיל בין פגישה שנקבעה אוטומטית לבין אישור ידני ישן.
-            "auto_confirmed": True,
-            "calendar_event_created": event_id is not None,
-        },
-    )
-
-    # קביעת פגישה = touchpoint inbound (הלקוח חזר אלינו). סוגרת tasks
-    # תקועים — בעיקר warm_followup ("הלקוח לא חזר") שכבר לא רלוונטי.
-    await close_touchpoint_tasks(db, lead.id, now_utc)
-
-    # ===== 7. commit עם compensation =====
-    # אם ה-commit נכשל ויש אירוע ביומן — מוחקים אותו, אחרת נשארת ביומן
-    # של נועה פגישה שאין לה רישום במערכת. ה-compensation רץ ב-session
-    # **חדש**: ה-session הנוכחי עשה rollback, ו-`delete_calendar_event`
-    # עושה קריאות DB משלו (טעינת credentials, אולי רענון token).
+    # ===== 6+7. כל מה שרץ מכאן ועד ה-commit — תחת compensation אחד =====
+    #
+    # **הגבול נקבע לפי "האם האירוע כבר קיים ב-Google", ולא לפי
+    # "commit".** מרגע שהאירוע נוצר, *כל* שגיאה עד סוף הטרנזקציה
+    # משאירה אותו יתום ביומן של נועה בלי רישום במערכת. הגרסה שקדמה
+    # עטפה רק את ה-`commit`, ולכן `log_activity` ו-`close_touchpoint_tasks`
+    # רצו מחוץ לכיסוי — שגיאה בהן הייתה מדלגת על המחיקה.
     try:
+        await log_activity(
+            db,
+            lead_id=lead.id,
+            activity_type=ActivityType.MEETING_APPROVED,
+            performed_by=None,  # public — אין user מחובר
+            content=notes,
+            metadata={
+                "booking_id": str(booking_id),
+                "slot_start": slot_start.isoformat(),
+                "slot_end": slot_end.isoformat(),
+                "contact_phone": contact_phone,
+                # מבדיל בין פגישה שנקבעה אוטומטית לבין אישור ידני ישן.
+                "auto_confirmed": True,
+                "calendar_event_created": event_id is not None,
+            },
+        )
+
+        # קביעת פגישה = touchpoint inbound (הלקוח חזר אלינו). סוגרת
+        # tasks תקועים — בעיקר warm_followup שכבר לא רלוונטי.
+        await close_touchpoint_tasks(db, lead.id, now_utc)
+
         await db.commit()
     except Exception:
         await db.rollback()
+        # ה-compensation רץ ב-session **חדש**: ה-session הנוכחי עשה
+        # rollback, ו-`delete_calendar_event` עושה קריאות DB משלו
+        # (טעינת credentials, אולי רענון token).
         if event_id is not None:
             await _delete_orphan_event(event_id, event_calendar_id)
         raise

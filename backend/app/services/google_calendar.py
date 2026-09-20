@@ -605,6 +605,26 @@ async def set_calendar_selection(
 
     target_changed = (row.calendar_id or "primary") != target_id
 
+    # החלפת יומן יעד **לא** מפסיקה לבדוק את היומן הקודם.
+    #
+    # `busy_calendar_ids()` מוסיף את היעד הנוכחי אוטומטית, ולכן היעד
+    # אף פעם לא מופיע ברשימת ה"נוספים" — וברגע שהוא מפסיק להיות היעד
+    # הוא נופל מהחישוב לגמרי. התוצאה: כל הפגישות שכבר קיימות ביומן
+    # שנועה עזבה הופכות ל"פנוי", ולקוחות יכולים לקבוע עליהן. השתיקה
+    # כאן מוחלטת — אין שגיאה, רק סלוטים שנראים זמינים.
+    #
+    # ברירת המחדל היא fail-safe: שומרים אותו כנבדק. אם נועה רוצה
+    # להפסיק לבדוק אותו, היא מורידה את הסימון — פעולה מפורשת, ולא
+    # תופעת לוואי של החלפת יעד.
+    previous_target = row.calendar_id or "primary"
+    if (
+        target_changed
+        and previous_target != target_id
+        and previous_target in available
+        and previous_target not in cleaned_busy
+    ):
+        cleaned_busy.append(previous_target)
+
     await db.execute(
         update(GoogleCalendarCredentials)
         .where(GoogleCalendarCredentials.id == _SINGLETON_ID)

@@ -1,14 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
   Bell,
   ChevronLeft,
   Coins,
   FileText,
-  LogOut,
   Send,
   Sparkles,
   UserPlus,
@@ -26,7 +24,6 @@ const ROLE_LABEL: Record<string, string> = {
 };
 
 export default function SettingsPage() {
-  const router = useRouter();
   const [me, setMe] = useState<User | null>(null);
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);

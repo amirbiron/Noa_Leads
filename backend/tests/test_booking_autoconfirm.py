@@ -736,3 +736,197 @@ async def test_whitespace_note_does_not_reach_the_booking_row(db):
         await db.execute(select(Booking).where(Booking.lead_id == lead.id))
     ).scalar_one()
     assert booking.notes is None
+
+
+# ===================== הד של ביטול ידני =====================
+
+
+async def test_google_echo_of_our_own_cancel_is_not_logged_twice(db):
+    """ביטול ידני נרשם פעם אחת, גם אחרי ש-Google מחזיר את המחיקה.
+
+    `cancel_booking` מוחק את האירוע מ-Google אחרי שהוא מסמן את הפגישה
+    ורושם activity. Google מחזיר את המחיקה ב-webhook, ה-UPDATE שם לא
+    תופס (כבר `canceled`), ובלי ההבחנה הזו נרשמת שורה שנייה על אותו
+    אירוע בדיוק — כלומר כל ביטול ידני מופיע פעמיים בציר הזמן.
+    """
+    from sqlalchemy import func, select
+
+    from app.constants import ActivityType, BookingStatus
+    from app.models.activity import Activity
+    from app.models.booking import Booking
+    from app.services.booking import create_booking_request
+    from app.services.booking_sync import _apply_cancellation
+    from app.services.google_calendar import CalendarChange
+
+    lead = await _mk_lead(db, name="ביטול ידני")
+    start, end = _next_workday_slot(1)
+    await create_booking_request(
+        db, lead.booking_token, start, end, contact_phone="052-1234567"
+    )
+    booking = (
+        await db.execute(select(Booking).where(Booking.lead_id == lead.id))
+    ).scalar_one()
+
+    # מדמים את מה ש-cancel_booking עושה: מסמן מבוטלת ורושם activity.
+    booking.status = BookingStatus.CANCELED.value
+    await db.flush()
+
+    async def _count() -> int:
+        return (
+            await db.execute(
+                select(func.count())
+                .select_from(Activity)
+                .where(
+                    Activity.lead_id == lead.id,
+                    Activity.type == ActivityType.MEETING_CANCELED.value,
+                )
+            )
+        ).scalar_one()
+
+    before = await _count()
+
+    # וכעת ההד מ-Google על אותו אירוע.
+    result = await _apply_cancellation(
+        db,
+        CalendarChange(
+            booking_id=booking.id,
+            event_id=booking.google_calendar_event_id or "evt-echo",
+            status="cancelled",
+            start=None,
+            end=None,
+        ),
+    )
+    assert result == "skipped"
+    assert await _count() == before, "ההד נרשם כשורה נוספת"
+
+
+async def test_cancellation_google_did_not_apply_is_still_logged(db):
+    """הצד השני: ביטול מ-Google על פגישה שעדיין פעילה **כן** נרשם.
+
+    זה מה שכלל 9 נועד לו — ה-activity הוא התיעוד היחיד שהאירוע בוטל
+    ב-Google. הבדיקה שומרת שהתיקון להד לא בלע גם את המקרה הזה.
+    """
+    from sqlalchemy import func, select
+
+    from app.constants import ActivityType
+    from app.models.activity import Activity
+    from app.models.booking import Booking
+    from app.services.booking import create_booking_request
+    from app.services.booking_sync import _apply_cancellation
+    from app.services.google_calendar import CalendarChange
+
+    lead = await _mk_lead(db, name="ביטול מגוגל")
+    start, end = _next_workday_slot(2)
+    await create_booking_request(
+        db, lead.booking_token, start, end, contact_phone="052-1234567"
+    )
+    booking = (
+        await db.execute(select(Booking).where(Booking.lead_id == lead.id))
+    ).scalar_one()
+
+    # event_id שונה → ה-UPDATE לא יתפוס, אבל הפגישה עדיין פעילה.
+    await _apply_cancellation(
+        db,
+        CalendarChange(
+            booking_id=booking.id,
+            event_id="evt-אחר",
+            status="cancelled",
+            start=None,
+            end=None,
+        ),
+    )
+
+    logged = (
+        await db.execute(
+            select(func.count())
+            .select_from(Activity)
+            .where(
+                Activity.lead_id == lead.id,
+                Activity.type == ActivityType.MEETING_CANCELED.value,
+            )
+        )
+    ).scalar_one()
+    assert logged == 1, "ביטול שלא הוחל חייב להירשם (כלל 9)"
+
+
+# ===================== החלפת יומן יעד =====================
+
+
+async def test_switching_target_keeps_the_previous_calendar_checked(db, monkeypatch):
+    """החלפת יומן יעד לא מפסיקה לבדוק את היומן הקודם.
+
+    `busy_calendar_ids()` מוסיף את היעד הנוכחי אוטומטית, ולכן הוא
+    לעולם לא יושב ברשימת ה"נוספים". ברגע שהוא מפסיק להיות היעד הוא
+    נופל מהחישוב לגמרי — וכל הפגישות שכבר קיימות בו הופכות ל"פנוי"
+    מבחינת הדף הציבורי. אין שגיאה, רק סלוטים שנראים זמינים.
+    """
+    from app.models.google_credentials import GoogleCalendarCredentials
+    from app.services import google_calendar as gc
+    from app.utils.encryption import encrypt_secret
+
+    db.add(
+        GoogleCalendarCredentials(
+            id=1,
+            google_account_email="noa@example.com",
+            calendar_id="old@example.com",
+            busy_calendar_ids=[],
+            refresh_token_encrypted=encrypt_secret("r"),
+        )
+    )
+    await db.flush()
+
+    async def _fake_list(_db):
+        return [
+            {"id": "old@example.com", "summary": "ישן", "primary": False,
+             "access_role": "owner"},
+            {"id": "new@example.com", "summary": "חדש", "primary": True,
+             "access_role": "owner"},
+        ]
+
+    monkeypatch.setattr(gc, "list_account_calendars", _fake_list)
+
+    # נועה מחליפה יעד ושולחת רשימת "נוספים" ריקה — כמו שה-UI שולח,
+    # כי היעד הישן היה מסומן-ומושבת ולא ישב ב-state של ה-checkboxes.
+    changed = await gc.set_calendar_selection(
+        db, target_id="new@example.com", busy_ids=[]
+    )
+    assert changed is True
+
+    row = await gc.get_credentials_row(db)
+    assert gc.target_calendar_id(row) == "new@example.com"
+    assert "old@example.com" in gc.busy_calendar_ids(row), (
+        "היומן הקודם הפסיק להיבדק — לקוחות יכולים לקבוע על פגישות קיימות"
+    )
+
+
+async def test_target_switch_does_not_duplicate_an_already_listed_calendar(db, monkeypatch):
+    """אם היעד הקודם כבר ברשימת הנוספים — לא נוצרת כפילות."""
+    from app.models.google_credentials import GoogleCalendarCredentials
+    from app.services import google_calendar as gc
+    from app.utils.encryption import encrypt_secret
+
+    db.add(
+        GoogleCalendarCredentials(
+            id=1,
+            google_account_email="noa@example.com",
+            calendar_id="a@example.com",
+            busy_calendar_ids=[],
+            refresh_token_encrypted=encrypt_secret("r"),
+        )
+    )
+    await db.flush()
+
+    async def _fake_list(_db):
+        return [
+            {"id": "a@example.com", "summary": "א", "primary": False,
+             "access_role": "owner"},
+            {"id": "b@example.com", "summary": "ב", "primary": True,
+             "access_role": "owner"},
+        ]
+
+    monkeypatch.setattr(gc, "list_account_calendars", _fake_list)
+    await gc.set_calendar_selection(
+        db, target_id="b@example.com", busy_ids=["a@example.com"]
+    )
+    row = await gc.get_credentials_row(db)
+    assert row.busy_calendar_ids.count("a@example.com") == 1
