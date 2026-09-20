@@ -23,7 +23,7 @@ import { DynamicActionButton } from "@/components/DynamicActionButton";
 import { EditLeadModal } from "@/components/EditLeadModal";
 import { IncomingEmailsSection } from "@/components/IncomingEmailsSection";
 import { LogInboundButton } from "@/components/LogInboundButton";
-import { PendingBookingCard } from "@/components/PendingBookingCard";
+import { BookingCard } from "@/components/BookingCard";
 import { ProgramCard } from "@/components/ProgramCard";
 import { QuickActions } from "@/components/QuickActions";
 import { SectionHeader } from "@/components/SectionHeader";
@@ -79,7 +79,9 @@ export default function LeadDetailPage() {
   const [lead, setLead] = useState<Lead | null>(null);
   const [activities, setActivities] = useState<Activity[]>([]);
   const [programs, setPrograms] = useState<Program[]>([]);
-  const [activeBooking, setActiveBooking] = useState<BookingRead | null>(null);
+  // רשימה ולא פגישה בודדת: ליד יכול להחזיק כמה פגישות עתידיות
+  // (מיגרציה 0032). מוין בסדר עולה מהשרת.
+  const [bookings, setBookings] = useState<BookingRead[]>([]);
   const [emails, setEmails] = useState<EmailMessage[]>([]);
   // §19 D.1 — המלצת AI לליד רדום (null אם אין).
   const [dormantSuggestion, setDormantSuggestion] =
@@ -99,10 +101,9 @@ export default function LeadDetailPage() {
         api.getLead(id),
         api.getTimeline(id),
         api.listProgramsForLead(id),
-        // active booking — מוצג בכרטיס אישור/דחייה כשהליד ב-BOOKING_PENDING.
-        // נטען תמיד (גם כשהליד לא pending) כי זול ומאפשר תצוגה גם של booking
-        // approved בעתיד (שלב 14+).
-        api.getActiveBookingForLead(id),
+        // הפגישות של הליד — עתידיות + אחת שהסתיימה זה עתה (כדי
+        // שכפתור "סמני שהפגישה התקיימה" יישאר זמין).
+        api.listBookingsForLead(id),
         // מיילים נכנסים — Spec §20.10. ריק לליד שלא נקלט ממייל.
         api.getLeadEmails(id),
         // המלצת AI לליד רדום (§19 D.1). null לרוב הלידים.
@@ -111,7 +112,7 @@ export default function LeadDetailPage() {
       setLead(l);
       setActivities(t);
       setPrograms(p);
-      setActiveBooking(b);
+      setBookings(b);
       setEmails(e);
       setDormantSuggestion(ds);
     } catch (err) {
@@ -297,15 +298,15 @@ export default function LeadDetailPage() {
 
           {/* בקשת תור ממתינה — בראש לפי החשיבות (קריאה לפעולה ראשונה
               שנועה צריכה) */}
-          {activeBooking && activeBooking.status === "pending_approval" && (
-            <PendingBookingCard booking={activeBooking} onChanged={load} />
-          )}
+          {bookings.map((b) => (
+            <BookingCard key={b.id} booking={b} onChanged={load} />
+          ))}
 
           {/* כפתור "מה עכשיו?" — רק לליד פתוח */}
           {!["WON", "LOST", "ARCHIVED"].includes(lead.status) && (
             <DynamicActionButton
               lead={lead}
-              activeBooking={activeBooking}
+              bookings={bookings}
               onActionDone={load}
             />
           )}

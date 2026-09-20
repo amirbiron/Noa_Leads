@@ -20,6 +20,9 @@ from app.api.deps import DbSession, OwnerOnly
 from app.config import get_settings
 from app.core.exceptions import ValidationError
 from app.schemas.google_calendar import (
+    CalendarListItem,
+    CalendarListResponse,
+    CalendarSelectionRequest,
     GoogleAuthStartResponse,
     GoogleConnectionStatus,
 )
@@ -111,6 +114,38 @@ async def auth_callback(
 
     qs = urlencode({"google": "connected"})
     return RedirectResponse(f"{redirect_to_settings}?{qs}")
+
+
+@router.get("/calendars", response_model=CalendarListResponse)
+async def list_calendars(
+    db: DbSession, user: OwnerOnly
+) -> CalendarListResponse:
+    """כל היומנים שברשימת היומנים של החשבון המחובר.
+
+    מזין את הבורר ב-/settings: נועה מסמנת אילו יומנים נחשבים "תפוס"
+    ולאיזה מהם ייקבעו הפגישות.
+    """
+    items = await gc_service.list_account_calendars(db)
+    return CalendarListResponse(
+        items=[CalendarListItem(**item) for item in items]
+    )
+
+
+@router.put("/calendars", response_model=GoogleConnectionStatus)
+async def set_calendars(
+    payload: CalendarSelectionRequest, db: DbSession, user: OwnerOnly
+) -> GoogleConnectionStatus:
+    """שומר את יומן היעד ואת רשימת היומנים ה"תפוסים".
+
+    מחזיר את הסטטוס המעודכן כדי שה-UI יתרענן מהשרת ולא יסתמך על
+    ה-state המקומי שלו אחרי השמירה.
+    """
+    info = await gc_service.set_calendar_selection(
+        db,
+        target_id=payload.target_calendar_id,
+        busy_ids=payload.busy_calendar_ids,
+    )
+    return GoogleConnectionStatus(**info)
 
 
 @router.post("/disconnect", status_code=204)

@@ -18,8 +18,15 @@ from app.schemas.booking_page import (
     CreateBookingResponse,
 )
 from app.services import booking as booking_service
+from app.utils.rate_limit import SlidingWindowLimiter
 
 router = APIRouter(prefix="/booking", tags=["booking"])
+
+# מגבלת קצב ליצירת פגישה. אותו פרופיל חשיפה כמו `/auth/public-access`:
+# ציבורי, לא מאומת, וכותב גם ל-DB וגם ליומן Google. 20 לדקה גבוה
+# מאוד לשימוש אמיתי (לקוח קובע פגישה אחת) ועוצר סקריפט.
+# גלובלית ולא לפי IP — ההסבר ב-`app/utils/rate_limit.py`.
+_create_booking_limiter = SlidingWindowLimiter(max_events=20, window_seconds=60)
 
 
 @router.get("/{token}", response_model=BookingPageInfo)
@@ -44,10 +51,12 @@ async def get_availability(
 async def create_booking(
     token: UUID, payload: CreateBookingRequest, db: DbSession
 ) -> CreateBookingResponse:
+    _create_booking_limiter.check()
     return await booking_service.create_booking_request(
         db,
         token=token,
         slot_start=payload.slot_start,
         slot_end=payload.slot_end,
+        contact_phone=payload.contact_phone,
         notes=payload.notes,
     )

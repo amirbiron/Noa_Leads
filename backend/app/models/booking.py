@@ -1,14 +1,18 @@
 """
-Booking — בקשת תור מליד שתמתין לאישור נועה.
-פאזה 1: מבנה ה-DB מוכן. הסנכרון ל-Google Calendar בפאזה 2.
+Booking — פגישה שהליד קבע בדף הציבורי.
+
+עד מיגרציה 0032 זו הייתה *בקשה* שהמתינה לאישור נועה. מאז — הפגישה
+נקבעת ומאושרת מיד (`status='approved'`), והאירוע נוצר ביומן באותה
+טרנזקציה. הסטטוס `pending_approval` נשאר ב-enum כדי שנוכל להציג ולבטל
+שורות שנוצרו לפני השינוי; המערכת לא מייצרת אותו יותר.
 """
 
 from datetime import datetime
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from sqlalchemy import DateTime, ForeignKey, String, func
-from sqlalchemy.dialects.postgresql import UUID as PG_UUID
+from sqlalchemy import DateTime, ForeignKey, String, Text, func, text
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID, ExcludeConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, UUIDPrimaryKeyMixin
@@ -43,6 +47,15 @@ class Booking(UUIDPrimaryKeyMixin, Base):
         String(200), nullable=True
     )
 
+    # === פרטים שהליד מזין בדף קביעת הפגישה (מיגרציה 0032) ===
+    # טלפון ליצירת קשר — חובה בדף הציבורי, nullable ב-DB כי לשורות
+    # שנוצרו לפני השינוי אין אותו. 32 ולא 20 כמו `leads.phone`: מספר
+    # שאינו ישראלי עובר as-is ב-`app/utils/phone.py` ויכול לחרוג מ-20,
+    # וכאן זה שדה חובה בדף ציבורי — חריגה הייתה מוצגת ללקוח כ-500.
+    contact_phone: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # הערה חופשית מהליד. נכנסת לתיאור האירוע ביומן (עם escape).
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
@@ -56,3 +69,26 @@ class Booking(UUIDPrimaryKeyMixin, Base):
     )
 
     lead: Mapped["Lead"] = relationship(back_populates="bookings")
+
+    # ה-constraint הזה נוצר במיגרציה 0006 ולא היה משוקף כאן. בלי השיקוף,
+    # DB טרי שנבנה מה-metadata (CI / dev / prod חדש) מקבל schema שונה
+    # מ-prod הממוגרר, ו-`alembic autogenerate` היה מציע למחוק אותו.
+    #
+    # מה הוא עושה: אוסר על שתי פגישות *פעילות* לחפוף בזמן — גם בין לידים
+    # שונים. זו ההגנה היחידה שנשארה אחרי שמיגרציה 0032 הסירה את
+    # `idx_bookings_active_lead` (שאסר יותר מפגישה פעילה אחת לאותו ליד),
+    # והיא עדיין נכונה: נועה לא יכולה להיות בשתי פגישות באותו זמן.
+    # דורש את ה-extension btree_gist, שנטען במיגרציה 0006.
+    __table_args__ = (
+        ExcludeConstraint(
+            (
+                text(
+                    "tstzrange(requested_slot_start, requested_slot_end, '[)')"
+                ),
+                "&&",
+            ),
+            name="ck_bookings_no_overlap",
+            using="gist",
+            where=text("status IN ('pending_approval', 'approved')"),
+        ),
+    )

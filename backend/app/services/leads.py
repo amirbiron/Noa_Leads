@@ -5,6 +5,7 @@
 זה מבטל race conditions בין שני משתמשים שמנסים לעדכן אותו ליד בו-זמנית.
 """
 
+import logging
 from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
@@ -16,6 +17,7 @@ from app.constants import (
     CLOSED_LEAD_STATUSES,
     OPEN_LEAD_STATUSES,
     ActivityType,
+    BookingCancelSource,
     LeadStatus,
 )
 from app.core.exceptions import (
@@ -35,6 +37,8 @@ from app.schemas.lead import (
     LeadUpdate,
 )
 from app.services.activities import log_activity
+
+logger = logging.getLogger(__name__)
 
 
 # ===================== יצירה =====================
@@ -437,6 +441,19 @@ async def close_lead(
         .values(status=TaskStatus.CANCELED.value)
     )
 
+    # ביטול פגישות עתידיות + מחיקת האירועים מיומן Google.
+    #
+    # למה זה נוסף עכשיו: עד שהפגישות דרשו אישור של נועה, ליד שנסגר
+    # השאיר מאחוריו *בקשה* שלא אושרה — מטרד בלבד. מרגע שהפגישה נקבעת
+    # ומאושרת מיד, סגירת ליד משאירה **פגישה אמיתית ביומן של נועה**
+    # לליד שכבר נסגר, ו-`expire_stale_bookings` לעולם לא ינקה אותה
+    # (ה-WHERE שלו נוגע רק בלידים ב-BOOKING_PENDING/BOOKED).
+    # CLAUDE.md כלל 13 מחייב לטפל בזה: מעבר ל-WON/LOST/ARCHIVED דורש
+    # cascade על ה-Booking הפעיל.
+    canceled_event_ids = await _cancel_future_bookings_for_closed_lead(
+        db, lead_id
+    )
+
     # תיוג סמנטי מדויק לכל סוג סגירה — חשוב ל-audit timeline
     activity_type = {
         LeadStatus.WON: ActivityType.LEAD_WON,
@@ -458,7 +475,92 @@ async def close_lead(
     )
 
     await db.commit()
+
+    # מחיקת האירועים אחרי ה-commit: המצב הבטוח כאן הוא "בוטל במערכת".
+    # אירוע שנשאר ביומן הוא מטרד שנועה רואה ויכולה למחוק; פגישה שנשארת
+    # פעילה במערכת על ליד סגור היא נתון שגוי שאיש לא רואה.
+    for event_id in canceled_event_ids:
+        await _delete_calendar_event_best_effort(db, event_id)
+
     return await get_lead_or_404(db, lead_id)
+
+
+async def _cancel_future_bookings_for_closed_lead(
+    db: AsyncSession, lead_id: UUID
+) -> list[str]:
+    """מבטל את הפגישות העתידיות של ליד שנסגר. מחזיר את ה-event_ids למחיקה.
+
+    ה-UPDATE אטומי (`WHERE status IN (active)`), ולכן ביטול מקביל —
+    מהיומן או מהממשק — לא ייספר פעמיים. כל פגישה שבוטלה מקבלת activity
+    עם `source="lead_closed"`, כדי שהיא תהיה נפרדת ובת-זיהוי מביטול
+    ידני או מביטול שמקורו ב-Google.
+    """
+    from app.constants import BookingStatus
+    from app.models.booking import Booking
+    from app.services.booking import ACTIVE_BOOKING_STATUSES
+
+    now_utc = datetime.now(timezone.utc)
+
+    rows = (
+        await db.execute(
+            select(Booking.id, Booking.google_calendar_event_id).where(
+                Booking.lead_id == lead_id,
+                Booking.status.in_(ACTIVE_BOOKING_STATUSES),
+                Booking.requested_slot_end > now_utc,
+            )
+        )
+    ).all()
+    if not rows:
+        return []
+
+    await db.execute(
+        update(Booking)
+        .where(
+            Booking.lead_id == lead_id,
+            Booking.status.in_(ACTIVE_BOOKING_STATUSES),
+            Booking.requested_slot_end > now_utc,
+        )
+        .values(status=BookingStatus.CANCELED.value)
+    )
+
+    for row in rows:
+        await log_activity(
+            db,
+            lead_id=lead_id,
+            activity_type=ActivityType.MEETING_CANCELED,
+            performed_by=None,  # נגזר מסגירת הליד, לא פעולה נפרדת
+            content="הפגישה בוטלה אוטומטית כי הליד נסגר",
+            metadata={
+                "booking_id": str(row.id),
+                "source": BookingCancelSource.LEAD_CLOSED.value,
+                "applied": True,
+            },
+        )
+
+    return [r.google_calendar_event_id for r in rows if r.google_calendar_event_id]
+
+
+async def _delete_calendar_event_best_effort(
+    db: AsyncSession, event_id: str
+) -> None:
+    """מוחק אירוע מהיומן בלי להכשיל את הפעולה שקראה לו."""
+    from app.services import google_calendar as gc_service
+
+    try:
+        await gc_service.delete_calendar_event(db, event_id)
+    except (
+        gc_service.GoogleNotConfiguredError,
+        gc_service.GoogleNotConnectedError,
+        gc_service.GoogleAuthInvalidError,
+    ):
+        logger.warning(
+            "Lead closed but calendar unavailable — event %s left in place",
+            event_id,
+        )
+    except Exception:
+        logger.exception(
+            "Lead closed but failed to delete calendar event %s", event_id
+        )
 
 
 # ===================== העברה לעוזרת / בחזרה =====================

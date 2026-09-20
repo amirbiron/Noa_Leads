@@ -109,25 +109,18 @@ ACTIONS: dict[str, ActionDefinition] = {
         description="בקשת פגישה",
     ),
 
-    # אישור פגישה — BOOKING_PENDING → BOOKED
-    "approve_meeting": ActionDefinition(
-        activity_type=ActivityType.MEETING_APPROVED,
-        allowed_from=frozenset({LeadStatus.BOOKING_PENDING}),
-        transition_to=LeadStatus.BOOKED,
-        set_waiting_on="CLIENT",
-        last_activity_tag="meeting_approved",
-        description="אישור פגישה",
-    ),
-
-    # דחיית פגישה והחזרה לטיפול — BOOKING_PENDING → IN_PROGRESS
-    "reject_meeting": ActionDefinition(
-        activity_type=ActivityType.MEETING_REJECTED,
-        allowed_from=frozenset({LeadStatus.BOOKING_PENDING}),
-        transition_to=LeadStatus.IN_PROGRESS,
-        set_waiting_on="CLIENT",
-        last_activity_tag="meeting_rejected",
-        description="דחיית פגישה",
-    ),
+    # `approve_meeting` ו-`reject_meeting` **הוסרו**.
+    #
+    # שתי הפעולות היו מגיעות דרך `POST /leads/{id}/actions/{type}` —
+    # מסלול שונה לגמרי מ-`/bookings/*`. `approve_meeting` העביר את הליד
+    # ל-BOOKED אבל **לא נגע בשורת ה-Booking ולא יצר אירוע ביומן**:
+    # שינוי סטטוס בלי ה-side-effects שלו, בדיוק Pattern 1 ב-
+    # `docs/recurring-bug-patterns.md` ו-CLAUDE.md כלל 13. הכפתור
+    # "אשרי פגישה" ב-DynamicActionButton קרא בדיוק לזה.
+    #
+    # מאז ביטול שלב האישור אין מה לאשר — פגישה נקבעת מאושרת מיד ב-
+    # `booking.create_booking_request`, וביטול עובר דרך
+    # `booking.cancel_booking` שמטפל גם באירוע ביומן.
 
     # הערה פנימית — לא משנה סטטוס ולא מעדכן last_*.
     # חשוב לא לדרוס last_activity_type — שמירת הפעולה העסקית האחרונה
