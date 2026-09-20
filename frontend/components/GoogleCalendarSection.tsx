@@ -185,10 +185,22 @@ export function GoogleCalendarSection() {
     "";
   const resolvedTarget = resolveTarget(targetId);
 
+  // האם הערך שהשרת מחזיק מצביע בכלל ליומן שקיים ברשימה.
+  //
+  // בלי הבדיקה הזו נפתח מצב שקט: אם היומן שנשמר נמחק או שההרשאה אליו
+  // נשללה, `resolveTarget` נופל בשני הצדדים לאותו `writable[0]` —
+  // כלומר ה-select **מציג** יומן אחד בזמן שהשרת **מחזיק** יומן אחר,
+  // `dirty` יוצא false, כפתור השמירה לא מופיע, ואין שום דרך לתקן.
+  const serverTargetResolvable =
+    serverTarget === "primary"
+      ? writable.some((c) => c.primary)
+      : writable.some((c) => c.id === serverTarget);
+
   // גם צד השרת נפתר באותה פונקציה, אחרת `"primary"` מול כתובת המייל
   // של אותו יומן בדיוק היו נקראים כשינוי, וכפתור השמירה היה מופיע
   // לבד בכל טעינה בלי שנועה נגעה בכלום.
   const dirty =
+    !serverTargetResolvable ||
     resolvedTarget !== resolveTarget(serverTarget) ||
     [...busyIds].sort().join(",") !==
       [...(status?.busy_calendar_ids ?? [])].sort().join(",");

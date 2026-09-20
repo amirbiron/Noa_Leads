@@ -14,6 +14,23 @@ import pytest
 pytestmark = pytest.mark.asyncio
 
 
+async def _only_these_users(db):
+    """מנקה את טבלת המשתמשים בתוך הטרנזקציה של הטסט.
+
+    ארבעת הטסטים כאן בודקים **בחירה מתוך אוכלוסייה** — מי נבחר כשיש
+    שניים, ומה קורה כשאין אף אחד — ולכן הם חייבים לדעת מי נמצא בטבלה.
+    בלי השורה הזו הם עוברים רק על DB נקי, ונשברים ברגע שמישהו הריץ
+    `/setup` ידנית או שנשארו נתונים מהרצה קודמת. זה בדיוק קרה כאן:
+    אימות בדפדפן יצר owner ב-commit, ושלושה טסטים נפלו.
+
+    `CASCADE` כי ללידים, למשימות ולפעילויות יש FK למשתמש. הכל רץ בתוך
+    הטרנזקציה של ה-fixture ומתבטל ב-rollback בסוף הטסט.
+    """
+    from sqlalchemy import text
+
+    await db.execute(text("TRUNCATE users CASCADE"))
+
+
 async def _mk_owner(db, *, email: str, created_at: datetime):
     from app.constants import UserRole
     from app.core.security import hash_password
@@ -43,6 +60,7 @@ async def test_picks_the_lowest_id_among_owners_created_together(db):
     סדר אקראי מובטח — ולכן הסרת התיקון אינה מבטיחה נפילה. הטסט
     מאמת שהכלל נאכף; הוא אינו מוכיח שהוא מסוגל לתפוס את היעדרו.
     """
+    await _only_these_users(db)
     from app.services.auth import issue_owner_tokens
     from app.core.security import decode_refresh_token
 
@@ -59,6 +77,7 @@ async def test_picks_the_lowest_id_among_owners_created_together(db):
 
 async def test_warns_when_more_than_one_owner_exists(db, caplog):
     """המצב החריג נרשם, במקום להיבחר בשקט."""
+    await _only_these_users(db)
     from app.services.auth import issue_owner_tokens
 
     now = datetime.now(timezone.utc)
@@ -73,6 +92,7 @@ async def test_warns_when_more_than_one_owner_exists(db, caplog):
 
 async def test_single_owner_does_not_warn(db, caplog):
     """המקרה הרגיל שקט — אזהרה שנורית תמיד אינה אזהרה."""
+    await _only_these_users(db)
     from app.services.auth import issue_owner_tokens
 
     await _mk_owner(
@@ -87,6 +107,7 @@ async def test_single_owner_does_not_warn(db, caplog):
 
 async def test_no_owner_raises_auth_error(db):
     """DB ריק → 401, וה-frontend מפנה ל-/setup."""
+    await _only_these_users(db)
     from app.core.exceptions import AuthError
     from app.services.auth import issue_owner_tokens
 

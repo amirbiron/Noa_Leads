@@ -94,8 +94,13 @@ export function BookingCard({
           ברגע שהלקוח קבע: הפגישה נשמרת, הלקוח רואה "נקבע", ונועה —
           שעובדת מהיומן — פשוט לא יודעת שיש לה פגישה. בלי השורה הזו
           המצב הזה שקט לחלוטין. מוצג רק על פגישות שעוד לא עברו, כי על
-          פגישה שכבר חלפה אין מה לעשות עם המידע. */}
-      {!isPast && !booking.google_calendar_event_id && (
+          פגישה שכבר חלפה אין מה לעשות עם המידע.
+
+          `isLegacyPending` מוחרג: פגישה שנשארה מלפני ביטול שלב האישור
+          **אמורה** להיות בלי אירוע — בזרימה הישנה האירוע נוצר רק
+          באישור. אזהרה שמפנה לבדוק את חיבור היומן הייתה שולחת את נועה
+          לתקן משהו תקין. ההסבר הנכון למצב הזה כבר מוצג למטה. */}
+      {!isPast && !isLegacyPending && !booking.google_calendar_event_id && (
         <div className="mt-3 flex items-start gap-2 bg-state-orange/10 border border-state-orange/30 rounded-lg px-3 py-2 text-xs text-gray-700">
           <AlertTriangle
             size={13}

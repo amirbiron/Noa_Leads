@@ -10,6 +10,9 @@
     "typecheck": "tsc --noEmit",
     "test:unit": "node --experimental-strip-types lib/authRetry.test.ts"
   },
+  "engines": {
+    "node": ">=22.6.0"
+  },
   "dependencies": {
     "next": "^15.5.18",
     "react": "19.0.0",

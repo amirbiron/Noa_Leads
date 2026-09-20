@@ -65,7 +65,7 @@
 |---|---|---|
 | **11 — OAuth + credentials** | ✅ | cookieless flow (JWT state), Fernet encryption, owner-only |
 | **12 — דף קביעת תור ציבורי** | ✅ | `/book/{token}`, FreeBusy + DB busy, EXCLUDE constraint למניעת overlap |
-| **13 — אישור/דחייה ע"י נועה** | ✅ | `PendingBookingCard` בדף הליד, `/bookings/{id}/approve\|reject`, אירוע נוצר ביומן עם `extendedProperties.private.bookingId` כעוגן לשלב 14. fail-safe ל-rollback אם Google נכשל. |
+| **13 — הפגישה נקבעת מיד** | ✅ | אין שלב אישור. `create_booking_request` יוצר `status=approved` וכותב את האירוע ליומן באותה טרנזקציה, עם `extendedProperties.private.bookingId` כעוגן לשלב 14. fail-safe ל-rollback אם Google נכשל. `BookingCard` בדף הליד מציג את הפגישה עם כפתור ביטול; **רק ביטול הפגישה הפעילה האחרונה** מחזיר את הליד ל-`IN_PROGRESS` (`release_lead_if_no_active_booking`). |
 | **14 — סנכרון הפוך** | ✅ | Watch channels (auto על OAuth), `/webhooks/google-calendar`, syncToken + 410 resync, BackgroundTasks ל-ack מהיר, FOR UPDATE lock לסידור webhook מקבילים. ביטול ב-Google → ליד `IN_PROGRESS`+NOAH. שינוי זמן → עדכון שקט + activity log. cron `renew_calendar_watch` יומי. דורש `BACKEND_URL`. |
 | **15 — Post-meeting update** | ✅ | `jobs/post_meeting_tasks.py` יומי ב-02:00 (לפני expire_stale ב-03:30). יוצר Task `POST_MEETING_UPDATE` לכל ליד שהפגישה שלו עברה ב-48h האחרונות, status approved/canceled, ועדיין לא נסגר. מסנן ביטולים מ-Google sync (הפגישה לא קרתה). אינדמפוטנטי דרך NOT EXISTS. UI: בלי שינוי, ה-/today מציג כל ה-tasks. סגירת ליד מבטלת את ה-task אוטומטית דרך `close_lead`. |
 
@@ -121,7 +121,7 @@
 | Timezones | כל הדאטה ב-UTC ב-DB; UI ב-Asia/Jerusalem; חישובי שבוע/יום עם `datetime.combine` עצמאי | מניעת DST shift באביב/סתיו |
 | מיגרציות | Alembic, אוטומטי דרך `preDeployCommand: alembic upgrade head` | אפס terminal לdeploy |
 | Cron jobs | 5 jobs נפרדים (~$5/חודש ב-Render) | פתוחה אפשרות לconsolidation לscheduler אחד אם עלות מטרידה — תוכנית קיימת |
-| Booking races | EXCLUDE USING gist + UNIQUE(lead_id) WHERE active | DB-level enforcement, לא הסתמכות על application logic |
+| Booking races | EXCLUDE USING gist על חפיפת זמנים + נעילת שורת הליד (`SELECT ... FOR UPDATE`) לפני בדיקת התקרה | ה-EXCLUDE הוא DB-level ומונע שתי פגישות חופפות גם בין לידים שונים. האינדקס `UNIQUE(lead_id) WHERE active` **הוסר** במיגרציה 0032 — ליד יכול להחזיק עד 3 פגישות עתידיות, והנעילה מסדרת בקשות מקבילות של אותו ליד בטור |
 | RTL | logical CSS bgmrt (`ms-`, `me-`, `border-s`), Tailwind v4 עם `@theme` | אומת בsweep — נקי לחלוטין |
 
 ---
