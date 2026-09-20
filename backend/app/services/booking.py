@@ -733,22 +733,30 @@ def build_event_description(lead: Lead, booking: Booking) -> str:
     """
     from app.utils.labels import SERVICE_SUBTYPE_HE
 
+    # כל שדה **מנוקה קודם ונבדק אחר כך**. הסדר ההפוך הוא באג: ערך של
+    # רווחים בלבד הוא truthy ב-Python, ולכן `if value:` על הערך הגולמי
+    # מכניס את השורה, ואז `_sanitize_for_event` עושה `strip` ומשאיר
+    # כותרת בלי תוכן — "הערה מהלקוח: " ביומן של נועה. הסכמה מנרמלת
+    # את נתיב הכניסה, אבל הפונקציה הזו מקבלת שורת DB ולכן היא חייבת
+    # להיות נכונה גם על נתונים שלא עברו דרכה.
+    def clean(value: str | None) -> str:
+        return _sanitize_for_event(value) if value else ""
+
     lines: list[str] = []
     if lead.service_subtype:
         subtype_he = SERVICE_SUBTYPE_HE.get(
             lead.service_subtype, lead.service_subtype
         )
         lines.append(f"סוג שירות: {subtype_he}")
-    if lead.organization_name:
-        lines.append(f"ארגון: {_sanitize_for_event(lead.organization_name)}")
-    phone = booking.contact_phone or lead.phone
-    if phone:
-        lines.append(f"טלפון: {_sanitize_for_event(phone)}")
-    if lead.email:
-        lines.append(f"מייל: {_sanitize_for_event(lead.email)}")
-    if booking.notes:
+    if organization := clean(lead.organization_name):
+        lines.append(f"ארגון: {organization}")
+    if phone := clean(booking.contact_phone or lead.phone):
+        lines.append(f"טלפון: {phone}")
+    if email := clean(lead.email):
+        lines.append(f"מייל: {email}")
+    if notes := clean(booking.notes):
         lines.append("")
-        lines.append(f"הערה מהלקוח: {_sanitize_for_event(booking.notes)}")
+        lines.append(f"הערה מהלקוח: {notes}")
     return "\n".join(lines)
 
 
@@ -918,37 +926,8 @@ async def create_booking_request(
             "מצב הפנייה השתנה בזמן השליחה. רעני את הדף ונסי שוב."
         )
 
-    # ===== 3. activity אחת =====
-    # `MEETING_APPROVED` ולא `MEETING_REQUESTED`, ורשומה אחת ולא שתיים:
-    # - זה ה-signal הקנוני ל"הליד עבר ל-BOOKED", ושני צרכנים נשענים
-    #   עליו — `jobs/post_meeting_tasks.py` (דרך `metadata.booking_id`)
-    #   ו-`services/summary_inputs.py`.
-    # - `Activity.created_at` הוא `now()` של הטרנזקציה, כלומר שתי
-    #   רשומות באותה טרנזקציה מקבלות חותמת זמן *זהה*, וכל שאילתת
-    #   "האחרון" הופכת ללא-דטרמיניסטית.
-    # - `last_activity_type` על הליד חייב להיות זהה ל-type שנרשם כאן,
-    #   אחרת סינונים downstream נשברים.
-    await log_activity(
-        db,
-        lead_id=lead.id,
-        activity_type=ActivityType.MEETING_APPROVED,
-        performed_by=None,  # public — אין user מחובר
-        content=notes,
-        metadata={
-            "booking_id": str(booking.id),
-            "slot_start": slot_start.isoformat(),
-            "slot_end": slot_end.isoformat(),
-            "contact_phone": contact_phone,
-            # מבדיל בין פגישה שנקבעה אוטומטית לבין אישור ידני ישן.
-            "auto_confirmed": True,
-        },
-    )
-
-    # קביעת פגישה = touchpoint inbound (הלקוח חזר אלינו). סוגרת tasks
-    # תקועים — בעיקר warm_followup ("הלקוח לא חזר") שכבר לא רלוונטי.
-    await close_touchpoint_tasks(db, lead.id, now_utc)
-
-    # extract primitives לפני כל דבר שעלול לגרור rollback — אחרי
+    # ===== 3. extract primitives =====
+    # לפני כל דבר שעלול לגרור rollback — אחרי
     # rollback כל attribute של אובייקט ORM פג-תוקף, וגישה אליו זורקת
     # MissingGreenlet ב-async session (כלל 5 ב-CLAUDE.md).
     booking_id = booking.id
@@ -959,8 +938,9 @@ async def create_booking_request(
 
     # ===== 4. יצירת האירוע ביומן — עדיין לפני ה-commit =====
     event_id: str | None = None
+    event_calendar_id: str | None = None
     try:
-        event_id = await gc_service.create_calendar_event(
+        event_id, event_calendar_id = await gc_service.create_calendar_event(
             db,
             booking_id=booking_id,
             summary=summary,
@@ -984,10 +964,55 @@ async def create_booking_request(
         await db.execute(
             update(Booking)
             .where(Booking.id == booking_id)
-            .values(google_calendar_event_id=event_id)
+            .values(
+                google_calendar_event_id=event_id,
+                # שומרים את היומן שבו האירוע באמת נוצר, כדי שביטול
+                # יפנה אליו גם אם נועה תחליף יומן יעד בינתיים.
+                google_calendar_id=event_calendar_id,
+            )
         )
 
-    # ===== 6. commit עם compensation =====
+    # ===== 6. activity אחת — **אחרי** הניסיון ליצור את האירוע =====
+    # `MEETING_APPROVED` ולא `MEETING_REQUESTED`, ורשומה אחת ולא שתיים:
+    # - זה ה-signal הקנוני ל"הליד עבר ל-BOOKED", ושני צרכנים נשענים
+    #   עליו — `jobs/post_meeting_tasks.py` (דרך `metadata.booking_id`)
+    #   ו-`services/summary_inputs.py`.
+    # - `Activity.created_at` הוא `now()` של הטרנזקציה, כלומר שתי
+    #   רשומות באותה טרנזקציה מקבלות חותמת זמן *זהה*, וכל שאילתת
+    #   "האחרון" הופכת ללא-דטרמיניסטית.
+    # - `last_activity_type` על הליד חייב להיות זהה ל-type שנרשם כאן,
+    #   אחרת סינונים downstream נשברים.
+    #
+    # **למה הרישום זז לכאן ולא נשאר לפני הקריאה לגוגל:** כשאין יומן
+    # מחובר, הענף למעלה עושה `pass` והפגישה נשמרת בלי אירוע — הלקוח
+    # רואה "הפגישה נקבעה", ונועה, שעובדת מהיומן, פשוט לא תדע שיש לה
+    # פגישה. מסלול חלופי חייב להירשם ככזה, אחרת הוא שקט לחלוטין.
+    # `calendar_event_created` הוא ה-`applied` של כלל 9 ב-CLAUDE.md:
+    # ה-activity מתעד את הכוונה, והדגל מבדיל בין "ניסינו" ל"הצלחנו".
+    # הסדר הנעול נשמר — ה-UPDATE על הליד עדיין רץ *לפני* הקריאה
+    # לגוגל, ולכן `rowcount=0` עדיין לא מדליף אירוע יתום.
+    await log_activity(
+        db,
+        lead_id=lead.id,
+        activity_type=ActivityType.MEETING_APPROVED,
+        performed_by=None,  # public — אין user מחובר
+        content=notes,
+        metadata={
+            "booking_id": str(booking_id),
+            "slot_start": slot_start.isoformat(),
+            "slot_end": slot_end.isoformat(),
+            "contact_phone": contact_phone,
+            # מבדיל בין פגישה שנקבעה אוטומטית לבין אישור ידני ישן.
+            "auto_confirmed": True,
+            "calendar_event_created": event_id is not None,
+        },
+    )
+
+    # קביעת פגישה = touchpoint inbound (הלקוח חזר אלינו). סוגרת tasks
+    # תקועים — בעיקר warm_followup ("הלקוח לא חזר") שכבר לא רלוונטי.
+    await close_touchpoint_tasks(db, lead.id, now_utc)
+
+    # ===== 7. commit עם compensation =====
     # אם ה-commit נכשל ויש אירוע ביומן — מוחקים אותו, אחרת נשארת ביומן
     # של נועה פגישה שאין לה רישום במערכת. ה-compensation רץ ב-session
     # **חדש**: ה-session הנוכחי עשה rollback, ו-`delete_calendar_event`
@@ -997,7 +1022,7 @@ async def create_booking_request(
     except Exception:
         await db.rollback()
         if event_id is not None:
-            await _delete_orphan_event(event_id)
+            await _delete_orphan_event(event_id, event_calendar_id)
         raise
 
     # אין Telegram על קביעת פגישה — Spec §16.3: "הדבר היחיד שמקבל פוש
@@ -1011,7 +1036,9 @@ async def create_booking_request(
     )
 
 
-async def _delete_orphan_event(event_id: str) -> None:
+async def _delete_orphan_event(
+    event_id: str, calendar_id: str | None = None
+) -> None:
     """מוחק אירוע שנוצר ביומן אבל ה-commit שלו נכשל.
 
     רץ ב-session נפרד בכוונה: הקורא כבר עשה rollback על ה-session שלו,
@@ -1029,7 +1056,9 @@ async def _delete_orphan_event(event_id: str) -> None:
 
     try:
         async with AsyncSessionLocal() as cleanup_db:
-            await gc_service.delete_calendar_event(cleanup_db, event_id)
+            await gc_service.delete_calendar_event(
+                cleanup_db, event_id, calendar_id
+            )
     except Exception:
         logger.error(
             "ORPHAN CALENDAR EVENT: failed to delete event %s after a failed "
@@ -1115,6 +1144,7 @@ async def cancel_booking(
             select(
                 Booking.lead_id,
                 Booking.google_calendar_event_id,
+                Booking.google_calendar_id,
                 Booking.status,
             ).where(Booking.id == booking_id)
         )
@@ -1124,6 +1154,7 @@ async def cancel_booking(
 
     lead_id = row.lead_id
     event_id = row.google_calendar_event_id
+    event_calendar_id = row.google_calendar_id
 
     cancel_result = await db.execute(
         update(Booking)
@@ -1170,7 +1201,9 @@ async def cancel_booking(
     # `delete_calendar_event` אידמפוטנטי ל-404/410.
     if applied and event_id:
         try:
-            await gc_service.delete_calendar_event(db, event_id)
+            await gc_service.delete_calendar_event(
+                db, event_id, event_calendar_id
+            )
         except (
             gc_service.GoogleNotConfiguredError,
             gc_service.GoogleNotConnectedError,

@@ -7,7 +7,15 @@ Google של נועה. CHECK(id=1) מבטיח שורה אחת בלבד.
 
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, DateTime, Integer, String, Text, func
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    Integer,
+    String,
+    Text,
+    func,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -32,8 +40,15 @@ class GoogleCalendarCredentials(Base):
     # ברשימת היומנים של אותו חשבון, והמערכת הציעה את השעות האלה כפנויות.
     # רשימת מחרוזות; ברירת מחדל [] (server_default ב-migration 0032, כדי
     # שהשורה הקיימת לא תקבל NULL).
+    # `server_default` חייב להופיע כאן ולא רק במיגרציה: `default=list`
+    # הוא ברירת מחדל של Python ולכן מכסה רק INSERT דרך ה-ORM. בלי
+    # ההצהרה הזו המודל והמיגרציה חלוקים על מה שה-DB עושה, ו-
+    # `alembic autogenerate` יראה את זה כהפרש בסבב הבא.
     busy_calendar_ids: Mapped[list[str]] = mapped_column(
-        JSONB, nullable=False, default=list
+        JSONB,
+        nullable=False,
+        default=list,
+        server_default=text("'[]'::jsonb"),
     )
 
     # tokens מוצפנים ע"י app.utils.encryption (Fernet)

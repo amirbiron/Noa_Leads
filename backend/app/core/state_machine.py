@@ -97,19 +97,7 @@ ACTIONS: dict[str, ActionDefinition] = {
         description="שליחת הצעת מחיר",
     ),
 
-    # בקשת תור (מדף קביעת תורים) — IN_PROGRESS/NEW → BOOKING_PENDING
-    "request_meeting": ActionDefinition(
-        activity_type=ActivityType.MEETING_REQUESTED,
-        allowed_from=frozenset({LeadStatus.NEW, LeadStatus.IN_PROGRESS}),
-        transition_to=LeadStatus.BOOKING_PENDING,
-        set_last_inbound=True,
-        set_reply_boost=True,
-        set_waiting_on="NOAH",
-        last_activity_tag="meeting_requested",
-        description="בקשת פגישה",
-    ),
-
-    # `approve_meeting` ו-`reject_meeting` **הוסרו**.
+    # `request_meeting`, `approve_meeting` ו-`reject_meeting` **הוסרו**.
     #
     # שתי הפעולות היו מגיעות דרך `POST /leads/{id}/actions/{type}` —
     # מסלול שונה לגמרי מ-`/bookings/*`. `approve_meeting` העביר את הליד
@@ -121,6 +109,17 @@ ACTIONS: dict[str, ActionDefinition] = {
     # מאז ביטול שלב האישור אין מה לאשר — פגישה נקבעת מאושרת מיד ב-
     # `booking.create_booking_request`, וביטול עובר דרך
     # `booking.cancel_booking` שמטפל גם באירוע ביומן.
+    #
+    # `request_meeting` הוסר מאותה סיבה, ומסיבה נוספת וחמורה יותר:
+    # הוא העביר את הליד ל-BOOKING_PENDING **בלי ליצור שורת Booking**.
+    # כל עוד הדף הציבורי ייצר BOOKING_PENDING עם שורה תואמת, הליד היה
+    # יוצא משם דרך אישור או דרך `_expire_stale_bookings`. מרגע שהדף
+    # מייצר BOOKED ישירות, הפעולה הזו נשארה **המפיקה היחידה** של
+    # הסטטוס — ובלי שורת Booking אין למי לפוג: `_expire_stale_bookings`
+    # עובד על שורות Booking, ו-`release_lead_if_no_active_booking`
+    # מתנה על `status = 'BOOKED'`. כלומר ליד שהיה מגיע לשם היה נתקע
+    # שם לצמיתות. אין לה קוראים בקוד (אומת ב-grep על frontend ו-
+    # backend), ולכן ההסרה אינה משנה התנהגות קיימת.
 
     # הערה פנימית — לא משנה סטטוס ולא מעדכן last_*.
     # חשוב לא לדרוס last_activity_type — שמירת הפעולה העסקית האחרונה

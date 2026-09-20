@@ -660,3 +660,79 @@ async def test_finished_meeting_still_listed_when_another_is_upcoming(db):
     # ממוין בסדר עולה — שהסתיימה קודם, העתידית אחריה.
     assert rows[0].requested_slot_start < rows[1].requested_slot_start
     assert rows[0].requested_slot_end < datetime.now(timezone.utc)
+
+
+# ===================== מסלול חלופי: פגישה בלי אירוע ביומן =====================
+
+
+async def test_booking_without_calendar_is_marked_as_such(db):
+    """פגישה שנקבעה כשהיומן לא מחובר — מסומנת, לא שקטה.
+
+    זה המסלול שרץ בפרודקשן כשנועה עדיין לא חיברה יומן: הפגישה נשמרת,
+    הלקוח רואה "הפגישה נקבעה", ונועה — שעובדת מהיומן — לא יודעת שיש
+    לה פגישה. הדגל `calendar_event_created` הוא מה שמאפשר לדעת, גם
+    ב-UI וגם בכל ניתוח downstream.
+    """
+    from sqlalchemy import select
+
+    from app.constants import ActivityType
+    from app.models.activity import Activity
+    from app.models.booking import Booking
+    from app.services.booking import create_booking_request
+
+    lead = await _mk_lead(db, name="ללא יומן")
+    start, end = _next_workday_slot(1)
+    await create_booking_request(
+        db, lead.booking_token, start, end, contact_phone="052-1234567"
+    )
+
+    booking = (
+        await db.execute(select(Booking).where(Booking.lead_id == lead.id))
+    ).scalar_one()
+    # אין credentials בטסטים → אין אירוע, וגם אין יומן לשמור.
+    assert booking.google_calendar_event_id is None
+    assert booking.google_calendar_id is None
+
+    activity = (
+        await db.execute(
+            select(Activity).where(
+                Activity.lead_id == lead.id,
+                Activity.type == ActivityType.MEETING_APPROVED.value,
+            )
+        )
+    ).scalar_one()
+    assert activity.activity_metadata["calendar_event_created"] is False
+    # הדגל נוסף ולא החליף — שאר הצרכנים ממשיכים לעבוד.
+    assert activity.activity_metadata["auto_confirmed"] is True
+    assert activity.activity_metadata["booking_id"] == str(booking.id)
+
+
+async def test_whitespace_note_does_not_reach_the_booking_row(db):
+    """הנרמול בגבול מגיע עד ה-DB, לא רק עד התיאור."""
+    from sqlalchemy import select
+
+    from app.models.booking import Booking
+    from app.schemas.booking_page import CreateBookingRequest
+    from app.services.booking import create_booking_request
+
+    lead = await _mk_lead(db, name="הערה ריקה")
+    start, end = _next_workday_slot(1)
+    payload = CreateBookingRequest(
+        slot_start=start,
+        slot_end=end,
+        contact_phone="052-1234567",
+        notes="   ",
+    )
+    await create_booking_request(
+        db,
+        lead.booking_token,
+        payload.slot_start,
+        payload.slot_end,
+        contact_phone=payload.contact_phone,
+        notes=payload.notes,
+    )
+
+    booking = (
+        await db.execute(select(Booking).where(Booking.lead_id == lead.id))
+    ).scalar_one()
+    assert booking.notes is None

@@ -370,3 +370,46 @@ def test_rate_limiter_window_rolls_forward(monkeypatch):
 
     fake_now[0] += 61
     limiter.check()  # לא אמור לזרוק
+
+
+# ===================== הערה ריקה =====================
+
+
+def test_notes_of_only_whitespace_becomes_none():
+    """הערה של רווחים בלבד היא הערה ריקה.
+
+    בלי הנרמול בגבול, `"   "` הוא truthy גם ב-Python וגם ב-JS, ולכן
+    הוא עובר את `if booking.notes:` וגם את `{booking.notes && ...}` —
+    ומייצר שורת "הערה מהלקוח:" ריקה ביומן ובלוק הערה ריק בכרטיס.
+    """
+    from app.schemas.booking_page import CreateBookingRequest
+
+    now = datetime.now(timezone.utc)
+    req = CreateBookingRequest(
+        slot_start=now,
+        slot_end=now + timedelta(hours=1),
+        contact_phone="052-1234567",
+        notes="   \t\n  ",
+    )
+    assert req.notes is None
+
+
+def test_notes_keeps_content_and_trims_edges():
+    from app.schemas.booking_page import CreateBookingRequest
+
+    now = datetime.now(timezone.utc)
+    req = CreateBookingRequest(
+        slot_start=now,
+        slot_end=now + timedelta(hours=1),
+        contact_phone="052-1234567",
+        notes="  אגיע עם בן זוג  ",
+    )
+    assert req.notes == "אגיע עם בן זוג"
+
+
+def test_description_omits_a_whitespace_only_note():
+    """הצד השני של אותו באג — ברמת בניית התיאור."""
+    from app.services.booking import build_event_description
+
+    desc = build_event_description(_lead(), _booking(notes="   "))
+    assert "הערה מהלקוח" not in desc

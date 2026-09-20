@@ -2,6 +2,7 @@
 שירות auth — login, refresh, אימות משתמש.
 """
 
+import logging
 from uuid import UUID
 
 from sqlalchemy import select
@@ -17,6 +18,8 @@ from app.core.security import (
 )
 from app.models.user import User
 from app.schemas.auth import TokenResponse
+
+logger = logging.getLogger(__name__)
 
 
 # bcrypt hash אמיתי שנוצר פעם אחת בטעינת המודול. משמש להרצת verify
@@ -64,15 +67,31 @@ async def issue_owner_tokens(db: AsyncSession) -> TokenResponse:
     result = await db.execute(
         select(User)
         .where(User.role == UserRole.OWNER.value)
-        # המערכת חד-טננטית ויש owner אחד. `order_by` + `limit` מגן
-        # מפני `MultipleResultsFound` אם אי-פעם ייווצר שני — עדיף
-        # להיכנס כוותיק מאשר להחזיר 500.
-        .order_by(User.created_at.asc())
-        .limit(1)
+        # המערכת חד-טננטית ויש owner אחד, אבל זו הנחה — ולכן היא
+        # מגודרת. שני דברים חשובים כאן:
+        #
+        # 1. **ה-tiebreaker על `id` הוא חובה, לא נוי.** `created_at`
+        #    לבדו אינו עמודה ייחודית: שני owners שנוצרו באותה
+        #    טרנזקציה מקבלים `now()` *זהה בדיוק*, ואז `ORDER BY`
+        #    עליו אינו סדר טוטאלי והשורה שתחזור נקבעת לפי מה
+        #    שה-planner החליט באותו רגע. בנתיב הזה, שהוא השורה
+        #    היחידה שקובעת **כזהות מי** כל מבקר בכתובת נכנס בלי
+        #    סיסמה, זהות שמתהפכת בין בקשות אינה פגם קוסמטי.
+        # 2. **`limit(2)` ולא `limit(1)`** — כדי שנוכל *לדעת* שהמצב
+        #    החריג קרה במקום לבחור בשקט. מסלול חריג נרשם ככזה.
+        .order_by(User.created_at.asc(), User.id.asc())
+        .limit(2)
     )
-    owner = result.scalar_one_or_none()
-    if owner is None:
+    owners = result.scalars().all()
+    if not owners:
         raise AuthError()
+    if len(owners) > 1:
+        logger.warning(
+            "public-access: יותר מ-owner אחד במערכת — נבחר %s. "
+            "הכניסה ללא סיסמה מכניסה את כולם כמשתמש הזה.",
+            owners[0].id,
+        )
+    owner = owners[0]
 
     access_token, expires_in = create_access_token(owner.id)
     refresh_token = create_refresh_token(owner.id)

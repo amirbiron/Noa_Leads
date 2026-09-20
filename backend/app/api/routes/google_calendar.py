@@ -140,12 +140,34 @@ async def set_calendars(
     מחזיר את הסטטוס המעודכן כדי שה-UI יתרענן מהשרת ולא יסתמך על
     ה-state המקומי שלו אחרי השמירה.
     """
-    info = await gc_service.set_calendar_selection(
+    target_changed = await gc_service.set_calendar_selection(
         db,
         target_id=payload.target_calendar_id,
         busy_ids=payload.busy_calendar_ids,
     )
-    return GoogleConnectionStatus(**info)
+    # ה-route הוא בעל הטרנזקציה (CLAUDE.md כלל 15).
+    await db.commit()
+
+    if target_changed:
+        # אחרי ה-commit, ובכוונה: הזזת ה-watch היא קריאה חיצונית
+        # best-effort. `create_watch` עוצר את הישן בעצמו וכותב
+        # sync_token חדש שמתאים ליומן החדש; בלעדיו ה-cursor היה ממשיך
+        # להצביע ליומן הקודם. כישלון כאן לא מבטל את הבחירה — הסנכרון
+        # ההפוך אופציונלי, בדיוק כמו בחיבור הראשוני.
+        try:
+            await gc_service.create_watch(db)
+        except gc_service.WatchNotConfiguredError:
+            logger.info(
+                "Calendar target changed but BACKEND_URL not configured — "
+                "reverse sync stays off"
+            )
+        except Exception:
+            logger.exception(
+                "Failed to move watch channel to new target calendar %s",
+                payload.target_calendar_id,
+            )
+
+    return GoogleConnectionStatus(**await gc_service.get_status(db))
 
 
 @router.post("/disconnect", status_code=204)

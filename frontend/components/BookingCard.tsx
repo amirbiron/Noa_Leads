@@ -90,6 +90,25 @@ export function BookingCard({
         </div>
       )}
 
+      {/* פגישה פעילה שאין לה אירוע ביומן. קורה כשהיומן לא היה מחובר
+          ברגע שהלקוח קבע: הפגישה נשמרת, הלקוח רואה "נקבע", ונועה —
+          שעובדת מהיומן — פשוט לא יודעת שיש לה פגישה. בלי השורה הזו
+          המצב הזה שקט לחלוטין. מוצג רק על פגישות שעוד לא עברו, כי על
+          פגישה שכבר חלפה אין מה לעשות עם המידע. */}
+      {!isPast && !booking.google_calendar_event_id && (
+        <div className="mt-3 flex items-start gap-2 bg-state-orange/10 border border-state-orange/30 rounded-lg px-3 py-2 text-xs text-gray-700">
+          <AlertTriangle
+            size={13}
+            className="text-state-orange mt-0.5 shrink-0"
+            aria-hidden
+          />
+          <span>
+            הפגישה לא נוספה ליומן Google. בדקי את חיבור היומן בהגדרות,
+            ואז הוסיפי אותה ידנית.
+          </span>
+        </div>
+      )}
+
       {isLegacyPending && (
         <div className="mt-3 flex items-start gap-2 bg-state-orange/10 border border-state-orange/30 rounded-lg px-3 py-2 text-xs text-gray-700">
           <AlertTriangle

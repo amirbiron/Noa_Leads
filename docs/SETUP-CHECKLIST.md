@@ -290,7 +290,8 @@
 - [ ] **Backend health check:**
   - `GET <BACKEND_URL>/health` → `{"status":"ok"}`. Render auto-runs
     זה ככה healthcheck.
-- [ ] **Login:** פתח את ה-frontend, התחבר כ-Owner שיצרת.
+- [ ] **כניסה:** פתח את ה-frontend בכתובת הראשית. אין מסך התחברות —
+  הדף נכנס אוטומטית כ-Owner. אם הוא מפנה ל-`/setup`, ה-Owner עוד לא נוצר.
 - [ ] **יצירת ליד ידני:** דרך UI (`/leads/new`) או API:
   ```bash
   curl -X POST <BACKEND_URL>/intake/manual \

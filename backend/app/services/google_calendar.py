@@ -553,8 +553,15 @@ _WRITABLE_ROLES = {"writer", "owner"}
 
 async def set_calendar_selection(
     db: AsyncSession, *, target_id: str, busy_ids: list[str]
-) -> dict[str, Any]:
+) -> bool:
     """שומר את יומן היעד ואת רשימת היומנים ה"תפוסים".
+
+    מחזיר `target_changed` — האם יומן היעד השתנה, כלומר האם צריך להזיז
+    את ה-watch. הפונקציה עושה `flush` בלבד ו**לא** `commit`: גבול
+    הטרנזקציה שייך ל-route (CLAUDE.md כלל 15). הזזת ה-watch עצמה יושבת
+    ב-route ורצה *אחרי* ה-commit, כי היא קריאה חיצונית best-effort ואין
+    סיבה שהיא תחזיק טרנזקציה פתוחה — אותו דפוס שכבר קיים ב-
+    `booking.cancel_booking`.
 
     שני המזהים מאומתים מול `calendarList` בזמן השמירה, ולא רק בזמן
     השימוש. הסיבה: `_fetch_google_busy` הוא fail-safe — יומן שלא ניתן
@@ -603,26 +610,8 @@ async def set_calendar_selection(
         .where(GoogleCalendarCredentials.id == _SINGLETON_ID)
         .values(calendar_id=target_id, busy_calendar_ids=cleaned_busy)
     )
-    await db.commit()
-
-    if target_changed:
-        # create_watch עוצר את ה-watch הישן בעצמו וכותב sync_token חדש
-        # שמתאים ליומן החדש. כשלון כאן לא מבטל את הבחירה — הסנכרון
-        # ההפוך אופציונלי, בדיוק כמו בחיבור הראשוני.
-        try:
-            await create_watch(db)
-        except WatchNotConfiguredError:
-            logger.info(
-                "Calendar target changed but BACKEND_URL not configured — "
-                "reverse sync stays off"
-            )
-        except Exception:
-            logger.exception(
-                "Failed to move watch channel to new target calendar %s",
-                target_id,
-            )
-
-    return await get_status(db)
+    await db.flush()
+    return target_changed
 
 
 async def disconnect(db: AsyncSession) -> None:
@@ -654,9 +643,15 @@ async def create_calendar_event(
     description: str,
     start: datetime,
     end: datetime,
-) -> str:
+) -> tuple[str, str]:
     """
-    יוצר אירוע ב**יומן היעד** של נועה ומחזיר event_id.
+    יוצר אירוע ב**יומן היעד** של נועה ומחזיר `(event_id, calendar_id)`.
+
+    **למה מוחזר גם מזהה היומן:** האירוע חי ביומן שאליו נכתב, וזו עובדה
+    עליו — לא מצב גלובלי. אם נועה תחליף את יומן היעד ב-/settings,
+    `credentials.calendar_id` ישתנה, והאירוע הישן יישאר במקומו. קורא
+    שיבקש למחוק אותו לפי היעד ה*נוכחי* יפנה ליומן הלא נכון. לכן הקורא
+    שומר את מזהה היומן על שורת ה-Booking ומעביר אותו למחיקה.
 
     יומן היעד נקרא מ-`credentials.calendar_id` ולא מקובע ל-"primary" —
     נועה יכולה לבחור יומן אחר ב-/settings. היומנים ה"נוספים" (
@@ -678,16 +673,18 @@ async def create_calendar_event(
     row = await _load_row(db)
     if row is None:
         raise GoogleNotConnectedError()
-    return await asyncio.to_thread(
+    calendar_id = target_calendar_id(row)
+    event_id = await asyncio.to_thread(
         _create_event_blocking,
         creds,
-        target_calendar_id(row),
+        calendar_id,
         booking_id,
         summary,
         description,
         start,
         end,
     )
+    return event_id, calendar_id
 
 
 def _create_event_blocking(
@@ -731,23 +728,31 @@ def _create_event_blocking(
 
 
 
-async def delete_calendar_event(db: AsyncSession, event_id: str) -> None:
+async def delete_calendar_event(
+    db: AsyncSession, event_id: str, calendar_id: str | None = None
+) -> None:
     """
-    מוחק אירוע מיומן היעד. 404/410 (אירוע כבר נמחק) נספג שקט — אינדמפוטנטי.
+    מוחק אירוע. 404/410 (אירוע כבר נמחק) נספג שקט — אינדמפוטנטי.
     משמש לcompensation: אם commit של ה-DB נכשל אחרי יצירת אירוע, הקורא
     מוחק את האירוע ה-orphan כדי לא להשאיר ביומן של נועה פגישה שאינה ב-CRM.
 
-    **מגבלה ידועה:** אם נועה החליפה יומן יעד אחרי שהאירוע נוצר, המחיקה
-    תיכשל ב-404 על היומן החדש ותיספג בשקט — האירוע הישן יישאר ביומן
-    הקודם. זה המחיר של ספיגת 404 (שנדרשת לאידמפוטנטיות). החלפת יומן
-    היעד מתועדת כפעולה שכדאי לעשות כשאין פגישות עתידיות פתוחות.
+    `calendar_id` הוא **היומן שבו האירוע באמת נמצא**, כפי שנשמר על שורת
+    ה-Booking בעת היצירה. חובה להעביר אותו כשהוא ידוע: מחיקה לפי יומן
+    היעד ה*נוכחי* נכשלת ב-404 אם נועה החליפה יומן בינתיים, וה-404
+    נספג בשקט (זה מה שנדרש לאידמפוטנטיות) — כלומר האירוע היה נשאר
+    ביומן הישן לנצח, בלי שאיש יידע. `None` נשאר רק עבור פגישות שנוצרו
+    לפני שהעמודה קיימת, ושם הנפילה חזרה ליעד הנוכחי היא הניחוש הטוב
+    ביותר האפשרי.
     """
     creds = await get_credentials_or_404(db)
     row = await _load_row(db)
     if row is None:
         raise GoogleNotConnectedError()
     await asyncio.to_thread(
-        _delete_event_blocking, creds, target_calendar_id(row), event_id
+        _delete_event_blocking,
+        creds,
+        calendar_id or target_calendar_id(row),
+        event_id,
     )
 
 

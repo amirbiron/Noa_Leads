@@ -61,6 +61,15 @@ def upgrade() -> None:
         sa.Column("contact_phone", sa.String(length=32), nullable=True),
     )
     op.add_column("bookings", sa.Column("notes", sa.Text(), nullable=True))
+    # היומן שבו האירוע נוצר בפועל. האירוע חי ביומן שאליו נכתב, וזו
+    # עובדה עליו — לא מצב גלובלי. בלי העמודה הזו, ביטול פגישה אחרי
+    # שנועה החליפה יומן יעד היה פונה ליומן הלא נכון, מקבל 404, סופג
+    # אותו בשקט (כנדרש לאידמפוטנטיות), והאירוע היה נשאר ביומן הישן.
+    # NULL = פגישה שנוצרה לפני העמודה; שם נופלים חזרה ליעד הנוכחי.
+    op.add_column(
+        "bookings",
+        sa.Column("google_calendar_id", sa.String(length=255), nullable=True),
+    )
 
     # ===== 4. יומנים נוספים שנחשבים "תפוס" =====
     # server_default='[]' נדרש כדי שהשורה הקיימת (singleton) תקבל ערך
@@ -78,6 +87,7 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_column("google_calendar_credentials", "busy_calendar_ids")
+    op.drop_column("bookings", "google_calendar_id")
     op.drop_column("bookings", "notes")
     op.drop_column("bookings", "contact_phone")
 

@@ -450,7 +450,7 @@ async def close_lead(
     # (ה-WHERE שלו נוגע רק בלידים ב-BOOKING_PENDING/BOOKED).
     # CLAUDE.md כלל 13 מחייב לטפל בזה: מעבר ל-WON/LOST/ARCHIVED דורש
     # cascade על ה-Booking הפעיל.
-    canceled_event_ids = await _cancel_future_bookings_for_closed_lead(
+    canceled_events = await _cancel_future_bookings_for_closed_lead(
         db, lead_id
     )
 
@@ -479,15 +479,15 @@ async def close_lead(
     # מחיקת האירועים אחרי ה-commit: המצב הבטוח כאן הוא "בוטל במערכת".
     # אירוע שנשאר ביומן הוא מטרד שנועה רואה ויכולה למחוק; פגישה שנשארת
     # פעילה במערכת על ליד סגור היא נתון שגוי שאיש לא רואה.
-    for event_id in canceled_event_ids:
-        await _delete_calendar_event_best_effort(db, event_id)
+    for event_id, event_calendar_id in canceled_events:
+        await _delete_calendar_event_best_effort(db, event_id, event_calendar_id)
 
     return await get_lead_or_404(db, lead_id)
 
 
 async def _cancel_future_bookings_for_closed_lead(
     db: AsyncSession, lead_id: UUID
-) -> list[str]:
+) -> list[tuple[str, str | None]]:
     """מבטל את הפגישות העתידיות של ליד שנסגר. מחזיר את ה-event_ids למחיקה.
 
     ה-UPDATE אטומי (`WHERE status IN (active)`), ולכן ביטול מקביל —
@@ -501,27 +501,31 @@ async def _cancel_future_bookings_for_closed_lead(
 
     now_utc = datetime.now(timezone.utc)
 
+    # UPDATE אחד עם RETURNING, ולא SELECT ואז UPDATE (CLAUDE.md כלל 2).
+    # הפרדה בין השניים היא check-then-act: ביטול מקביל — מ-`cancel_booking`
+    # או מסנכרון Google — יכול לתפוס פגישה בין השאילתות, ואז ה-UPDATE
+    # מבטל פחות שורות מאלה שנשלפו. התוצאה הייתה רשומת `MEETING_CANCELED`
+    # עם `"applied": True` על פגישה שהפעולה הזו **לא** ביטלה — כלומר
+    # בדיוק ההבחנה שהדגל הזה נועד לשמור עליה, הפוכה. עם RETURNING,
+    # כל שורה שחוזרת היא שורה שהמשפט הזה באמת שינה.
     rows = (
         await db.execute(
-            select(Booking.id, Booking.google_calendar_event_id).where(
+            update(Booking)
+            .where(
                 Booking.lead_id == lead_id,
                 Booking.status.in_(ACTIVE_BOOKING_STATUSES),
                 Booking.requested_slot_end > now_utc,
+            )
+            .values(status=BookingStatus.CANCELED.value)
+            .returning(
+                Booking.id,
+                Booking.google_calendar_event_id,
+                Booking.google_calendar_id,
             )
         )
     ).all()
     if not rows:
         return []
-
-    await db.execute(
-        update(Booking)
-        .where(
-            Booking.lead_id == lead_id,
-            Booking.status.in_(ACTIVE_BOOKING_STATUSES),
-            Booking.requested_slot_end > now_utc,
-        )
-        .values(status=BookingStatus.CANCELED.value)
-    )
 
     for row in rows:
         await log_activity(
@@ -537,17 +541,21 @@ async def _cancel_future_bookings_for_closed_lead(
             },
         )
 
-    return [r.google_calendar_event_id for r in rows if r.google_calendar_event_id]
+    return [
+        (r.google_calendar_event_id, r.google_calendar_id)
+        for r in rows
+        if r.google_calendar_event_id
+    ]
 
 
 async def _delete_calendar_event_best_effort(
-    db: AsyncSession, event_id: str
+    db: AsyncSession, event_id: str, calendar_id: str | None = None
 ) -> None:
     """מוחק אירוע מהיומן בלי להכשיל את הפעולה שקראה לו."""
     from app.services import google_calendar as gc_service
 
     try:
-        await gc_service.delete_calendar_event(db, event_id)
+        await gc_service.delete_calendar_event(db, event_id, calendar_id)
     except (
         gc_service.GoogleNotConfiguredError,
         gc_service.GoogleNotConnectedError,

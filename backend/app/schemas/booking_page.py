@@ -72,6 +72,25 @@ class CreateBookingRequest(BaseModel):
     # פרטים אופציונליים שהליד יכול לעדכן בעת הזמנה
     notes: str | None = Field(default=None, max_length=500)
 
+    @field_validator("notes")
+    @classmethod
+    def normalize_notes(cls, v: str | None) -> str | None:
+        """הערה של רווחים בלבד היא הערה ריקה — וצריך שהיא תהיה `None`.
+
+        הנרמול חייב לקרות **כאן**, בגבול, ולא אצל כל צרכן בנפרד:
+        מחרוזת של רווחים היא truthy גם ב-Python וגם ב-JS, ולכן בלי
+        השורה הזו היא עוברת את כל שלוש הבדיקות שבהמשך המסלול —
+        `if booking.notes:` ב-`build_event_description`, ו-
+        `{booking.notes && ...}` ב-`BookingCard.tsx` — ומייצרת שורת
+        "הערה מהלקוח:" בלי שום דבר אחריה ביומן של נועה, ובלוק הערה
+        ריק בכרטיס הליד. ה-`strip` שכבר קיים ב-`_sanitize_for_event`
+        רץ *אחרי* ההחלטה ולכן לא עוזר.
+        """
+        if v is None:
+            return None
+        stripped = v.strip()
+        return stripped or None
+
     @field_validator("contact_phone")
     @classmethod
     def validate_contact_phone(cls, v: str) -> str:

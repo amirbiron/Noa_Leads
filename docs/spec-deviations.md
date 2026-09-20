@@ -600,7 +600,7 @@
 
 ### איך נדע שהמסמך מוכן וטוב
 
-1. **כיסוי:** `grep -c "^### F-" docs/spec-deviations.md` מחזיר 23.
+1. **כיסוי:** `grep -c "^### F-" docs/spec-deviations.md` מחזיר 26.
 2. **Acceptance bullets:** לכל finding יש לפחות 2 acceptance bullets קונקרטיים.
 3. **Open decisions:** 9 ה-ODs סגורים (8 ב-v2.1 + 1 בהחלטת משתמש). אין יותר בלוקרים פתוחים.
 4. **Cross-link:** כל finding מצביע ל-Spec section ו-code path עם line numbers.
@@ -634,7 +634,7 @@ psql $DATABASE_URL -c "SELECT label, target_status, auto_followup_days FROM quic
 
 ---
 
-## F-33: שמירת טלפון בפורמט מקומי במקום `+972` — 🟠
+### F-33: שמירת טלפון בפורמט מקומי במקום `+972` — 🟠
 
 **Spec §25.2:** "israeli-phone-formatter: ... **שמירה כ-`+972` בנורמליזציה במסד הנתונים**".
 
@@ -654,7 +654,7 @@ psql $DATABASE_URL -c "SELECT label, target_status, auto_followup_days FROM quic
 
 ---
 
-## F-34: "העתקת קישור לקביעת פגישה" אינו מתועד ב-Spec — 🟡
+### F-34: "העתקת קישור לקביעת פגישה" אינו מתועד ב-Spec — 🟡
 
 **Spec §11.1:** מזכיר ש"הליד מקבל לינק לדף ייעודי", אבל לא מגדיר איך הלינק נוצר, מי מעתיק אותו, ואיפה הכפתור יושב.
 

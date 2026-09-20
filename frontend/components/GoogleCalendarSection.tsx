@@ -141,7 +141,7 @@ export function GoogleCalendarSection() {
   }
 
   async function saveCalendars() {
-    if (!targetId) return;
+    if (!resolvedTarget) return;
     setBusy("save");
     setError(null);
     try {
@@ -149,7 +149,7 @@ export function GoogleCalendarSection() {
       // שלמעלה מסנכרן ממנה את הטופס.
       setStatus(
         await api.setGoogleCalendars({
-          target_calendar_id: targetId,
+          target_calendar_id: resolvedTarget,
           busy_calendar_ids: busyIds,
         }),
       );
@@ -166,8 +166,30 @@ export function GoogleCalendarSection() {
     );
   }
 
+  // יומן היעד כפי שהוא באמת ניתן לבחירה ברשימה.
+  //
+  // הבעיה: השרת מחזיק `calendar_id` שיכול להיות המחרוזת `"primary"`
+  // (זה מה שנכתב בחיבור ראשון), בעוד `calendarList.list` מחזיר את
+  // היומן הראשי לפי **המזהה האמיתי שלו** — כתובת המייל של החשבון.
+  // כלומר `targetId === "primary"` לא תואם לאף `<option>`, והדפדפן
+  // מציג את האופציה הראשונה בזמן שה-state מחזיק ערך אחר. מכאן:
+  // `dirty` מחושב מול ערך שלא מוצג, והשמירה שולחת יומן שנועה לא
+  // בחרה. לכן פותרים את הערך פעם אחת, ומשתמשים בו בכל המקומות.
+  const writable = (calendars ?? []).filter((c) =>
+    WRITABLE_ROLES.has(c.access_role),
+  );
+  const resolveTarget = (value: string): string =>
+    writable.find((c) => c.id === value)?.id ??
+    (value === "primary" ? writable.find((c) => c.primary)?.id : undefined) ??
+    writable[0]?.id ??
+    "";
+  const resolvedTarget = resolveTarget(targetId);
+
+  // גם צד השרת נפתר באותה פונקציה, אחרת `"primary"` מול כתובת המייל
+  // של אותו יומן בדיוק היו נקראים כשינוי, וכפתור השמירה היה מופיע
+  // לבד בכל טעינה בלי שנועה נגעה בכלום.
   const dirty =
-    targetId !== serverTarget ||
+    resolvedTarget !== resolveTarget(serverTarget) ||
     [...busyIds].sort().join(",") !==
       [...(status?.busy_calendar_ids ?? [])].sort().join(",");
 
@@ -254,7 +276,7 @@ export function GoogleCalendarSection() {
                 </div>
                 <div className="space-y-1.5">
                   {calendars.map((cal) => {
-                    const isTarget = cal.id === targetId;
+                    const isTarget = cal.id === resolvedTarget;
                     return (
                       <label
                         key={cal.id}
@@ -288,12 +310,11 @@ export function GoogleCalendarSection() {
                     הפגישות ייקבעו ביומן
                   </div>
                   <select
-                    value={targetId}
+                    value={resolvedTarget}
                     onChange={(e) => setTargetId(e.target.value)}
                     className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm bg-white"
                   >
-                    {calendars
-                      .filter((c) => WRITABLE_ROLES.has(c.access_role))
+                    {writable
                       .map((cal) => (
                         <option key={cal.id} value={cal.id}>
                           {cal.summary}
@@ -301,7 +322,7 @@ export function GoogleCalendarSection() {
                       ))}
                   </select>
                 </label>
-                {calendars.every((c) => !WRITABLE_ROLES.has(c.access_role)) && (
+                {writable.length === 0 && (
                   <div className="text-xs text-state-orange mt-1">
                     אין יומן עם הרשאת כתיבה בחשבון הזה.
                   </div>
@@ -311,7 +332,7 @@ export function GoogleCalendarSection() {
               {dirty && (
                 <button
                   onClick={saveCalendars}
-                  disabled={busy !== null || !targetId}
+                  disabled={busy !== null || !resolvedTarget}
                   className="w-full rounded-lg bg-gray-900 text-white py-2 text-sm font-medium disabled:opacity-50"
                 >
                   {busy === "save" ? "שומרת…" : "שמירת בחירת היומנים"}
