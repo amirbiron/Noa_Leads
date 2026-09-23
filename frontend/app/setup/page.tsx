@@ -29,7 +29,9 @@ export default function SetupPage() {
       .getSetupStatus()
       .then((s) => {
         if (!s.setup_needed) {
-          router.replace("/login");
+          // כבר יש משתמש — אין מסך התחברות להפנות אליו; הדף הראשי
+          // נכנס מעצמו.
+          router.replace("/");
         } else {
           setChecking(false);
         }

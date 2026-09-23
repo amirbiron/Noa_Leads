@@ -10,10 +10,12 @@ import {
   Phone,
 } from "lucide-react";
 import { STATE_COLORS } from "@/lib/colors";
+import { taskTypeToTermKey } from "@/lib/glossary";
 import { formatLeadAge, labelCategory, labelTaskType } from "@/lib/hebrew";
 import { toWhatsAppDigits } from "@/lib/phone";
 import type { TodayActionItem } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { TermHint } from "./TermHint";
 import { api, ApiError } from "@/lib/api";
 import { SmartSnoozeMenu } from "./SmartSnoozeMenu";
 import { StateDot } from "./StateBadge";
@@ -79,10 +81,16 @@ export function TodayActionRow({ item, onChanged }: Props) {
               {formatLeadAge(item.last_activity_at, item.created_at)}
             </span>
           </div>
-          <div className="mt-1 text-sm text-gray-600 truncate">
-            {labelTaskType(item.task_type)}
-            {" · "}
-            {labelCategory(item.service_category)}
+          <div className="mt-1 text-sm text-gray-600 flex items-center min-w-0">
+            <span className="truncate">
+              {labelTaskType(item.task_type)}
+              {" · "}
+              {labelCategory(item.service_category)}
+            </span>
+            {(() => {
+              const termKey = taskTypeToTermKey(item.task_type);
+              return termKey ? <TermHint termKey={termKey} /> : null;
+            })()}
           </div>
           {/* §19 D.1 — נימוק ההמלצה לליד רדום (רק dormant_suggestion אקטיבי
               מגיע ל-/today). 2 שורות לכל היותר. */}

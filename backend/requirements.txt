@@ -24,6 +24,9 @@ bcrypt>=4.1.0,<5.0
 # ===== HTTP & external APIs =====
 httpx==0.28.1
 anthropic==0.42.0
+# OpenAI — ספק AI שני, בלעדי לתמלול קולי (§13.3, gpt-4o-transcribe).
+# נפרד מ-anthropic — שני מפתחות, שני לוגי עלות.
+openai>=1.0
 
 # ===== Phase 3 Stage 16: ניקוי תוכן מייל לפני AI =====
 # beautifulsoup4 לפרסור HTML. lxml = parser מהיר; fallback ל-html.parser
@@ -40,6 +43,12 @@ cryptography>=42.0.0
 google-api-python-client==2.157.0
 google-auth==2.37.0
 google-auth-oauthlib==1.2.1
+# מיובאים ברמת המודול ב-services/google_calendar.py כדי לקבוע timeout
+# מפורש ל-transport. הם מגיעים כתלות עקיפה של google-api-python-client,
+# אבל import ברמת מודול הופך אותם לתנאי לעליית השרת כולו — שינוי
+# בעץ התלויות היה מפיל את ה-boot במקום את פיצ'ר היומן בלבד.
+google-auth-httplib2==0.4.2
+httplib2==0.32.0
 
 # ===== Telegram =====
 python-telegram-bot==21.9

@@ -1,13 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
+  Bell,
   ChevronLeft,
   Coins,
   FileText,
-  LogOut,
   Send,
   Sparkles,
   UserPlus,
@@ -15,18 +14,10 @@ import {
 import { AppShell } from "@/components/AppShell";
 import { GmailConnectionSection } from "@/components/GmailConnectionSection";
 import { GoogleCalendarSection } from "@/components/GoogleCalendarSection";
+import { OpenBookingLinkSection } from "@/components/OpenBookingLinkSection";
 import { SectionHeader } from "@/components/SectionHeader";
 import { api, ApiError } from "@/lib/api";
-import { clearTokens } from "@/lib/auth";
 import type { User } from "@/lib/types";
-
-const FOLLOWUP_RULES = [
-  { label: "פולואפ הצעה תקועה", value: "אחרי 3 ימים ללא תגובה" },
-  { label: "סימון ליד רדום", value: "60 ימים ללא אינטראקציה" },
-  { label: "סוף יום עבודה", value: "שישי 16:00 — ערב חג גם" },
-  { label: "סיכום יומי לטלגרם", value: "כל יום 19:00" },
-  { label: "סיכום שבועי", value: "ראשון 08:00" },
-];
 
 const ROLE_LABEL: Record<string, string> = {
   owner: "בעלים",
@@ -34,7 +25,6 @@ const ROLE_LABEL: Record<string, string> = {
 };
 
 export default function SettingsPage() {
-  const router = useRouter();
   const [me, setMe] = useState<User | null>(null);
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
@@ -59,15 +49,6 @@ export default function SettingsPage() {
   }, []);
 
   const hasAssistant = users.some((u) => u.role === "assistant");
-
-  function handleLogout() {
-    if (!confirm("להתנתק מהמערכת?")) return;
-    // התנתקות מקומית: מחיקת tokens. הקריאה ל-/auth/logout אופציונלית
-    // כי השרת stateless עם JWT.
-    void api.logout().catch(() => {}); // best-effort
-    clearTokens();
-    router.replace("/login");
-  }
 
   return (
     <AppShell title="הגדרות" hideSettings>
@@ -104,6 +85,13 @@ export default function SettingsPage() {
             label="תעריפי שירות"
           />
         )}
+        {/* חוקי פולואף (§17.1) — תת-עמוד ייעודי (היה inline ומתפזר). owner
+            עורך, assistant readonly; ה-enforcement ב-backend. */}
+        <NavRow
+          href="/settings/followup-rules"
+          icon={<Bell size={18} />}
+          label="חוקי פולואף"
+        />
         <NavRow href="/proposals" icon={<Send size={18} className="rtl:-scale-x-100" />} label="הצעות פתוחות" />
       </ul>
 
@@ -119,6 +107,13 @@ export default function SettingsPage() {
         </>
       )}
 
+      {/* הקישור הפתוח (§11.5) — מחוץ לבלוק האינטגרציות ובכוונה: הבלוק
+          ההוא owner-only כי מסלולי /google/* דורשים OwnerOnly, אבל כאן
+          אין קריאה לשרת בכלל — זו כתובת ציבורית, כמו הקישור שבכרטיס
+          הליד, שגם העוזרת יכולה להעביר ללקוח. */}
+      <SectionHeader title="קביעת פגישה" />
+      <OpenBookingLinkSection />
+
       {/* הגדרת עוזרת ראשונית (§13.5) — setup חד-פעמי. מופיע רק ל-owner וכל עוד
           אין עוזרת במערכת; נעלם לצמיתות אחרי שנוצרה. לא חלק מהזרימה היומיומית. */}
       {me?.role === "owner" && !hasAssistant && (
@@ -130,24 +125,6 @@ export default function SettingsPage() {
           <AssistantSetupForm onCreated={loadUsers} />
         </>
       )}
-
-      {/* חוקי פולואפ */}
-      <SectionHeader
-        title="חוקי פולואפ"
-        hint="נקבע במערכת — עריכה תתווסף"
-      />
-      <ul className="bg-white rounded-xl border border-gray-200 divide-y divide-gray-100">
-        {FOLLOWUP_RULES.map((r) => (
-          <li
-            key={r.label}
-            className="flex items-baseline justify-between gap-3 px-3.5 py-2.5 text-sm"
-          >
-            <span className="text-gray-700">{r.label}</span>
-            <span className="text-gray-500 text-xs text-end">{r.value}</span>
-          </li>
-        ))}
-      </ul>
-
 
       {/* AI status — נכבה תמיד בפאזה 1 */}
       <SectionHeader title="פיצ'רים עתידיים" />
@@ -166,16 +143,8 @@ export default function SettingsPage() {
         </div>
       </div>
 
-      {/* התנתקות */}
-      <div className="mt-6">
-        <button
-          onClick={handleLogout}
-          className="w-full inline-flex items-center justify-center gap-2 bg-white border border-state-red/40 text-state-red rounded-xl py-3 font-medium"
-        >
-          <LogOut size={18} aria-hidden />
-          התנתקות
-        </button>
-      </div>
+      {/* אין כפתור התנתקות: המערכת נכנסת אוטומטית, ולכן מחיקת ה-tokens
+          הייתה מחזירה את המשתמשת פנימה מיד — כפתור שלא עושה כלום. */}
     </AppShell>
   );
 }

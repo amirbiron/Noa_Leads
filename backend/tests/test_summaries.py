@@ -27,7 +27,6 @@ _USAGE = {"model": "claude-sonnet-4-6", "input_tokens": 100, "output_tokens": 50
 def _daily_result(**over) -> DailySummaryResult:
     defaults = dict(
         bottom_line="שורה תחתונה קצרה.",
-        today="תיאור היום בקצרה.",
         highlights=[],
         needs_attention=[],
         tomorrow=None,
@@ -105,7 +104,9 @@ async def test_unknown_name_sets_validation_warning():
     """
     שם בפלט שלא בקלט → regen; אם נמשך → נשמר עם validation_warning=True (§6.6#3).
     """
-    bad = _daily_result(today="דיברתי עם דנה על העסקה.")  # "דנה" לא בקלט
+    # הסקציה הראשונה הזמינה לטקסט חופשי היא bottom_line (אחרי הסרת
+    # "today"). הולידציה סורקת את כל השדות, אז המקור לא משנה.
+    bad = _daily_result(bottom_line="דיברתי עם דנה על העסקה.")  # "דנה" לא בקלט
     fake = _make_fake_generate([bad, bad])  # נמשך גם אחרי regen
     out = await summaries._generate_validated(
         generate_fn=fake,
@@ -121,7 +122,7 @@ async def test_unknown_name_sets_validation_warning():
 
 async def test_known_name_no_warning():
     """שם בפלט שכן בקלט → אין warning, אין regen."""
-    good = _daily_result(today="חזרתי למירב כהן בנוגע להצעה.")
+    good = _daily_result(bottom_line="חזרתי למירב כהן בנוגע להצעה.")
     fake = _make_fake_generate([good])
     out = await summaries._generate_validated(
         generate_fn=fake,
@@ -144,7 +145,7 @@ async def test_shel_possessive_does_not_trigger_false_positive():
     """
     # "של החודש", "של השבוע" — שניהם פוסיביים תקינים שאינם שמות אנשים.
     valid = _daily_result(
-        today="זו הייתה ההצעה של החודש, ופייסבוק שמרה על המקום של השבוע."
+        bottom_line="זו הייתה ההצעה של החודש, ופייסבוק שמרה על המקום של השבוע."
     )
     fake = _make_fake_generate([valid])
     out = await summaries._generate_validated(

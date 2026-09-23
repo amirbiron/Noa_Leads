@@ -15,6 +15,7 @@ from app.schemas.dashboard import (
     PendingResponse,
     ProposalsResponse,
     TodayResponse,
+    UrgentResponse,
     WeeklyInsights,
 )
 from app.services import dashboard as dashboard_service
@@ -25,13 +26,16 @@ router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 @router.get("/home", response_model=HomeDashboardResponse)
 async def home(db: DbSession, user: CurrentUser) -> HomeDashboardResponse:
     """
-    תמונת מצב מרוכזת למסך הבית.
-    הסדר תואם את האפיון: פעולות היום → פניות חדשות → ממתין → תובנות.
-    daily_summary (F-07) מוצג כbubble כשיש סיכום עדכני (cron אחרי 19:00).
+    תמונת מצב למסך הבית ("לוח בוקר") — בלוקי counter + תובנות + סיכומי AI.
+
+    הרשימות המלאות (פעולות היום / פניות חדשות / ממתין) חיות בדפים
+    הייעודיים (/dashboard/today, /dashboard/pending, /leads). הבית
+    מציג רק מונים + כפתורי כניסה — כדי שהבוקר של נועה יתחיל ממיקוד.
     """
-    today_actions = await dashboard_service.get_today_actions(db)
-    new_leads = await dashboard_service.get_new_leads(db)
-    pending = await dashboard_service.get_pending(db)
+    new_leads_24h_count = await dashboard_service.get_new_leads_24h_count(db)
+    urgent_no_first_response_count = (
+        await dashboard_service.get_urgent_no_first_response_count(db)
+    )
     weekly_insights = await dashboard_service.get_weekly_insights(db)
     daily_summary = await dashboard_service.get_latest_daily_summary(db)
     ai_daily_summary = await dashboard_service.get_latest_ai_summary(
@@ -41,9 +45,8 @@ async def home(db: DbSession, user: CurrentUser) -> HomeDashboardResponse:
         db, SummaryType.WEEKLY.value
     )
     return HomeDashboardResponse(
-        today_actions=today_actions,
-        new_leads=new_leads,
-        pending=pending,
+        new_leads_24h_count=new_leads_24h_count,
+        urgent_no_first_response_count=urgent_no_first_response_count,
         weekly_insights=weekly_insights,
         daily_summary=daily_summary,
         ai_daily_summary=ai_daily_summary,
@@ -61,6 +64,17 @@ async def today(db: DbSession, user: CurrentUser) -> TodayResponse:
 async def pending(db: DbSession, user: CurrentUser) -> PendingResponse:
     items = await dashboard_service.get_pending(db)
     return PendingResponse(items=items)
+
+
+@router.get("/urgent", response_model=UrgentResponse)
+async def urgent(db: DbSession, user: CurrentUser) -> UrgentResponse:
+    """היעד של Block 3 בבית — הלידים שממתינים למענה ראשון 48h+.
+
+    הרשימה נשענת על אותם תנאים שמזינים את המונה ב-/home, כך שהמספר
+    בכרטיס ומה שנפתח בלחיצה עליו לא יכולים להתפצל.
+    """
+    items = await dashboard_service.get_urgent_no_first_response_leads(db)
+    return UrgentResponse(items=items)
 
 
 @router.get("/proposals", response_model=ProposalsResponse)

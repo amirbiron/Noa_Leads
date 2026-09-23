@@ -42,8 +42,23 @@
 8. סיכום → Back to Dashboard
 
 > **הערה על Verification**: אפליקציה ב-Testing mode עובדת מצוין עד 100
-> משתמשים. ל-MVP של נועה זה מספיק בלי תהליך verification של Google
+> משתמשים. ל-MVP של נועה זה מספיק בלי תהליך verification מלא של Google
 > (שיכול לקחת שבועות).
+>
+> ⚠️ **אבל חובה לעשות PUBLISH APP (Production) — אחרת החיבור פג כל 7 ימים.**
+> זו הנקודה הקריטית שקל לפספס: באפליקציה ב-**Testing** publishing status,
+> Google **מבטל את ה-refresh tokens אחרי 7 ימים**. התוצאה בפועל: חיבור
+> Gmail ו-Calendar "פג תוקף" כל שבוע, נועה צריכה להתחבר מחדש שוב ושוב,
+> והסנכרון נשבר בשקט בין לבין (היא מקבלת התראת טלגרם על הפקיעה).
+>
+> **הפתרון:** OAuth consent screen → **PUBLISH APP** → המצב הופך
+> ל-"In production". זה **לא** דורש את תהליך ה-verification המלא — רק
+> משנה את ה-publishing status, וזה מספיק כדי שה-refresh tokens יפסיקו
+> לפוג כל 7 ימים. בהתחברות תופיע פעם אחת אזהרת "Google hasn't verified
+> this app" → **Advanced → continue**; אחרי האישור החיבור יציב.
+>
+> **הבחנה:** *Test users* (סעיף 7 למטה) קובע מי **רשאי** להתחבר — זה
+> לא פותר את פקיעת ה-7 ימים. רק **Production publishing status** פותר.
 
 ## 4. יצירת OAuth Client ID
 

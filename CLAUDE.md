@@ -20,18 +20,6 @@
 1. **קודם מתכננים** – לפני כל מימוש, יש להציג תוכנית עבודה ברורה (עם הסברים בשפה פשוטה ומובנת לכל)
 2. **אחר כך מממשים** – המימוש מתחיל רק לאחר אישור התוכנית.
 
-## ⚠️ תזכורת זמנית: לבטל `auto` mode ב-Claude Code
-
-> **הוספה זמנית עד שאנתרופיק יתקנו את הבאג ב-auto mode.**
->
-> **לפני שליחת הצעת תכנון של plan mode (או מיד אחריה)** — חובה להזכיר למשתמש:
-> 1. **בצ'אט**: שורה בולטת קצרה, "תזכורת: לבטל את `auto` mode ב-Claude Code לפני אישור התוכנית". לא בתחתית של הודעה ארוכה.
-> 2. **בטלגרם** (אם הכלי `PushNotification` / MCP טלגרם מחובר): הודעה דחופה בכל פעם שעוברים plan mode.
->
-> **סיבה:** יש כרגע חשש לבאגים חמורים במצב `auto` — עלולים לגרום לפעולות לא צפויות, push חלקי, או דילוג על שלבי אימות.
->
-> **לא** לשלוח את התזכורת מחוץ למעבר plan mode (לא בכל הודעה רגילה).
-
 ## כלל חשוב: 
 
 אם נמצאו באגים כלשהם בריפו - תמיד נחפש פיתרונות שורשיים לבעיה, ולא פיתרונות "טלאי".
@@ -48,7 +36,7 @@
 > לפני push, חפש בכל הקבצים שהשתנו קריאות לפונקציות async. ודא שכל קריאה עטופה ב-`await`. coroutine object ללא await הוא תמיד truthy — זה באג שקט שיכול לשבור הכול.
 
 ### כלל 2: Race conditions — check-then-act חייב להיות אטומי
-> אל תפריד בין בדיקת תנאי לביצוע פעולה. אם יש lock/mutex, הבדיקה חייבת להיות בתוכו. במיוחד: daily limits, dedup checks, state transitions. השתמש ב-`UPDATE ... WHERE status = 'X'` + `rowcount` במקום SELECT+UPDATE.
+> אל תפריד בין בדיקת תנאי לביצוע פעולה. אם יש lock/mutex, הבדיקה חייבת להיות בתוכו. במיוחד: daily limits, dedup checks, state transitions. השתמש ב-`UPDATE ... WHERE status = 'X'` + `rowcount` במקום SELECT+UPDATE. ← העומק: `CORE-PATTERNS.md` U1 + `bugbot-rules/race-toctou.md` (ראה בלוק הטריגרים בסוף).
 
 ### כלל 3: אל תחשוף מידע פנימי ב-API responses
 > לפני כל שינוי ב-error handling או exception classes, ודא ש-`to_dict()` / response body לא מכילים: internal IDs, password hashes, stack traces, מזהי DB, או הודעות שגיאה באנגלית טכנית. החזר הודעה גנרית בעברית למשתמש.
@@ -92,13 +80,26 @@
 > - `WON` / `LOST` / `ARCHIVED` → רק דרך `close_lead` (closure_reason, closed_at, ביטול tasks).
 > - `IN_PROGRESS` → אם הליד היה ב-BOOKING_PENDING/BOOKED עם active booking → דורש קודם לטפל ב-booking.
 >
-> חוקיות: chip / custom action שמציב status — חוסם targets שדורשים flow ייעודי. ראה `_CHIP_FORBIDDEN_TARGETS` ב-`backend/app/schemas/quick_action_chip.py` כדוגמה.
+> חוקיות: chip / custom action שמציב status — חוסם targets שדורשים flow ייעודי. ראה `_CHIP_FORBIDDEN_TARGETS` ב-`backend/app/schemas/quick_action_chip.py` כדוגמה. ← העומק: `bugbot-rules/linked-field-atomicity.md` (ראה בלוק הטריגרים בסוף).
 
 ### כלל 14: כל touchpoint סוגר tasks מ-AUTO_CLOSE_TASK_TYPES
 > כל פעולה ש-Noah מבצעת על ליד (chip click, action, mark sent) היא touchpoint = "טיפלה". צריכה לסגור tasks תקועים מאותם sub-types שlist `AUTO_CLOSE_TASK_TYPES` ב-`backend/app/services/lead_actions.py` (FIRST_RESPONSE, LECTURE_INQUIRY, FOLLOWUP, AFTER_HOURS_REPLY, DORMANT_CHECK, WARM_FOLLOWUP, RETRY_CALL). אחרת ה-`/today` ו-`next_action_due_at` יציגו עבודה כפולה. ראה `_close_addressed_tasks` ב-lead_actions.py + שלב 2b ב-`apply_chip`.
 
 ### כלל 15: Service functions עושים flush, לא commit — ה-route/caller הוא בעל הטרנזקציה
-> פונקציות service שמשנות DB לעולם לא קוראות ל-`await db.commit()`. עושות `await db.flush()` בלבד (או אפילו רק `execute` עבור UPDATE/INSERT שלא דורש re-read), וה-route (ב-API) או ה-job (ב-cron) הוא היחיד שעושה commit. זה: (1) הופך את גבול-הטרנזקציה לנקודה אחת ניתנת-לחיזוי; (2) מאפשר ל-rollback-based test fixture (`backend/tests/conftest.py`) לנקות נתונים בין בדיקות — commit אי-אפשר ל-rollback, ושורה שנותרת ב-DB גורמת ל-`UniqueViolationError` בהרצה הבאה; (3) מאפשר composition של מספר service calls באותו endpoint תחת טרנזקציה אחת. **דוגמה נכונה:** `_store_summary` ב-`backend/app/services/summaries.py` עושה flush; `jobs/weekly_summary.py` עושה commit. **דוגמה שגויה שתוקנה:** סבב ו' של `increment_inaccurate_count` עשה commit פנימי — 3 בדיקות נכשלו בגלל זיהום-בין-הרצות. **הערה:** בקוד הקיים יש services נוספים שעדיין עושים commit (`leads`, `intake`, `tasks`, `templates` וכו') — הם לא במצב שובר-בדיקות כעת, אבל ייושרו לדפוס בעת המגע הבא בהם.
+> פונקציות service שמשנות DB לעולם לא קוראות ל-`await db.commit()`. עושות `await db.flush()` בלבד (או אפילו רק `execute` עבור UPDATE/INSERT שלא דורש re-read), וה-route (ב-API) או ה-job (ב-cron) הוא היחיד שעושה commit. זה: (1) הופך את גבול-הטרנזקציה לנקודה אחת ניתנת-לחיזוי; (2) מאפשר ל-rollback-based test fixture (`backend/tests/conftest.py`) לנקות נתונים בין בדיקות — commit אי-אפשר ל-rollback, ושורה שנותרת ב-DB גורמת ל-`UniqueViolationError` בהרצה הבאה; (3) מאפשר composition של מספר service calls באותו endpoint תחת טרנזקציה אחת. **דוגמה נכונה:** `_store_summary` ב-`backend/app/services/summaries.py` עושה flush; `jobs/weekly_summary.py` עושה commit. **דוגמה שגויה שתוקנה:** סבב ו' של `increment_inaccurate_count` עשה commit פנימי — 3 בדיקות נכשלו בגלל זיהום-בין-הרצות. **הערה:** בקוד הקיים יש services נוספים שעדיין עושים commit (`leads`, `intake`, `tasks`, `templates` וכו') — הם לא במצב שובר-בדיקות כעת, אבל ייושרו לדפוס בעת המגע הבא בהם. ← העומק: `BY-STACK/async-orm.md` (ראה בלוק הטריגרים בסוף).
+
+### כלל 16: עדכון מסמכי setup/deploy בכל הוספה רלוונטית לקוד
+> שני מסמכים מתחזקים את ידע ה-deploy עבור לקוח חדש, ושניהם **חייבים** להיות מסונכרנים עם הקוד. לפני commit שמוסיף משהו רלוונטי — עדכן אותם, אחרת deploy לכל לקוח חדש ישבר בשקט.
+>
+> **`docs/ENV-VARS-REFERENCE.md`** — reference מלא של כל ה-env vars (חובה + אופציונליים). **חובה לעדכן** בכל הוספה/הסרה/שינוי של env var, עם: שם, תיאור קצר למה הוא משמש, איפה משיגים את הערך (Anthropic console, Google Cloud Console, וכו'), ודוגמת ערך תקין. מסודר לפי קטגוריות (DB, Auth, AI models, integrations חיצוניות, וכו').
+>
+> **`docs/SETUP-CHECKLIST.md`** — checklist ממוקד **רק לפעולות ידניות** של מתאם המערכת ב-deploy ראשון (לא דברים אוטומטיים). **חובה לעדכן** כשמתווסף משהו שדורש פעולה ידנית: אינטגרציה חיצונית חדשה (Gmail OAuth, Telegram bot, ספק AI חדש), שינוי ב-Render config שלא נתפס ע"י `render.yaml` אוטומטית, צורך ב-initial data, סוג חדש של smoke test, וכו'. **אל תוסיף** דברים אוטומטיים (migrations רצות `alembic upgrade head` ב-`preDeployCommand`, cron jobs נטענים מ-render.yaml — לא ב-checklist).
+>
+> **טריגרים פרקטיים שדורשים עדכון:**
+> 1. הוספת env var → ENV-VARS-REFERENCE.md (תמיד) + SETUP-CHECKLIST.md (אם חובה).
+> 2. אינטגרציה חיצונית חדשה → SETUP-CHECKLIST.md (פעולות בצד הספק) + ENV-VARS-REFERENCE.md (env vars שלה).
+> 3. טבלה חדשה שדורשת seed → SETUP-CHECKLIST.md (סעיף "Initial Data").
+> 4. סוג חדש של webhook / OAuth callback → SETUP-CHECKLIST.md (callback URLs ב-Render).
 
 ---
 
@@ -152,3 +153,79 @@ references: סקיל הוא best-practice עם תוכן אינסטרומנטלי
 **Code review של מה שכבר נכתב:** ראה `docs/skills-review-plan.md`
 לרשימה של areas בקוד הקיים שצריך לעבור עליהם מול הסקילים. ה-review
 ייעשה משולב בעבודה השוטפת (כל פעם שאני נוגע ב-area), לא כשלב נפרד.
+
+---
+
+> ## דפוסי באגים — amir-bug-patterns 
+
+> **מתי להשתמש:** לפני נגיעה באחד הנושאים בטבלה, ובכל פעם שריוויוור תופס דפוס
+
+הריפו `amirbiron/amir-bug-patterns` מרכז דפוסי באגים שכבר עלו לי בפרודקשן — לא תיאוריה. הוא ממורר ב-CodeKeeper, אז קוראים אותו כך:
+
+```text
+codekeeper_docs_get_section(repo="amir-bug-patterns", path="CRITICAL-PATTERNS", section="K11")
+codekeeper_get_repo_file(repo="amir-bug-patterns", path="bugbot-rules/state-record-without-state-change.md")
+codekeeper_search_repo(repo="amir-bug-patterns", query="<מונח>")
+```
+
+> `codekeeper_docs_get_section` בלי `section` מחזיר את מפת הקובץ, עם גודל כל סעיף. עם `section` הוא מחזיר רק אותו, לפי מזהה (K11) או לפי שם הכותרת.
+> `codekeeper_get_repo_file` הוא לקריאת כל הקובץ, כשמופנים למשל לקובץ תחת `bugbot-rules/`.
+> `codekeeper_search_repo` הוא למקרה שלא יודעים באיזה קובץ או סעיף הדפוס נמצא.
+
+אם ה-MCP לא זמין בסשן: הריפו ציבורי, אז אפשר לצרף אותו לסשן (`add_repo` ואז clone) או לקרוא ממנו ישירות. אין צורך בהרשאות מיוחדות.
+
+
+## דפוסי באגים — amir-bug-patterns
+
+לפני שאתה נוגע באחד מהנושאים בטבלה — קרא את הקובץ המתאים ב-`amirbiron/amir-bug-patterns` (דרך MCP של CodeKeeper אם יש mirror, אחרת מ-GitHub). אלה דפוסים שכבר עלו לי בפרודקשן — לא תיאוריה.
+
+| כשאתה נוגע ב... | קרא |
+|---|---|
+| React forms / dropdowns מסונכרני-backend | `BY-STACK/react-frontend.md` |
+| sync tokens / webhooks של Calendar/Gmail | `BY-STACK/webhooks.md` + `CORE-PATTERNS.md` U1 |
+| סטטוסים ו-activity log | `BY-STACK/state-machine.md` |
+| SQLAlchemy async | `BY-STACK/async-orm.md` |
+| `except` שאחריו **המשך כרגיל** — `pass`, ערך ברירת מחדל, או דילוג על שלב — כשהכשל הוא בזמן ריצה ולא היעדר יכולת ידוע מראש | `bugbot-rules/silent-fallback-to-worse-path.md` + `BY-STACK/observability.md` דפוס 6 |
+| קובץ ב-`alembic/versions/` — `add_column`, `create_index`, `create_constraint`, `server_default` | `bugbot-rules/migration-model-drift.md` |
+| `.order_by(` שאחריו `.limit(`, או דפדוף | `bugbot-rules/pagination-tiebreaker.md` |
+| `SELECT` ואז `UPDATE`/`DELETE` על אותם תנאים, או בדיקה שאחריה הפעולה שהיא בדקה | `CORE-PATTERNS.md` U1 + `bugbot-rules/race-toctou.md` |
+| **ערך שהגיע מחוץ לתהליך** — גוף JSON, טופס ציבורי, payload, כותרת, ENV, פלט של LLM, או ערך שמשתמש הקליד | `CORE-PATTERNS.md` U3 + `bugbot-rules/external-input-isinstance.md` |
+| **שדה שהמשתמש מילא** ועובר סכמה — שיגיע גם לנקודת הכתיבה וגם ליעד הסופי | `bugbot-rules/input-field-not-persisted.md` |
+| `if <col>:` על עמודה nullable, או filter על ערך יחיד כשלישות יש כמה variants | `bugbot-rules/filter-too-narrow.md` |
+| filter של job ב-`backend/jobs/`, או מה שההרצה הראשונה שולחת | `BY-STACK/cron-jobs.md` |
+| route חדש, או שינוי ב-`Depends` — מי מגיע לזה בלי התחברות | `bugbot-rules/network-exposed-without-auth.md` |
+| מגבלת קצב, או כל החלטה שנשענת על ה-IP של המבקש | `bugbot-rules/rate-limit-xff-spoofing.md` |
+
+**כלל שנפרס כאן במלואו, כי הוא זה שכבר עלה בפרויקט הזה:** `except` שתופס כשל וממשיך במסלול חלופי הוא ממצא גם כשהתוצאה "נכונה". בסבב הפגישות המאושרות-אוטומטית, `except GoogleNotConnectedError: pass` שמר את הפגישה, הראה ללקוח "הפגישה נקבעה", והשאיר את נועה — שעובדת מהיומן — בלי לדעת שיש לה פגישה. העלות זהה, התוצאה שונה, ואין שגיאה. **מסלול חלופי חייב להיות מסומן** — דגל ב-`metadata` (כמו `applied` בכלל 9), ושורה ב-UI שמי שצריך לפעול באמת רואה.
+
+תמיד, בכל פרויקט:
+- לפני עטיפת קריאה ב-try/except → `CRITICAL-PATTERNS.md` K11 (כשל בערך החזרה)
+- כותב `except` שבולע — `pass`, ערך falsy או ברירת מחדל, `continue`, או דילוג על שלב והמשך כאילו הצליח → **המינימום** הוא לוג או הערה שאומרת למה הכשל הזה אינו מעניין. בלעדיהם זה ממצא, גם כשאין ✅ למשתמש במסלול. ‏(`raise` מחדש אינו בליעה)
+- **והמינימום הזה אינו מספיק כשה-`except` ממשיך למסלול חלופי.** לוג מתעד שהכשל קרה; הוא אינו אומר לאף אחד שהפעולה הושלמה חלקית. שם נדרשים **שניהם**: דגל ב-`metadata` שמבדיל בין "ניסינו" ל"הצלחנו" (כמו `applied` בכלל 9), **וגם** חיווי למי שצריך לפעול. ראה את הכלל שנפרס למעלה — זה בדיוק מה שנכשל כאן.
+- לפני כתיבת טסט חדש → `claude-md-snippets/testing.md`
+- אחרי שטסט נופל על חריגה → `bugbot-rules/widened-exception-scope.md` (אל תרחיב except)
+- לפני העברת סוד כפרמטר URL (`params={"key": ...}`) → `CRITICAL-PATTERNS.md` K14
+
+
+### סגירת הלולאה (חובה, לא רשות)
+
+1. **ריוויוור (cubic/qodo/CodeRabbit/claude) תפס דפוס אמיתי,** או **זיהית דפוס חוזר בעצמך** (תיקנת פעמיים את אותו סוג טעות) → באותו יום, בזמן שהראיות טריות:
+   - קודם חפש ב-`amir-bug-patterns` שהדפוס לא קיים כבר.
+   - ואז כתוב מסמך הצעה ב-CodeKeeper בשם `הצעת-דפוס-<נושא>.md`
+   - **אל תפתח PR ב-amir-bug-patterns.** ההצעה מאושרת קודם.
+2. **המסמך הוא ה-PR בטיוטה, וסשן אחר יבצע אותו כמו שהוא:**
+   - תאריך הכתיבה, הפרויקט, וה-PR או הקומיט שבו זה התגלה.
+   - הראיות: קוד, commit, מה נשבר בפועל.
+   - הסיווג לפי ה-README: לאיזה מסמך זה נכנס ואיזה סניפט נגזר.
+   - טיוטת הכלל.
+   - שורת הטריגר בנוסח מלא.
+   - לאילו פרויקטים השורה נכנסת.
+
+   המסמך מסתיים בשורה: **"לפני יישום: קרא את הסטיקי נוטס המצורפים למסמך הזה (`codekeeper_list_notes`). מה שכתוב בהם גובר על הטקסט. ואמת את הראיות מול הקוד של היום — המסמך נכתב בתאריך שלמעלה."**
+3. **אל תוסיף את שורת הטריגר לטבלה כאן.** היא תפנה לקובץ שעוד לא קיים. הדפוס והשורה נכנסים יחד, אחרי אישור, ולכן הם עדיין צעד אחד.
+4. **אין גישה ל-CodeKeeper בסשן** → תן לי את המסמך המלא בגוף התשובה, בבלוק אחד להעתקה, תחת הכותרת "הצעה ל-amir-bug-patterns", ואמור לי במפורש שצריך לשמור אותו. לא מדלגים.
+5. **טריגר מזהה מה אתה מקליד, לא באיזה מצב אתה נמצא.** ‏`LOCK_FAIL_OPEN` ו-`0.0.0.0` רואים על המסך; "מסלול שרץ גם ברקע" ו"אחד מארבעת הנתיבים האלה" הם דברים שצריך **לדעת**. שורה שדורשת את הידע הזה כתנאי כניסה דורשת בדיוק את התשובה שהיא אמורה לתת, ולכן לא תידלק — התנאי שייך למסמך, לא לשורה. ומאותה סיבה: לתאר **מחלקה** ולא למנות מופעים, כי רשימה מתיישנת ברגע שנוסף המופע הבא.
+
+התהליך המלא והמיפוי לשאר הפרויקטים: `INTEGRATION.md` באותו ריפו.
+
+---

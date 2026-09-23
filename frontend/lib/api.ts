@@ -2,16 +2,23 @@
 // ו-refresh אוטומטי כשה-access pokens פג.
 
 import { clearTokens, getAccessToken, getRefreshToken, setTokens } from "./auth";
+import { decideAuthRecovery, singleFlight } from "./authRetry";
 import type {
   Activity,
+  ApplyChipResponse,
   AvailabilityResponse,
   BookingPageInfo,
   BookingRead,
   CreateBookingResponse,
+  OpenBookingPageInfo,
+  OpenBookingResponse,
   DashboardPollResponse,
   DormantSuggestion,
   EmailMessage,
-  PendingBookingsResponse,
+  FollowupRule,
+  FollowupRuleUpdate,
+  GoogleCalendarListItem,
+  GoogleCalendarStatus,
   HomeDashboard,
   QuickActionChip,
   QuickActionChipCreate,
@@ -53,16 +60,53 @@ export class ApiError extends Error {
 
 interface FetcherOpts extends Omit<RequestInit, "body"> {
   body?: unknown;
-  // האם לנסות refresh אם מקבלים 401 (מנוטרל בקריאה ל-/auth/refresh כדי
-  // למנוע לולאה אינסופית)
+  // factory ל-body — נקרא מחדש בכל ניסיון, כולל retry אחרי 401.
+  // נחוץ ל-FormData/Blob ש-stream consume שלהם חד-פעמי: ה-fetch
+  // הראשון "אוכל" את הbody, ובלי factory ה-retry שולח בקשה ריקה.
+  // עדיפות: `bodyFactory` קודם ל-`body` אם שניהם נשלחו.
+  bodyFactory?: () => BodyInit;
+  // האם לנסות להתאושש מ-401 (מנוטרל ב-/auth/refresh, ב-/auth/public-access
+  // וב-endpoints ציבוריים, כדי למנוע רקורסיה).
   retryAuth?: boolean;
+  // דגלי "כבר ניסיתי" — **לכל בקשה בנפרד**, לא גלובליים. מועברים
+  // ברקורסיה כדי שכל בקשה תקבל לכל היותר ניסיון אחד מכל סוג.
+  // ראה `lib/authRetry.ts` להסבר על המעגל שזה עוצר.
+  refreshAttempted?: boolean;
+  publicAccessAttempted?: boolean;
 }
 
 async function fetcher<T>(path: string, opts: FetcherOpts = {}): Promise<T> {
-  const { body, retryAuth = true, ...rest } = opts;
+  const {
+    body,
+    bodyFactory,
+    retryAuth = true,
+    refreshAttempted = false,
+    publicAccessAttempted = false,
+    ...rest
+  } = opts;
   const headers = new Headers(rest.headers);
   headers.set("Accept", "application/json");
-  if (body !== undefined) headers.set("Content-Type", "application/json");
+
+  // קביעת ה-body לבקשה הזו. factory נקרא כאן (לא בעת בניית opts) —
+  // ה-retry מקבל את אותו opts ונקרא שוב, מה שמייצר body טרי.
+  let actualBody: BodyInit | undefined;
+  let isFormDataLike = false;
+  if (bodyFactory) {
+    actualBody = bodyFactory();
+    isFormDataLike =
+      typeof FormData !== "undefined" && actualBody instanceof FormData;
+  } else if (body !== undefined) {
+    const isFormData =
+      typeof FormData !== "undefined" && body instanceof FormData;
+    isFormDataLike = isFormData;
+    actualBody = isFormData ? (body as FormData) : JSON.stringify(body);
+  }
+
+  // FormData (multipart/form-data) — לא קובעים Content-Type ידנית כי
+  // הדפדפן חייב להגדיר אותו עם boundary אוטומטי. JSON — קובעים.
+  if (actualBody !== undefined && !isFormDataLike) {
+    headers.set("Content-Type", "application/json");
+  }
 
   const token = getAccessToken();
   if (token) headers.set("Authorization", `Bearer ${token}`);
@@ -70,23 +114,41 @@ async function fetcher<T>(path: string, opts: FetcherOpts = {}): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     ...rest,
     headers,
-    body: body !== undefined ? JSON.stringify(body) : undefined,
+    body: actualBody,
     // אין credentials כי אנחנו ב-cross-origin (subdomains שונים ב-Render).
     // auth ב-Bearer header, OAuth state ב-URL (לא cookies) — ראה
     // app/services/google_calendar.py:encode_oauth_state.
   });
 
-  // 401 → ננסה refresh פעם אחת ואז retry
-  if (res.status === 401 && retryAuth) {
-    const refreshed = await tryRefreshToken();
-    if (refreshed) {
-      return fetcher<T>(path, { ...opts, retryAuth: false });
+  // 401 → refresh, ואם זה לא עובד — כניסה אוטומטית. כל אחד מהם פעם
+  // אחת לכל בקשה; ההחלטה עצמה ב-`decideAuthRecovery` כדי שתהיה
+  // ניתנת לבדיקה בלי רשת.
+  if (res.status === 401) {
+    const step = decideAuthRecovery({
+      status: res.status,
+      retryAuth,
+      refreshAttempted,
+      publicAccessAttempted,
+      hasRefreshToken: getRefreshToken() !== null,
+    });
+
+    if (step === "refresh") {
+      // גם כשה-refresh נכשל משדרים מחדש: `tryRefreshToken` כבר ניקה
+      // את ה-tokens, ולכן הסיבוב הבא יקבל `hasRefreshToken=false`
+      // ויבחר בכניסה אוטומטית. `refreshAttempted` מבטיח שלא נחזור
+      // לכאן פעם שנייה.
+      await tryRefreshToken();
+      return fetcher<T>(path, { ...opts, refreshAttempted: true });
     }
-    clearTokens();
-    // ה-refresh נכשל — מנווטים ל-login. בלי זה הדף נשאר במצב שבור
-    // (כל קריאה הבאה תיכשל גם היא ב-401).
-    if (typeof window !== "undefined" && window.location.pathname !== "/login") {
-      window.location.href = "/login";
+
+    if (step === "public-access") {
+      const entered = await enterPublicAccess();
+      if (entered) {
+        return fetcher<T>(path, { ...opts, publicAccessAttempted: true });
+      }
+      // גם הכניסה האוטומטית נכשלה. מנקים tokens ונופלים לשגיאה
+      // למטה — **בלי** הפניה ובלי רענון עצמי, שהיו מייצרים לולאה.
+      clearTokens();
     }
   }
 
@@ -113,9 +175,32 @@ async function tryRefreshToken(): Promise<boolean> {
     setTokens(data.access_token, data.refresh_token);
     return true;
   } catch {
+    // ה-refresh token לא תקף יותר — מסלקים אותו, אחרת `decideAuthRecovery`
+    // היה בוחר "refresh" שוב בבקשה הבאה במקום לעבור לכניסה אוטומטית.
+    clearTokens();
     return false;
   }
 }
+
+/**
+ * כניסה אוטומטית כבעלים. אין מסך התחברות — פתיחת הכתובת היא הכניסה.
+ *
+ * עטוף ב-`singleFlight`: דף שטוען כמה endpoints במקביל ונופל ב-401
+ * בכולם ייצר קריאה **אחת** ל-`/auth/public-access`, לא אחת לכל בקשה.
+ * בלי זה היינו מגיעים למגבלת הקצב בשרת בטעינת דף אחת.
+ */
+export const enterPublicAccess = singleFlight(async (): Promise<boolean> => {
+  try {
+    const data = await fetcher<TokenResponse>("/auth/public-access", {
+      method: "POST",
+      retryAuth: false,
+    });
+    setTokens(data.access_token, data.refresh_token);
+    return true;
+  } catch {
+    return false;
+  }
+});
 
 // ===== API surface =====
 
@@ -156,6 +241,11 @@ export const api = {
   getPending: () =>
     fetcher<{ items: LeadCard[] }>("/dashboard/pending"),
 
+  // הלידים שמאחורי הכרטיס "דחוף — ללא מענה 48 שעות" בבית. אותה שאילתה
+  // שמייצרת את המונה — לכן המספר בכרטיס תמיד שווה לאורך הרשימה כאן.
+  getUrgent: () =>
+    fetcher<{ items: LeadCard[] }>("/dashboard/urgent"),
+
   getProposals: () =>
     fetcher<{ items: ProposalCard[] }>("/dashboard/proposals"),
 
@@ -167,6 +257,23 @@ export const api = {
     fetcher<DashboardPollResponse>(
       `/dashboard/poll?since=${encodeURIComponent(since)}`,
     ),
+
+  // C.1/C.2 §3.7: כפתור "לא מדויק" ב-AiSummaryCard. מעלה את
+  // inaccurate_count ב-1 לסיכום הספציפי (counter פנימי לבקרת איכות).
+  markAiSummaryInaccurate: (id: string) =>
+    fetcher<void>(`/dashboard/ai-summaries/${id}/inaccurate`, {
+      method: "POST",
+    }),
+
+  // ----- Followup rules (§17.1) -----
+  listFollowupRules: () =>
+    fetcher<FollowupRule[]>("/settings/followup-rules"),
+
+  updateFollowupRule: (key: string, payload: FollowupRuleUpdate) =>
+    fetcher<FollowupRule>(`/settings/followup-rules/${key}`, {
+      method: "PATCH",
+      body: payload,
+    }),
 
   // ----- Leads -----
   listLeads: (params: Record<string, string | number | boolean> = {}) => {
@@ -183,6 +290,64 @@ export const api = {
 
   updateLead: (id: string, payload: Partial<Lead>) =>
     fetcher<Lead>(`/leads/${id}`, { method: "PATCH", body: payload }),
+
+  // תמלול קולי (§13.3) — שולח blob אודיו, מקבל טקסט עברי. ה-endpoint
+  // לא כותב ל-DB; ה-UI שולח את הטקסט ב-updateLead הרגיל אם נועה
+  // מאשרת. שם השדה ב-FormData חייב להיות "audio_file" כדי לתאום ל-
+  // FastAPI UploadFile parameter name.
+  //
+  // `bodyFactory` (ולא `body`) — FormData הוא stream חד-פעמי. אם token
+  // פג והגיע 401, ה-fetcher יבנה FormData חדש ל-retry במקום לשלוח את
+  // הקודם שכבר consumed. ה-Blob עצמו נשאר חי בזיכרון; rebuild זול.
+  //
+  // `signal` (אופציונלי) — מאפשר ל-caller לבטל את הבקשה אם הקומפוננטה
+  // unmounts תוך כדי upload. בלי זה, ה-fetch ממשיך עד OpenAI ומכלה
+  // bytes/חיוב לחינם.
+  transcribeNote: (
+    leadId: string,
+    audioBlob: Blob,
+    mimeType: string,
+    signal?: AbortSignal,
+  ) =>
+    fetcher<{ text: string }>(`/leads/${leadId}/transcribe-note`, {
+      method: "POST",
+      signal,
+      bodyFactory: () => {
+        const form = new FormData();
+        const ext = mimeType.split("/")[1]?.split(";")[0] ?? "webm";
+        form.append("audio_file", audioBlob, `recording.${ext}`);
+        return form;
+      },
+    }),
+
+  // תמלול בלי lead — ל-NewLeadModal (לפני שהליד נוצר). הקונטקסט שמועבר
+  // הם השדות שכבר הוקלדו בטופס (שם, קטגוריה, sub-type) — משפר דיוק
+  // התמלול. ה-route ב-backend: routes/transcription.py.
+  transcribeForNewLead: (
+    audioBlob: Blob,
+    mimeType: string,
+    ctx: {
+      leadName?: string | null;
+      serviceCategory?: string | null;
+      serviceSubtype?: string | null;
+    },
+    signal?: AbortSignal,
+  ) =>
+    fetcher<{ text: string }>(`/transcribe-note`, {
+      method: "POST",
+      signal,
+      bodyFactory: () => {
+        const form = new FormData();
+        const ext = mimeType.split("/")[1]?.split(";")[0] ?? "webm";
+        form.append("audio_file", audioBlob, `recording.${ext}`);
+        if (ctx.leadName) form.append("lead_name", ctx.leadName);
+        if (ctx.serviceCategory)
+          form.append("service_category", ctx.serviceCategory);
+        if (ctx.serviceSubtype)
+          form.append("service_subtype", ctx.serviceSubtype);
+        return form;
+      },
+    }),
 
   getTimeline: (id: string) =>
     fetcher<Activity[]>(`/leads/${id}/timeline`),
@@ -219,6 +384,14 @@ export const api = {
 
   reopenLead: (leadId: string) =>
     fetcher<Lead>(`/leads/${leadId}/reopen`, { method: "POST" }),
+
+  // אישור הצעת AI לסיווג — מעתיק suggested_service_category/subtype →
+  // service_category/subtype ומנקה את ה-suggested. נקרא מהbanner בעמוד
+  // הליד אחרי לחיצה על "אישור".
+  approveClassification: (leadId: string) =>
+    fetcher<Lead>(`/leads/${leadId}/approve-classification`, {
+      method: "POST",
+    }),
 
   transferLead: (
     leadId: string,
@@ -261,7 +434,7 @@ export const api = {
   // הפעולות: status / waiting_on / יצירת task / activity. מחזיר את הליד
   // המעודכן. 400 על ליד סגור או צ'יפ לא מאוכלס.
   applyChip: (leadId: string, chipId: string) =>
-    fetcher<Lead>(`/leads/${leadId}/apply-chip/${chipId}`, {
+    fetcher<ApplyChipResponse>(`/leads/${leadId}/apply-chip/${chipId}`, {
       method: "POST",
     }),
 
@@ -335,21 +508,28 @@ export const api = {
     }),
 
   // ----- Google Calendar -----
-  getGoogleStatus: () =>
-    fetcher<{
-      connected: boolean;
-      google_account_email?: string | null;
-      calendar_id?: string | null;
-      timezone?: string | null;
-      connected_at?: string | null;
-      auth_invalid: boolean;
-    }>("/google/status"),
+  getGoogleStatus: () => fetcher<GoogleCalendarStatus>("/google/status"),
 
   startGoogleAuth: () =>
     fetcher<{ auth_url: string }>("/google/auth/start"),
 
   disconnectGoogle: () =>
     fetcher<void>("/google/disconnect", { method: "POST" }),
+
+  // רשימת היומנים של החשבון המחובר — מזינה את הבורר ב-/settings.
+  listGoogleCalendars: () =>
+    fetcher<{ items: GoogleCalendarListItem[] }>("/google/calendars"),
+
+  // שמירת יומן היעד + היומנים שנחשבים "תפוס". מחזיר את הסטטוס המעודכן
+  // כדי שה-UI יתרענן מהשרת ולא יסתמך על ה-state המקומי שלו.
+  setGoogleCalendars: (payload: {
+    target_calendar_id: string;
+    busy_calendar_ids: string[];
+  }) =>
+    fetcher<GoogleCalendarStatus>("/google/calendars", {
+      method: "PUT",
+      body: payload,
+    }),
 
   // ----- Gmail (Phase 3 Stage 17) -----
   getGmailStatus: () =>
@@ -385,7 +565,12 @@ export const api = {
 
   createBooking: (
     token: string,
-    payload: { slot_start: string; slot_end: string; notes?: string },
+    payload: {
+      slot_start: string;
+      slot_end: string;
+      contact_phone: string;
+      notes?: string;
+    },
   ) =>
     fetcher<CreateBookingResponse>(`/booking/${token}`, {
       method: "POST",
@@ -393,16 +578,34 @@ export const api = {
       retryAuth: false,
     }),
 
-  // ----- Booking admin (אישור/דחייה ע"י נועה/עוזרת) -----
-  listPendingBookings: () =>
-    fetcher<PendingBookingsResponse>(`/bookings/pending`),
+  // ----- קישור פתוח (ציבורי, בלי token ובלי ליד) -----
+  // שלוש קריאות שמקבילות אחת-לאחת לשלוש של הליד למעלה.
+  getOpenBookingPageInfo: () =>
+    fetcher<OpenBookingPageInfo>("/booking/open", { retryAuth: false }),
 
-  getActiveBookingForLead: (leadId: string) =>
-    fetcher<BookingRead | null>(`/bookings/lead/${leadId}/active`),
+  getOpenBookingAvailability: (dateFrom: string, dateTo: string) =>
+    fetcher<AvailabilityResponse>(
+      `/booking/open/availability?date_from=${dateFrom}&date_to=${dateTo}`,
+      { retryAuth: false },
+    ),
 
-  approveBooking: (id: string) =>
-    fetcher<BookingRead>(`/bookings/${id}/approve`, { method: "POST" }),
+  createOpenBooking: (payload: {
+    slot_start: string;
+    slot_end: string;
+    full_name: string;
+    contact_phone: string;
+  }) =>
+    fetcher<OpenBookingResponse>("/booking/open", {
+      method: "POST",
+      body: payload,
+      retryAuth: false,
+    }),
 
-  rejectBooking: (id: string) =>
-    fetcher<BookingRead>(`/bookings/${id}/reject`, { method: "POST" }),
+  // ----- Booking admin (צפייה וביטול ע"י נועה/עוזרת) -----
+  // רשימה ולא פגישה בודדת: ליד יכול להחזיק כמה פגישות עתידיות.
+  listBookingsForLead: (leadId: string) =>
+    fetcher<BookingRead[]>(`/bookings/lead/${leadId}`),
+
+  cancelBooking: (id: string) =>
+    fetcher<BookingRead>(`/bookings/${id}/cancel`, { method: "POST" }),
 };

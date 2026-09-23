@@ -4,7 +4,7 @@ export const STATUS_LABELS: Record<string, string> = {
   NEW: "חדש",
   IN_PROGRESS: "בטיפול",
   PROPOSAL_SENT: "נשלחה הצעה",
-  BOOKING_PENDING: "ממתין לאישור תור",
+  BOOKING_PENDING: "ממתין לאישור פגישה",
   BOOKED: "פגישה מאושרת",
   WON: "נסגרה עסקה",
   LOST: "סגור ללא עסקה",
@@ -88,7 +88,7 @@ export const ACTIVITY_TYPE_LABELS: Record<string, string> = {
   manual_message_logged: "תועדה הודעה ידנית",
   call_completed: "שיחה הסתיימה",
   call_no_answer: "אין מענה",
-  meeting_requested: "נתבקש תור",
+  meeting_requested: "נתבקשה פגישה",
   meeting_approved: "פגישה אושרה",
   meeting_rejected: "פגישה נדחתה",
   meeting_rescheduled: "מועד הפגישה עודכן",
@@ -270,3 +270,18 @@ export function formatDateTimeHebrew(iso: string | null): string {
     timeZone: "Asia/Jerusalem",
   });
 }
+
+// תוויות UI ל-5 כללי הפולואף של §17.1. השמות המדויקים מהאפיון —
+// למשתמש (נועה) יותר טבעי מאשר ה-rule_key הטכני (first_response וכו').
+export const FOLLOWUP_RULE_LABELS: Record<string, string> = {
+  first_response: "ליד חדש שלא טופל",
+  lecture_inquiry: "ארגון שהתעניין בהרצאה",
+  warm_followup: "לקוח חם שלא סגר",
+  proposal_followup: "פולואפ אחרי הצעת מחיר",
+  dormant_check: "לקוח שלא חזר",
+};
+
+export const FOLLOWUP_UNIT_LABELS: Record<string, string> = {
+  hours: "שעות",
+  days: "ימים",
+};

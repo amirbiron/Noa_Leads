@@ -12,7 +12,7 @@ from uuid import UUID
 from sqlalchemy import and_, case, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.constants import CLOSED_LEAD_STATUSES, LeadStatus, TaskStatus
+from app.constants import CLOSED_LEAD_STATUSES, LeadStatus, TaskStatus, TaskType
 from app.core.exceptions import NotFoundError
 from app.models.lead import Lead
 from app.models.task import Task
@@ -30,6 +30,16 @@ from app.utils.work_hours import ISRAEL_TZ, to_israel_tz
 # 5-7 פעולות היום לפי האפיון. נשמור up to 20 כדי לא לחתוך אם יש עומס
 TODAY_ACTIONS_LIMIT = 20
 DEFAULT_DASHBOARD_LIMIT = 50
+
+# סף "דחוף — ללא מענה ראשון" עבור בלוק הבית: ליד שנכנס לפני 48h+ ועדיין
+# יש לו FIRST_RESPONSE/LECTURE_INQUIRY task פתוח (= לא נשלח מענה ראשון).
+# **קבוע נפרד מ-stuck_threshold (7 ימים) — כלל 10**: אסור drift בין
+# הסף הזה לסף ה"תקועים" של get_pending/get_today_actions/list_stuck_tasks.
+URGENT_NO_RESPONSE_THRESHOLD = timedelta(hours=48)
+
+# סף "לידים חדשים (24h)" עבור בלוק הבית: כל הלידים שנוצרו ב-24h
+# האחרונות, ללא תלות בסטטוס (block 2 = מד נפח, לא רשימת to-do).
+NEW_LEADS_WINDOW = timedelta(hours=24)
 
 # הערה על overdue: בעבר היה כאן _OVERDUE_GRACE dict שחישב alert מ-
 # created_at + grace per-type. זה יצר בעיות:
@@ -612,6 +622,122 @@ async def get_latest_ai_summary(db: AsyncSession, summary_type: str):
         .limit(1)
     )
     return result.scalar_one_or_none()
+
+
+# ===================== Morning Dashboard Blocks =====================
+# בלוקי הסטטוס למסך הבית ("לוח בוקר") — מונים בלבד. הרשימות עצמן ממשיכות
+# לחיות בעמודים הייעודיים (/today, /pending, /leads).
+
+
+async def get_new_leads_24h_count(db: AsyncSession) -> int:
+    """Block 2 בבית — "X לידים חדשים (24 שעות)".
+
+    סופר כל ליד שנוצר ב-24h האחרונות, **ללא תלות בסטטוס או ב-outbound**.
+    זה מד נפח של פניות נכנסות, לא רשימת to-do (גם ליד שכבר הומר ל-WON
+    בתוך 24h ייספר — מועיל לחיווי "השבוע היה עומס").
+    """
+    threshold = datetime.now(timezone.utc) - NEW_LEADS_WINDOW
+    stmt = (
+        select(func.count())
+        .select_from(Lead)
+        .where(Lead.created_at >= threshold)
+    )
+    return (await db.execute(stmt)).scalar_one()
+
+
+def _urgent_no_first_response_where(now_utc: datetime) -> tuple:
+    """תנאי ה-WHERE של "דחוף — ללא מענה 48 שעות" (Block 3 בבית).
+
+    **מקור אמת אחד** למונה (get_urgent_no_first_response_count) ולרשימה
+    (get_urgent_no_first_response_leads). בעבר המונה חי לבדו והכפתור הוביל
+    ל-/today, שמסנן חלון due_at משלו (7 ימים אחורה / סוף היום קדימה /
+    snoozed רק אחרי שהמועד עבר) — התוצאה הייתה "3" בכרטיס ורק ליד אחד
+    במסך. שתי הפונקציות חייבות לצרוך את הפונקציה הזו, בלי לשכפל תנאים.
+
+    ההגדרה: ליד פתוח שנכנס לפני 48h+ ויש לו FIRST_RESPONSE או
+    LECTURE_INQUIRY task פתוח (OPEN/SNOOZED). מאחר ש-FIRST_RESPONSE נסגר
+    אוטומטית כשנועה מבצעת outbound (close_touchpoint_tasks +
+    AUTO_CLOSE_TASK_TYPES ב-lead_actions.py), task פתוח 48h+ אחרי יצירת
+    הליד ≡ "לא נשלח מענה ראשון".
+
+    **אין כאן חלון על due_at בכוונה:** ליד שממתין 10 ימים למענה ראשון
+    הוא *יותר* דחוף, לא פחות. הוא מופיע גם ב"ממתין לטיפול" (7+ ימים,
+    §16.2) — זה לא סותר, כי המסך הזה חותך לפי "אין מענה ראשון" ולא לפי
+    וותק המשימה.
+
+    **כלל 10:** הסף 48h הוא קבוע *נפרד* (URGENT_NO_RESPONSE_THRESHOLD)
+    מסף ה-7d של get_pending/list_stuck_tasks. אסור drift.
+
+    EXISTS ולא JOIN (דפוס get_pending): ליד עם גם FIRST_RESPONSE וגם
+    LECTURE_INQUIRY פתוחים היה מייצר שתי שורות ב-JOIN — DISTINCT היה
+    מציל את המונה, אבל ברשימה זה כפילות אמיתית בתצוגה.
+    """
+    threshold = now_utc - URGENT_NO_RESPONSE_THRESHOLD
+    unanswered_task_exists = (
+        select(Task.id)
+        .where(
+            Task.lead_id == Lead.id,
+            Task.type.in_(
+                [TaskType.FIRST_RESPONSE.value, TaskType.LECTURE_INQUIRY.value]
+            ),
+            Task.status.in_(
+                [TaskStatus.OPEN.value, TaskStatus.SNOOZED.value]
+            ),
+            # עקביות עם שאר הdashboard — לא להציג tasks פסיביים (D.1).
+            # FIRST_RESPONSE/LECTURE_INQUIRY אינם dormant_suggestion, אבל
+            # הסינון defense-in-depth ותואם דפוס.
+            surfaceable_task_condition(),
+        )
+        .correlate(Lead)
+        .exists()
+    )
+    return (
+        Lead.status.notin_([s.value for s in CLOSED_LEAD_STATUSES]),
+        Lead.created_at <= threshold,
+        unanswered_task_exists,
+    )
+
+
+async def get_urgent_no_first_response_count(db: AsyncSession) -> int:
+    """Block 3 בבית — "X לידים דחופים (48h ללא מענה)".
+
+    המונה של הכרטיס. ההגדרה ב-_urgent_no_first_response_where — אותם
+    תנאים בדיוק שמזינים את הרשימה, כך שהמספר בכרטיס תמיד שווה לאורך
+    הרשימה שנפתחת בלחיצה עליו.
+    """
+    stmt = (
+        select(func.count())
+        .select_from(Lead)
+        .where(*_urgent_no_first_response_where(datetime.now(timezone.utc)))
+    )
+    return (await db.execute(stmt)).scalar_one()
+
+
+async def get_urgent_no_first_response_leads(
+    db: AsyncSession, *, limit: int | None = None
+) -> list[LeadCard]:
+    """הרשימה שמאחורי Block 3 — הלידים שהמונה סופר, בזה אחר זה.
+
+    אותם תנאים כמו המונה (_urgent_no_first_response_where) + מיון
+    הדשבורד הרגיל.
+
+    **בלי limit כברירת מחדל, בשונה מ-get_pending/get_new_leads.** הרשימות
+    האחרות הן "מה לטפל בו עכשיו" — תקרה של 50 בהן היא בסדר. הרשימה הזו
+    היא היעד של מונה שמצהיר על מספר מדויק, ותקרה שקטה הייתה מחזירה בדיוק
+    את הבאג שה-PR הזה תיקן, רק מכיוון אחר (51 בכרטיס, 50 במסך). המונה
+    לא חסום — גם הרשימה לא. הפרמטר `limit` נשאר עבור קוראים עתידיים
+    שכן רוצים חיתוך מפורש.
+    """
+    now_utc = datetime.now(timezone.utc)
+    stmt = (
+        select(Lead)
+        .where(*_urgent_no_first_response_where(now_utc))
+        .order_by(*_dashboard_order(now_utc))
+    )
+    if limit is not None:
+        stmt = stmt.limit(limit)
+    result = await db.execute(stmt)
+    return [_lead_to_card(lead, now_utc) for lead in result.scalars().all()]
 
 
 async def increment_inaccurate_count(db: AsyncSession, summary_id: UUID) -> None:

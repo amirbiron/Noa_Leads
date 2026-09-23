@@ -19,22 +19,31 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func, or_, update
 
-from app.constants import CLOSED_LEAD_STATUSES
+from app.constants import CLOSED_LEAD_STATUSES, TaskType
 from app.db.session import AsyncSessionLocal
 from app.models.lead import Lead
+from app.services.followup_rules import get_rule_interval_seconds
 from jobs._runner import run_job
 
 logger = logging.getLogger("jobs.detect_dormant")
 
 
+# fallback ל-selection threshold (60 ימים, §17.1) אם FollowupRule לא
+# seeded. הערך ניתן לעריכה ב-UI הגדרות (dormant_check rule).
 DORMANT_THRESHOLD_DAYS = 60
 
 
 async def detect_dormant() -> None:
-    threshold = datetime.now(timezone.utc) - timedelta(days=DORMANT_THRESHOLD_DAYS)
     closed = [s.value for s in CLOSED_LEAD_STATUSES]
 
     async with AsyncSessionLocal() as db:
+        threshold_sec = await get_rule_interval_seconds(
+            db,
+            TaskType.DORMANT_CHECK.value,
+            default_seconds=DORMANT_THRESHOLD_DAYS * 86400,
+        )
+        threshold = datetime.now(timezone.utc) - timedelta(seconds=threshold_sec)
+
         stmt = (
             update(Lead)
             .where(

@@ -5,35 +5,36 @@ Reverse sync — Google Calendar → DB.
 ומעביר אותה ל-apply_calendar_changes כאן. כל שינוי מתורגם לעדכון booking
 + ליד + activity log:
 
-- אירוע נמחק / status=cancelled → booking ל-canceled, ליד חוזר ל-IN_PROGRESS
-  עם waiting_on=NOAH (החלטה בתכנון שלב 14).
+- אירוע נמחק / status=cancelled → booking ל-canceled, והליד חוזר
+  ל-IN_PROGRESS עם waiting_on=NOAH — **אבל רק אם לא נשארה לו פגישה
+  פעילה אחרת** (ליד יכול להחזיק כמה פגישות מאז מיגרציה 0032).
 - שינוי זמן → עדכון slot_start/end ב-booking, activity log. ליד נשאר BOOKED.
 
 החלטות שורש (לפי תכנון):
 - שינוי שקט בלי התראה ל-Telegram — נועה היא שעשתה את השינוי, לא צריך להציק.
 - ליד נשאר BOOKED גם אחרי שינוי זמן (זה עדיין booking פעיל באותו אובייקט).
-- ביטול → IN_PROGRESS כדי שהליד יחזור לתור הטיפול של נועה.
+- ביטול → IN_PROGRESS כדי שהליד יחזור לתור הטיפול של נועה. ההחלטה
+  הזו מרוכזת ב-`booking.release_lead_if_no_active_booking`, שמשותף
+  לשלושת מסלולי הביטול (Google, ביטול ידני, ו-cron הניקוי).
 """
 
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import timezone
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import func, select, update
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.constants import (
-    ActivityType,
-    BookingStatus,
-    LeadStatus,
-    WaitingOn,
-)
+from app.constants import ActivityType, BookingCancelSource, BookingStatus
 from app.models.booking import Booking
-from app.models.lead import Lead
 from app.services.activities import log_activity
+from app.services.booking import (
+    ACTIVE_BOOKING_STATUSES,
+    release_lead_if_no_active_booking,
+)
 
 if TYPE_CHECKING:
     from app.services.google_calendar import CalendarChange
@@ -93,67 +94,99 @@ async def _apply_cancellation(
         .where(
             Booking.id == change.booking_id,
             Booking.google_calendar_event_id == change.event_id,
-            Booking.status.in_(
-                [
-                    BookingStatus.PENDING_APPROVAL.value,
-                    BookingStatus.APPROVED.value,
-                ]
-            ),
+            Booking.status.in_(ACTIVE_BOOKING_STATUSES),
         )
         .values(status=BookingStatus.CANCELED.value)
     )
-    if booking_update.rowcount != 1:
-        # booking כבר נמחק/בוטל/שונה — אין מה לעשות. אינדמפוטנטי.
+    applied = booking_update.rowcount == 1
+
+    # ה-lead_id נדרש גם כשה-UPDATE לא תפס — כדי לרשום את ה-activity.
+    # ה-status נשלף יחד איתו כדי להבחין בין שני מצבים שונים לגמרי
+    # שמגיעים שניהם כ-`rowcount=0` (ראה למטה).
+    existing = (
+        await db.execute(
+            select(Booking.lead_id, Booking.status).where(
+                Booking.id == change.booking_id
+            )
+        )
+    ).one_or_none()
+    if existing is None:
+        # ה-booking לא קיים בכלל (נמחק, או אירוע שלא שייך לנו) — אין
+        # למי לרשום activity.
+        await db.commit()
+        return "skipped"
+    lead_id, existing_status = existing
+
+    # **הד של ביטול שאנחנו עצמנו ביצענו — לא נרשם שוב.**
+    #
+    # `cancel_booking` ו-`close_lead` מוחקים את האירוע מ-Google אחרי
+    # שהם מסמנים את הפגישה כמבוטלת ורושמים activity. Google מחזיר את
+    # המחיקה הזו ב-webhook, ואז ה-UPDATE כאן לא תופס (הפגישה כבר
+    # `canceled`) — כלומר **כל ביטול ידני היה מייצר שורה שנייה**
+    # בציר הזמן של הליד, על אותו אירוע בדיוק.
+    #
+    # הרישום ב-`rowcount=0` (כלל 9) נשאר במקומו ונועד למצב אחר:
+    # פגישה שעדיין לא מבוטלת אצלנו, ש-Google אומר שבוטלה. שם ה-
+    # activity הוא המידע היחיד שמתעד שזה קרה.
+    if not applied and existing_status == BookingStatus.CANCELED.value:
         await db.commit()
         return "skipped"
 
-    booking = (
-        await db.execute(
-            select(Booking)
-            .where(Booking.id == change.booking_id)
-            .execution_options(populate_existing=True)
-        )
-    ).scalar_one()
+    # **פגישה מהקישור הפתוח (`lead_id` ריק) עוברת באותו מסלול בדיוק** —
+    # ה-UPDATE למעלה מפנה את המועד שלה, וזה כל מה שהיא צריכה. מה שמדולג
+    # הוא רק מה ששייך לליד: שחרור הסטטוס וה-activity. `activities.lead_id`
+    # הוא NOT NULL, כלומר רישום עבורה היה נופל.
+    #
+    # מסלול אחד ולא ענף נפרד, ובכוונה: בגרסה הקודמת לשורה בלי ליד היה
+    # ענף משלו, והוא נסחף — החזיר `"applied"`, שאינו מפתח ב-`stats`,
+    # ולכן כל ביטול מוצלח שלה נספר כשגיאה וה-sync token לא התקדם.
+    if lead_id is not None:
+        # ליד חוזר ל-IN_PROGRESS — אבל **רק אם לא נשארה לו פגישה
+        # פעילה**. ליד יכול להחזיק כמה פגישות; ביטול של אחת מהן לא
+        # אמור להוציא אותו מ-BOOKED בזמן שהשנייה עומדת ביומן. הגארד
+        # המשותף עושה את זה במשפט UPDATE אחד עם NOT EXISTS (בלי
+        # check-then-act).
+        if applied:
+            await release_lead_if_no_active_booking(db, lead_id)
 
-    # ליד חוזר ל-IN_PROGRESS אם היה BOOKED. אם הליד כבר נסגר (WON/LOST) או
-    # התקדם לאן שהוא — לא נוגעים.
-    await db.execute(
-        update(Lead)
-        .where(
-            Lead.id == booking.lead_id,
-            Lead.status == LeadStatus.BOOKED.value,
-        )
-        .values(
-            status=LeadStatus.IN_PROGRESS.value,
-            waiting_on=WaitingOn.NOAH.value,
-            last_activity_type=ActivityType.MEETING_CANCELED.value,
-            updated_at=func.now(),
-        )
-    )
+        # event_updated_at = הזמן ב-Google שבו האירוע שונה (לא זמן
+        # עיבוד webhook). חשוב ל-post_meeting_cron: ביטול שקרה לפני
+        # slot_end אומר שהפגישה לא התקיימה, גם אם ה-webhook התעכב.
+        #
+        # `applied` נרשם תמיד (כלל 9 / Pattern 9): כשה-UPDATE לא תפס —
+        # כי webhook מקביל או ביטול ידני הקדימו אותנו — ה-activity עדיין
+        # מתעד את מה ש-Google אמר. הגרסה הקודמת חזרה כאן בשקט בלי לרשום
+        # כלום, וצרכנים downstream לא ידעו שהאירוע בוטל בכלל.
+        cancel_metadata: dict[str, Any] = {
+            "booking_id": str(change.booking_id),
+            "event_id": change.event_id,
+            "source": BookingCancelSource.GOOGLE_SYNC.value,
+            "applied": applied,
+        }
+        if change.updated_at is not None:
+            cancel_metadata["event_updated_at"] = change.updated_at.isoformat()
 
-    # event_updated_at = הזמן ב-Google שבו האירוע שונה (לא זמן עיבוד
-    # webhook). חשוב ל-post_meeting_cron: ביטול שקרה לפני slot_end אומר
-    # שהפגישה לא התקיימה, גם אם ה-webhook התעכב.
-    cancel_metadata: dict[str, Any] = {
-        "booking_id": str(change.booking_id),
-        "event_id": change.event_id,
-        "source": "google_calendar_sync",
-    }
-    if change.updated_at is not None:
-        cancel_metadata["event_updated_at"] = change.updated_at.isoformat()
-
-    await log_activity(
-        db,
-        lead_id=booking.lead_id,
-        activity_type=ActivityType.MEETING_CANCELED,
-        performed_by=None,  # שינוי שמקורו ב-Google, לא משתמש מחובר
-        content="הפגישה בוטלה מיומן Google",
-        metadata=cancel_metadata,
-    )
+        await log_activity(
+            db,
+            lead_id=lead_id,
+            activity_type=ActivityType.MEETING_CANCELED,
+            performed_by=None,  # שינוי שמקורו ב-Google, לא משתמש מחובר
+            content=(
+                "הפגישה בוטלה מיומן Google"
+                if applied
+                else "ביטול מ-Google דולג — הפגישה כבר לא הייתה פעילה"
+            ),
+            metadata=cancel_metadata,
+        )
 
     await db.commit()
+    if not applied:
+        return "skipped"
+
     logger.info(
-        "Booking %s canceled via Google Calendar sync", change.booking_id
+        "Booking %s canceled via Google Calendar sync (open link: %s)",
+        change.booking_id,
+        lead_id is None,
     )
     return "canceled"
 
@@ -199,6 +232,18 @@ async def _apply_reschedule(
     old_end_iso = old_end.isoformat()
     booking_lead_id = booking.lead_id  # cache למקרה של exception
 
+    # פגישה מהקישור הפתוח (`booking_lead_id` ריק) עוברת באותו מסלול
+    # בדיוק: ה-UPDATE על המועד מוחל, כי אם נועה הזיזה את האירוע ביומן
+    # המועד החדש הוא זה שצריך להחזיק את הסלוט — אחרת הישן נשאר חסום
+    # והחדש נראה פנוי. מה שמדולג הוא רק ה-activity (`activities.lead_id`
+    # הוא NOT NULL).
+    #
+    # מסלול אחד ולא ענף נפרד, ובכוונה: בגרסה הקודמת לשורה בלי ליד היה
+    # ענף משלו, והוא נסחף בשני מקומות — החזיר `"applied"`, שאינו מפתח
+    # ב-`stats`, וחסר בו ה-`except IntegrityError` שלמטה. הזזת אירוע
+    # כזה על פגישה קיימת הייתה נספרת כשגיאה בכל webhook, וה-sync token
+    # לא היה מתקדם לעולם.
+
     # WHERE כולל סטטוסים פעילים *וגם* הערכים הישנים של start/end —
     # optimistic locking. אם webhook מקביל הקדים אותנו ושינה את ה-slot,
     # ה-UPDATE שלנו לא ימצא שורה (rowcount=0). דפוס שמחליף "להחזיק FOR
@@ -209,12 +254,7 @@ async def _apply_reschedule(
             .where(
                 Booking.id == change.booking_id,
                 Booking.google_calendar_event_id == change.event_id,
-                Booking.status.in_(
-                    [
-                        BookingStatus.PENDING_APPROVAL.value,
-                        BookingStatus.APPROVED.value,
-                    ]
-                ),
+                Booking.status.in_(ACTIVE_BOOKING_STATUSES),
                 Booking.requested_slot_start == old_start,
                 Booking.requested_slot_end == old_end,
             )
@@ -227,31 +267,32 @@ async def _apply_reschedule(
         # cron מסתמך על metadata.new_end כסיגנל המוקדם ביותר על reschedule
         # לעתיד. בלי הרישום, race יכול להשאיר booking.requested_slot_end
         # ישן בעבר וה-cron יוצר task מוקדם מדי.
-        log_metadata = {
-            "booking_id": str(change.booking_id),
-            "event_id": change.event_id,
-            "old_start": old_start_iso,
-            "old_end": old_end_iso,
-            "new_start": new_start.isoformat(),
-            "new_end": new_end.isoformat(),
-            "source": "google_calendar_sync",
-            "applied": applied,
-        }
-        if change.updated_at is not None:
-            log_metadata["event_updated_at"] = change.updated_at.isoformat()
+        if booking_lead_id is not None:
+            log_metadata = {
+                "booking_id": str(change.booking_id),
+                "event_id": change.event_id,
+                "old_start": old_start_iso,
+                "old_end": old_end_iso,
+                "new_start": new_start.isoformat(),
+                "new_end": new_end.isoformat(),
+                "source": "google_calendar_sync",
+                "applied": applied,
+            }
+            if change.updated_at is not None:
+                log_metadata["event_updated_at"] = change.updated_at.isoformat()
 
-        await log_activity(
-            db,
-            lead_id=booking_lead_id,
-            activity_type=ActivityType.MEETING_RESCHEDULED,
-            performed_by=None,
-            content=(
-                "מועד הפגישה עודכן ביומן Google"
-                if applied
-                else "עדכון מועד מ-Google דולג (race) — booking עודכן ע\"י סנכרון מקביל"
-            ),
-            metadata=log_metadata,
-        )
+            await log_activity(
+                db,
+                lead_id=booking_lead_id,
+                activity_type=ActivityType.MEETING_RESCHEDULED,
+                performed_by=None,
+                content=(
+                    "מועד הפגישה עודכן ביומן Google"
+                    if applied
+                    else "עדכון מועד מ-Google דולג (race) — booking עודכן ע\"י סנכרון מקביל"
+                ),
+                metadata=log_metadata,
+            )
 
         await db.commit()
         if not applied:
@@ -261,12 +302,20 @@ async def _apply_reschedule(
         # אפשר לייצג זאת ב-DB (overlap = double booking). מחזירים "skipped"
         # *לא* errors — אחרת sync_token לא יתקדם ונתקעים על אותו change
         # לנצח (השגיאה קבועה, לא transient). נועה תקבל activity להתערבות.
+        #
+        # בפגישה מהקישור הפתוח אין ל-activity לאן להיכתב, ולכן הלוג הזה
+        # הוא הסימן היחיד. השורה נשארת על המועד הישן — סלוט אחד חסום
+        # לשווא, אבל לעולם לא שתי פגישות על אותו זמן.
         await db.rollback()
         logger.warning(
             "Reschedule for booking %s blocked by overlap constraint "
-            "(conflicts with another active booking) — manual intervention needed",
+            "(conflicts with another active booking) — manual intervention "
+            "needed (open link: %s)",
             change.booking_id,
+            booking_lead_id is None,
         )
+        if booking_lead_id is None:
+            return "skipped"
         try:
             await log_activity(
                 db,
@@ -274,7 +323,7 @@ async def _apply_reschedule(
                 activity_type=ActivityType.MEETING_RESCHEDULED,
                 performed_by=None,
                 content=(
-                    "מועד הפגישה ביומן Google שונה אבל מתנגש עם תור פעיל "
+                    "מועד הפגישה ביומן Google שונה אבל מתנגש עם פגישה פעילה "
                     "אחר במערכת — לא ניתן לסנכרן אוטומטית. בדקי ידנית."
                 ),
                 metadata={

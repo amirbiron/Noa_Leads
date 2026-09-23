@@ -18,7 +18,7 @@ import logging
 import time
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.constants import ActivityType, LeadStatus, TaskStatus, TaskType
@@ -28,6 +28,7 @@ from app.models.lead import Lead
 from app.models.task import Task
 from app.services import ai
 from app.services.ai import AIError, AIRateLimitError
+from app.services.followup_rules import get_rule_interval_seconds
 from app.utils.service_translations import (
     category_to_hebrew,
     subtype_to_hebrew,
@@ -36,6 +37,8 @@ from jobs._runner import run_job
 
 logger = logging.getLogger("jobs.suggest_dormant_actions")
 
+# fallback ל-selection threshold (60 ימים, §17.1) אם FollowupRule לא
+# seeded. הערך ניתן לעריכה ב-UI הגדרות (dormant_check rule).
 DORMANT_THRESHOLD_DAYS = 60
 SHORTCUT_DAYS = 120
 REFRESH_DAYS = 7
@@ -73,14 +76,19 @@ _ACTIVITY_LABELS = {
 }
 
 
-async def _candidates(db: AsyncSession, now_utc: datetime) -> list[Lead]:
+async def _candidates(
+    db: AsyncSession, now_utc: datetime, threshold_seconds: int
+) -> list[Lead]:
     """
     ההגדרה המדויקת של "ליד רדום" לפיצ'ר ההמלצות (§19 D.1):
     - status ∈ {IN_PROGRESS, PROPOSAL_SENT} (לא NEW/BOOKED/סגור).
-    - last_outbound_at קיים ולפני 60+ ימים.
+    - last_outbound_at קיים ולפני threshold_seconds.
     - אין inbound מאז ה-outbound האחרון (הלקוח לא הגיב).
+
+    `threshold_seconds` נקרא live מ-FollowupRule (`dormant_check`)
+    בתחילת הריצה. ברירת מחדל 60 ימים לפי §17.1.
     """
-    threshold = now_utc - timedelta(days=DORMANT_THRESHOLD_DAYS)
+    threshold = now_utc - timedelta(seconds=threshold_seconds)
     stmt = select(Lead).where(
         Lead.status.in_(
             [LeadStatus.IN_PROGRESS.value, LeadStatus.PROPOSAL_SENT.value]
@@ -159,7 +167,13 @@ async def suggest_dormant_actions() -> None:
     async with AsyncSessionLocal() as db:
         from app.services.tasks import sync_lead_next_action_cache
 
-        leads = await _candidates(db, now_utc)
+        threshold_sec = await get_rule_interval_seconds(
+            db,
+            TaskType.DORMANT_CHECK.value,
+            default_seconds=DORMANT_THRESHOLD_DAYS * 86400,
+        )
+
+        leads = await _candidates(db, now_utc, threshold_sec)
         ai_calls = 0
         affected: list = []
         stopped = False

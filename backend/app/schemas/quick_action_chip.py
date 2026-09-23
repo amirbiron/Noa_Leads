@@ -41,7 +41,7 @@ def _validate_chip_target_status(v: LeadStatus | None) -> LeadStatus | None:
     if v is not None and v in _CHIP_FORBIDDEN_TARGETS:
         raise ValueError(
             "הצ'יפ לא יכול להעביר ליד למצב הזה — השתמשי ב-flow הייעודי "
-            "(הזמנת תור / סגירת ליד)."
+            "(קביעת פגישה / סגירת ליד)."
         )
     return v
 
@@ -97,3 +97,38 @@ class QuickActionChipUpdate(BaseModel):
         cls, v: LeadStatus | None
     ) -> LeadStatus | None:
         return _validate_chip_target_status(v)
+
+
+# preserved_reason — מסביר ל-frontend למה הסטטוס נשמר (כדי להציג toast רך).
+# `None` = הסטטוס לא נשמר (סיגה לא נמנעה — flow רגיל / קידום).
+# שלושת הערכים תואמים לסטטוסים שבהם מונעת סיגה.
+_PRESERVED_REASON_PROPOSAL_SENT = "proposal_sent"
+_PRESERVED_REASON_BOOKING_PENDING = "booking_pending"
+_PRESERVED_REASON_BOOKED = "booked"
+
+
+class ApplyChipResponse(BaseModel):
+    """תוצאת `apply_chip`: ה-Lead המעודכן + מטא-מידע אם הסטטוס נשמר במכוון.
+
+    `status_preserved=True` קורה כש-chip ניסה להציב סטטוס מוקדם יותר בזרימה
+    מהנוכחי (PROPOSAL_SENT / BOOKING_PENDING / BOOKED → IN_PROGRESS). אז
+    שאר ה-side effects של ה-chip מוחלים כרגיל אבל הסטטוס נשאר במקום, וב-
+    BOOKING_PENDING גם ה-Booking הממתינה לא מסומנת REJECTED (ראה
+    `_is_chip_regression` ב-services/quick_action_chips.py).
+
+    `preserved_reason` קיים רק כש-`status_preserved=True`. ה-frontend
+    משתמש בו לבחירת toast: PROPOSAL_SENT שקט; BOOKING_PENDING/BOOKED
+    הודעה רכה שמזכירה לנועה לבדוק את ה-booking/event.
+    """
+
+    # forward ref — LeadRead בקובץ אחר. model_rebuild בסוף הקובץ פותר.
+    lead: "LeadRead"
+    status_preserved: bool
+    preserved_reason: str | None = None
+
+
+# late import + rebuild — Pydantic v2 דורש את זה כש-LeadRead לא ב-namespace
+# בזמן הגדרת המחלקה.
+from app.schemas.lead import LeadRead  # noqa: E402
+
+ApplyChipResponse.model_rebuild()

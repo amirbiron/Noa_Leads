@@ -39,7 +39,7 @@ export default function LeadsPage() {
   const [loading, setLoading] = useState(true);
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState(""); // debounced
-  const [statusFilter, setStatusFilter] = useState<string>("");
+  const [statusFilter, setStatusFilter] = useState<string>("NEW");
 
   // debounce כדי לא להציף את ה-API בכל הקלדה
   useEffect(() => {
@@ -73,7 +73,10 @@ export default function LeadsPage() {
   const hasActiveFilter = Boolean(search) || Boolean(statusFilter);
 
   return (
-    <AppShell title={`לידים${total ? ` (${total})` : ""}`}>
+    <AppShell
+      title={`לידים${total ? ` (${total})` : ""}`}
+      titleTermKey="page_leads"
+    >
       {/* פילטרים */}
       <div className="space-y-2 mb-4">
         <div className="relative">
@@ -98,10 +101,11 @@ export default function LeadsPage() {
           <option value="NEW">חדש</option>
           <option value="IN_PROGRESS">בטיפול</option>
           <option value="PROPOSAL_SENT">נשלחה הצעה</option>
-          <option value="BOOKING_PENDING">ממתין לאישור תור</option>
+          <option value="BOOKING_PENDING">ממתין לאישור פגישה</option>
           <option value="BOOKED">פגישה מאושרת</option>
-          <option value="WON">נסגרה עסקה</option>
-          <option value="LOST">סגור ללא עסקה</option>
+          {/* WON/LOST/ARCHIVED הוסרו: לידים סגורים בטאב הארכיון בלבד
+              לפי §12.12. שמירתם כאופציות הייתה מציגה "לא נמצאו תוצאות"
+              מבלבל (ה-backend ב-/leads ממילא חוסם). */}
         </select>
       </div>
 

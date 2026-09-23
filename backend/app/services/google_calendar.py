@@ -32,6 +32,8 @@ from uuid import UUID
 # אז גם ה-flow של Gmail מקבל את הדגל לפני הקריאה.
 os.environ.setdefault("OAUTHLIB_RELAX_TOKEN_SCOPE", "1")
 
+import google_auth_httplib2
+import httplib2
 from google.auth.exceptions import RefreshError
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -57,6 +59,70 @@ _AUTH_URI = "https://accounts.google.com/o/oauth2/auth"
 
 # id קבוע לשורה היחידה
 _SINGLETON_ID = 1
+
+# ===================== Service builder =====================
+
+# timeout לכל קריאה ל-Google Calendar, בשניות.
+#
+# למה זה קריטי דווקא כאן: קביעת פגישה מהדף הציבורי יוצרת את האירוע
+# ביומן **בתוך טרנזקציה פתוחה** שמחזיקה נעילת שורה על הליד וחיבור מה-
+# pool (`pool_size=5, max_overflow=10` ב-`app/db/session.py` = 15 חיבורים
+# מול תהליך uvicorn יחיד). בלי timeout, תקיעה אצל Google מחזיקה את
+# החיבור ואת הנעילה ללא הגבלת זמן — ב-endpoint ציבורי שכל אחד יכול
+# לקרוא לו. 10 שניות נדיב לקריאת API רגילה וחוסם תקיעה.
+#
+# httplib2 הוא ה-transport שבו google-api-python-client משתמש כברירת
+# מחדל, ו-`AuthorizedHttp` עוטף אותו עם ה-credentials. כשמעבירים `http=`
+# אסור להעביר גם `credentials=` — ה-builder מקבל אחד מהשניים.
+_GOOGLE_API_TIMEOUT_SECONDS = 10
+
+
+def _calendar_service(creds: Credentials):
+    """בונה client של Calendar API עם timeout. blocking — רק בתוך thread.
+
+    נקודה אחת לכל הקריאות: `build(...)` הופיע ב-7 מקומות בקובץ הזה
+    ובעוד אחד ב-`booking.py`, וכל אחד מהם היה צריך לזכור את ה-timeout
+    בנפרד.
+    """
+    authed_http = google_auth_httplib2.AuthorizedHttp(
+        creds, http=httplib2.Http(timeout=_GOOGLE_API_TIMEOUT_SECONDS)
+    )
+    return build("calendar", "v3", http=authed_http, cache_discovery=False)
+
+
+# ===================== בחירת יומנים =====================
+
+
+def target_calendar_id(row: GoogleCalendarCredentials) -> str:
+    """היומן שאליו נכתבים אירועים ושעליו רשום ה-watch.
+
+    fallback ל-"primary" אם העמודה ריקה משום מה — "primary" הוא כינוי
+    של Google ליומן הראשי, ולכן תמיד תקף.
+    """
+    return row.calendar_id or "primary"
+
+
+async def get_credentials_row(
+    db: AsyncSession,
+) -> GoogleCalendarCredentials | None:
+    """שורת ה-credentials, או None אם Google לא מחובר.
+
+    wrapper ציבורי סביב `_load_row` עבור קוראים מחוץ למודול (חישוב
+    הזמינות ב-`booking.py` צריך את בחירת היומנים). קיים כדי שלא ייווצר
+    שוב שכפול של ה-query כמו ב-`routes/google_webhook.py`.
+    """
+    return await _load_row(db)
+
+
+def busy_calendar_ids(row: GoogleCalendarCredentials) -> list[str]:
+    """כל היומנים שנחשבים "תפוס" בחישוב הזמינות — היעד + הנוספים.
+
+    היעד תמיד ברשימה: הפגישות שאנחנו יוצרים חיות בו, וגם האירועים
+    ש-נועה מנהלת שם ידנית. `dict.fromkeys` שומר על סדר ומסיר כפילויות
+    (אם מישהו הוסיף את היעד גם לרשימת הנוספים).
+    """
+    extra = row.busy_calendar_ids or []
+    return list(dict.fromkeys([target_calendar_id(row), *extra]))
 
 
 # ===================== Exceptions =====================
@@ -202,6 +268,22 @@ async def exchange_code_and_save(
     # שליפת פרטי החשבון — primary calendar.id == האימייל של המשתמש
     email, calendar_tz = await asyncio.to_thread(_fetch_account_info, creds)
 
+    # בחירת היומנים של נועה חייבת לשרוד חיבור מחדש. ה-upsert כאן הוא
+    # DELETE+INSERT, ולכן בלי השימור הזה כל "התחברות מחדש" — בדיוק מה
+    # שהיא מתבקשת לעשות כשה-token פג — הייתה מאפסת את יומן היעד ואת
+    # רשימת היומנים התפוסים בשקט, והזמינות הייתה חוזרת להציג שעות תפוסות
+    # כפנויות.
+    #
+    # השימור מותנה באותו חשבון: אם נועה התחברה עם כתובת אחרת, מזהי
+    # היומנים הישנים לא קיימים שם, ולכן מתחילים מחדש מ-"primary".
+    previous = await _load_row(db)
+    if previous is not None and previous.google_account_email == email:
+        preserved_calendar_id = previous.calendar_id or "primary"
+        preserved_busy_ids = list(previous.busy_calendar_ids or [])
+    else:
+        preserved_calendar_id = "primary"
+        preserved_busy_ids = []
+
     # אם יש שורת credentials ישנה עם watch פעיל — לעצור אותו אצל Google
     # לפני המחיקה. אחרת ה-channel ישאר orphan ויתפוגג רק אחרי כשבוע.
     # stop_watch כבר עמיד לכשלי auth (creds ישנים) — נספגים בשקט.
@@ -219,7 +301,8 @@ async def exchange_code_and_save(
     row = GoogleCalendarCredentials(
         id=_SINGLETON_ID,
         google_account_email=email,
-        calendar_id="primary",
+        calendar_id=preserved_calendar_id,
+        busy_calendar_ids=preserved_busy_ids,
         refresh_token_encrypted=encrypt_secret(creds.refresh_token),
         access_token_encrypted=(
             encrypt_secret(creds.token) if creds.token else None
@@ -251,7 +334,7 @@ async def exchange_code_and_save(
 
 def _fetch_account_info(creds: Credentials) -> tuple[str, str]:
     """שליפה סינכרונית של email + timezone. נקראת בתוך asyncio.to_thread."""
-    service = build("calendar", "v3", credentials=creds, cache_discovery=False)
+    service = _calendar_service(creds)
     cal = service.calendars().get(calendarId="primary").execute()
     # id של primary calendar = אימייל החשבון
     return cal["id"], cal.get("timeZone", "Asia/Jerusalem")
@@ -366,7 +449,7 @@ async def _mark_auth_invalid(should_alert: bool) -> None:
             alert_sent_ok = bool(
                 await telegram_service.send_message(
                     "⚠️ <b>חיבור היומן ל-Google פג תוקף</b>\n"
-                    "תורים חדשים לא יסונכרנו ליומן עד שתתחברי מחדש ב-/settings.\n"
+                    "פגישות חדשות לא יסונכרנו ליומן עד שתתחברי מחדש ב-/settings.\n"
                     "ההודעה הזו תישלח פעם אחת בלבד."
                 )
             )
@@ -406,7 +489,149 @@ async def get_status(db: AsyncSession) -> dict[str, Any]:
         # שדות סנכרון הפוך (שלב 14)
         "watch_active": row.watch_channel_id is not None,
         "watch_expiration": row.watch_expiration,
+        # בחירת היומנים (מיגרציה 0032)
+        "busy_calendar_ids": list(row.busy_calendar_ids or []),
     }
+
+
+# ===================== בחירת יומנים =====================
+
+
+async def list_account_calendars(db: AsyncSession) -> list[dict[str, Any]]:
+    """כל היומנים שברשימת היומנים של החשבון המחובר.
+
+    זה המקור לבורר ב-/settings: נועה מסמנת אילו מהם נחשבים "תפוס"
+    ולאיזה מהם ייכתבו הפגישות. היומן שהיא "צירפה ליומן הראשי" מופיע
+    כאן כרשומה נפרדת, גם אם הוא שייך לחשבון אחר ושותף איתה.
+
+    ה-scope הקיים `.../auth/calendar` כבר מכסה את `calendarList.list`
+    (אומת מול מסמך ה-discovery הרשמי של Calendar v3), ולכן אין צורך
+    בהרשאה נוספת ולא בחיבור OAuth שני.
+    """
+    creds = await get_credentials_or_404(db)
+    return await asyncio.to_thread(_list_calendars_blocking, creds)
+
+
+def _list_calendars_blocking(creds: Credentials) -> list[dict[str, Any]]:
+    """blocking — נקרא רק מתוך asyncio.to_thread."""
+    service = _calendar_service(creds)
+    items: list[dict[str, Any]] = []
+    page_token: str | None = None
+    while True:
+        params: dict[str, Any] = {"maxResults": 250, "showHidden": True}
+        if page_token:
+            params["pageToken"] = page_token
+        result = service.calendarList().list(**params).execute()
+        for entry in result.get("items", []):
+            # יומן שהוסר מהרשימה חוזר עם deleted=true — לא להציג.
+            if entry.get("deleted"):
+                continue
+            items.append(
+                {
+                    "id": entry["id"],
+                    # summaryOverride = השם שנועה נתנה ליומן אצלה; מה
+                    # שהיא רואה ב-Google הוא זה, ולכן הוא קודם.
+                    "summary": entry.get("summaryOverride")
+                    or entry.get("summary")
+                    or entry["id"],
+                    "primary": bool(entry.get("primary")),
+                    "access_role": entry.get("accessRole", ""),
+                }
+            )
+        page_token = result.get("nextPageToken")
+        if not page_token:
+            return items
+
+
+# accessRole שמספיק כדי *לקרוא* תפוסה. "freeBusyReader" רואה רק
+# פנוי/תפוס — בדיוק מה שצריך ליומן "תפוס" ותו לא.
+_READABLE_ROLES = {"freeBusyReader", "reader", "writer", "owner"}
+# accessRole שמספיק כדי *ליצור* אירוע. יומן יעד חייב להיות אחד מאלה,
+# אחרת יצירת הפגישה תיכשל רק ברגע האמת — מול הלקוח.
+_WRITABLE_ROLES = {"writer", "owner"}
+
+
+async def set_calendar_selection(
+    db: AsyncSession, *, target_id: str, busy_ids: list[str]
+) -> bool:
+    """שומר את יומן היעד ואת רשימת היומנים ה"תפוסים".
+
+    מחזיר `target_changed` — האם יומן היעד השתנה, כלומר האם צריך להזיז
+    את ה-watch. הפונקציה עושה `flush` בלבד ו**לא** `commit`: גבול
+    הטרנזקציה שייך ל-route (CLAUDE.md כלל 15). הזזת ה-watch עצמה יושבת
+    ב-route ורצה *אחרי* ה-commit, כי היא קריאה חיצונית best-effort ואין
+    סיבה שהיא תחזיק טרנזקציה פתוחה — אותו דפוס שכבר קיים ב-
+    `booking.cancel_booking`.
+
+    שני המזהים מאומתים מול `calendarList` בזמן השמירה, ולא רק בזמן
+    השימוש. הסיבה: `_fetch_google_busy` הוא fail-safe — יומן שלא ניתן
+    לקרוא ממנו מפיל את דף קביעת הפגישה כולו ל-503. עדיף שהשגיאה תגיע
+    לנועה כאן, כשהיא בוחרת, מאשר ללקוח שמנסה לקבוע תור.
+
+    אם יומן היעד השתנה — ה-watch וה-syncToken מתאפסים ונוצרים מחדש על
+    היומן החדש. בלי זה ה-cursor היה ממשיך להצביע ליומן הקודם, ושינויים
+    שנועה עושה ביומן החדש לא היו מסונכרנים בחזרה.
+    """
+    row = await _load_row(db)
+    if row is None:
+        raise GoogleNotConnectedError()
+
+    available = {c["id"]: c for c in await list_account_calendars(db)}
+
+    target = available.get(target_id)
+    if target is None:
+        raise ValidationError("היומן שנבחר לא נמצא בחשבון Google המחובר.")
+    if target["access_role"] not in _WRITABLE_ROLES:
+        raise ValidationError(
+            "אין הרשאת כתיבה ליומן שנבחר, ולכן לא ניתן לקבוע בו פגישות."
+        )
+
+    # dict.fromkeys מסיר כפילויות ושומר סדר. היעד לא צריך להופיע ברשימה
+    # הנוספת — `busy_calendar_ids()` מוסיף אותו ממילא בכל חישוב.
+    cleaned_busy: list[str] = []
+    for cid in dict.fromkeys(busy_ids):
+        if cid == target_id:
+            continue
+        entry = available.get(cid)
+        if entry is None:
+            raise ValidationError(
+                "אחד היומנים שנבחרו לא נמצא בחשבון Google המחובר."
+            )
+        if entry["access_role"] not in _READABLE_ROLES:
+            raise ValidationError(
+                f"אין הרשאה לקרוא את הזמינות של היומן \"{entry['summary']}\"."
+            )
+        cleaned_busy.append(cid)
+
+    target_changed = (row.calendar_id or "primary") != target_id
+
+    # החלפת יומן יעד **לא** מפסיקה לבדוק את היומן הקודם.
+    #
+    # `busy_calendar_ids()` מוסיף את היעד הנוכחי אוטומטית, ולכן היעד
+    # אף פעם לא מופיע ברשימת ה"נוספים" — וברגע שהוא מפסיק להיות היעד
+    # הוא נופל מהחישוב לגמרי. התוצאה: כל הפגישות שכבר קיימות ביומן
+    # שנועה עזבה הופכות ל"פנוי", ולקוחות יכולים לקבוע עליהן. השתיקה
+    # כאן מוחלטת — אין שגיאה, רק סלוטים שנראים זמינים.
+    #
+    # ברירת המחדל היא fail-safe: שומרים אותו כנבדק. אם נועה רוצה
+    # להפסיק לבדוק אותו, היא מורידה את הסימון — פעולה מפורשת, ולא
+    # תופעת לוואי של החלפת יעד.
+    previous_target = row.calendar_id or "primary"
+    if (
+        target_changed
+        and previous_target != target_id
+        and previous_target in available
+        and previous_target not in cleaned_busy
+    ):
+        cleaned_busy.append(previous_target)
+
+    await db.execute(
+        update(GoogleCalendarCredentials)
+        .where(GoogleCalendarCredentials.id == _SINGLETON_ID)
+        .values(calendar_id=target_id, busy_calendar_ids=cleaned_busy)
+    )
+    await db.flush()
+    return target_changed
 
 
 async def disconnect(db: AsyncSession) -> None:
@@ -438,9 +663,20 @@ async def create_calendar_event(
     description: str,
     start: datetime,
     end: datetime,
-) -> str:
+) -> tuple[str, str]:
     """
-    יוצר אירוע ביומן primary של נועה ומחזיר event_id.
+    יוצר אירוע ב**יומן היעד** של נועה ומחזיר `(event_id, calendar_id)`.
+
+    **למה מוחזר גם מזהה היומן:** האירוע חי ביומן שאליו נכתב, וזו עובדה
+    עליו — לא מצב גלובלי. אם נועה תחליף את יומן היעד ב-/settings,
+    `credentials.calendar_id` ישתנה, והאירוע הישן יישאר במקומו. קורא
+    שיבקש למחוק אותו לפי היעד ה*נוכחי* יפנה ליומן הלא נכון. לכן הקורא
+    שומר את מזהה היומן על שורת ה-Booking ומעביר אותו למחיקה.
+
+    יומן היעד נקרא מ-`credentials.calendar_id` ולא מקובע ל-"primary" —
+    נועה יכולה לבחור יומן אחר ב-/settings. היומנים ה"נוספים" (
+    `busy_calendar_ids`) משמשים לחישוב זמינות בלבד; לעולם לא נכתב אליהם
+    דבר, כדי שפגישה לא תיווצר פעמיים.
 
     booking_id נשמר ב-extendedProperties.private.bookingId כעוגן לסנכרון
     דו-כיווני בשלב 14 (Google→DB) — מאפשר לזהות שאירוע שינוי/נמחק
@@ -454,19 +690,26 @@ async def create_calendar_event(
     fall-through (אירוע יווצר ידנית).
     """
     creds = await get_credentials_or_404(db)
-    return await asyncio.to_thread(
+    row = await _load_row(db)
+    if row is None:
+        raise GoogleNotConnectedError()
+    calendar_id = target_calendar_id(row)
+    event_id = await asyncio.to_thread(
         _create_event_blocking,
         creds,
+        calendar_id,
         booking_id,
         summary,
         description,
         start,
         end,
     )
+    return event_id, calendar_id
 
 
 def _create_event_blocking(
     creds: Credentials,
+    calendar_id: str,
     booking_id: UUID,
     summary: str,
     description: str,
@@ -474,7 +717,7 @@ def _create_event_blocking(
     end: datetime,
 ) -> str:
     """blocking — נקרא רק מתוך asyncio.to_thread."""
-    service = build("calendar", "v3", credentials=creds, cache_discovery=False)
+    service = _calendar_service(creds)
     body = {
         "summary": summary,
         "description": description,
@@ -498,28 +741,50 @@ def _create_event_blocking(
     }
     result = (
         service.events()
-        .insert(calendarId="primary", body=body)
+        .insert(calendarId=calendar_id, body=body)
         .execute()
     )
     return result["id"]
 
 
 
-async def delete_calendar_event(db: AsyncSession, event_id: str) -> None:
+async def delete_calendar_event(
+    db: AsyncSession, event_id: str, calendar_id: str | None = None
+) -> None:
     """
-    מוחק אירוע ביומן. 404 (אירוע כבר נמחק) נספג שקט — אינדמפוטנטי.
+    מוחק אירוע. 404/410 (אירוע כבר נמחק) נספג שקט — אינדמפוטנטי.
     משמש לcompensation: אם commit של ה-DB נכשל אחרי יצירת אירוע, הקורא
     מוחק את האירוע ה-orphan כדי לא להשאיר ביומן של נועה פגישה שאינה ב-CRM.
+
+    `calendar_id` הוא **היומן שבו האירוע באמת נמצא**, כפי שנשמר על שורת
+    ה-Booking בעת היצירה. חובה להעביר אותו כשהוא ידוע: מחיקה לפי יומן
+    היעד ה*נוכחי* נכשלת ב-404 אם נועה החליפה יומן בינתיים, וה-404
+    נספג בשקט (זה מה שנדרש לאידמפוטנטיות) — כלומר האירוע היה נשאר
+    ביומן הישן לנצח, בלי שאיש יידע. `None` נשאר רק עבור פגישות שנוצרו
+    לפני שהעמודה קיימת, ושם הנפילה חזרה ליעד הנוכחי היא הניחוש הטוב
+    ביותר האפשרי.
     """
     creds = await get_credentials_or_404(db)
-    await asyncio.to_thread(_delete_event_blocking, creds, event_id)
+    row = await _load_row(db)
+    if row is None:
+        raise GoogleNotConnectedError()
+    await asyncio.to_thread(
+        _delete_event_blocking,
+        creds,
+        calendar_id or target_calendar_id(row),
+        event_id,
+    )
 
 
-def _delete_event_blocking(creds: Credentials, event_id: str) -> None:
+def _delete_event_blocking(
+    creds: Credentials, calendar_id: str, event_id: str
+) -> None:
     """blocking — נקרא רק מתוך asyncio.to_thread."""
-    service = build("calendar", "v3", credentials=creds, cache_discovery=False)
+    service = _calendar_service(creds)
     try:
-        service.events().delete(calendarId="primary", eventId=event_id).execute()
+        service.events().delete(
+            calendarId=calendar_id, eventId=event_id
+        ).execute()
     except HttpError as e:
         # 404/410 — האירוע כבר לא קיים. אינדמפוטנטי.
         if e.resp.status in (404, 410):
@@ -558,7 +823,11 @@ class WatchNotConfiguredError(AppException):
 
 async def create_watch(db: AsyncSession) -> dict[str, Any]:
     """
-    יוצר watch channel ביומן primary + מאתחל syncToken דרך events.list.
+    יוצר watch channel על **יומן היעד** + מאתחל syncToken דרך events.list.
+
+    ה-watch יושב רק על יומן היעד, כי רק בו חיים האירועים שאנחנו יצרנו —
+    היומנים ה"נוספים" משמשים לחישוב זמינות בלבד ואין בהם מה לסנכרן.
+    לכן גם ה-`sync_token` נשאר יחיד ואין שני cursors שיכולים לדרוס זה את זה.
 
     אם כבר קיים watch פעיל — עוצר אותו קודם (idempotent — לא נוצרים כפילויות).
     מחזיר dict עם פרטי ה-channel לתצוגה ב-UI/לוג.
@@ -591,13 +860,16 @@ async def create_watch(db: AsyncSession) -> dict[str, Any]:
     watch_token = secrets.token_urlsafe(32)
     address = s.backend_url.rstrip("/") + "/webhooks/google-calendar"
 
+    calendar_id = target_calendar_id(row)
     result = await asyncio.to_thread(
-        _watch_blocking, creds, channel_id, address, watch_token
+        _watch_blocking, creds, calendar_id, channel_id, address, watch_token
     )
 
     # קבלת syncToken התחלתי — events.list ראשון מחזיר nextSyncToken
     # (לפעמים דרך paging — הפעם הזו אנחנו רק רוצים את ה-token, לא את האירועים).
-    sync_token = await asyncio.to_thread(_initial_sync_token_blocking, creds)
+    sync_token = await asyncio.to_thread(
+        _initial_sync_token_blocking, creds, calendar_id
+    )
 
     # שמירה ל-DB
     expiration_ms = int(result.get("expiration", 0))
@@ -631,10 +903,14 @@ async def create_watch(db: AsyncSession) -> dict[str, Any]:
 
 
 def _watch_blocking(
-    creds: Credentials, channel_id: str, address: str, token: str
+    creds: Credentials,
+    calendar_id: str,
+    channel_id: str,
+    address: str,
+    token: str,
 ) -> dict[str, Any]:
     """blocking — נקרא רק מתוך asyncio.to_thread."""
-    service = build("calendar", "v3", credentials=creds, cache_discovery=False)
+    service = _calendar_service(creds)
     expiration_ms = int(
         (datetime.now(timezone.utc) + timedelta(seconds=_WATCH_TTL_SECONDS)).timestamp() * 1000
     )
@@ -645,16 +921,18 @@ def _watch_blocking(
         "token": token,
         "expiration": expiration_ms,
     }
-    return service.events().watch(calendarId="primary", body=body).execute()
+    return service.events().watch(calendarId=calendar_id, body=body).execute()
 
 
-def _initial_sync_token_blocking(creds: Credentials) -> str | None:
+def _initial_sync_token_blocking(
+    creds: Credentials, calendar_id: str
+) -> str | None:
     """events.list ראשון לקבלת nextSyncToken. עוקבים אחר pageToken עד הסוף."""
-    service = build("calendar", "v3", credentials=creds, cache_discovery=False)
+    service = _calendar_service(creds)
     page_token: str | None = None
     while True:
         params: dict[str, Any] = {
-            "calendarId": "primary",
+            "calendarId": calendar_id,
             "showDeleted": True,
             "singleEvents": True,
             "maxResults": 2500,
@@ -673,7 +951,7 @@ def _initial_sync_token_blocking(creds: Credentials) -> str | None:
 def _stop_channel_blocking(
     creds: Credentials, channel_id: str, resource_id: str
 ) -> None:
-    service = build("calendar", "v3", credentials=creds, cache_discovery=False)
+    service = _calendar_service(creds)
     try:
         service.channels().stop(
             body={"id": channel_id, "resourceId": resource_id}
@@ -794,16 +1072,17 @@ async def sync_changes(
     if row is None:
         raise GoogleNotConnectedError()
 
+    calendar_id = target_calendar_id(row)
     old_token = row.sync_token
     try:
         events, next_token = await asyncio.to_thread(
-            _list_events_blocking, creds, old_token
+            _list_events_blocking, creds, calendar_id, old_token
         )
     except HttpError as e:
         if e.resp.status == 410:
             logger.warning("syncToken expired (410), resetting to full sync")
             new_token = await asyncio.to_thread(
-                _initial_sync_token_blocking, creds
+                _initial_sync_token_blocking, creds, calendar_id
             )
             return ([], new_token, old_token)
         raise
@@ -884,17 +1163,17 @@ async def persist_sync_token(
 
 
 def _list_events_blocking(
-    creds: Credentials, sync_token: str | None
+    creds: Credentials, calendar_id: str, sync_token: str | None
 ) -> tuple[list[dict[str, Any]], str | None]:
     """blocking — נקרא רק מתוך asyncio.to_thread.
     מחזיר (events, nextSyncToken)."""
-    service = build("calendar", "v3", credentials=creds, cache_discovery=False)
+    service = _calendar_service(creds)
     all_events: list[dict[str, Any]] = []
     page_token: str | None = None
     next_sync_token: str | None = None
     while True:
         params: dict[str, Any] = {
-            "calendarId": "primary",
+            "calendarId": calendar_id,
             "showDeleted": True,
             "singleEvents": True,
             "maxResults": 2500,

@@ -29,9 +29,14 @@ from app.models.lead import Lead
 from app.models.quick_action_chip import QuickActionChip
 from app.models.task import Task
 from app.schemas.quick_action_chip import (
+    _PRESERVED_REASON_BOOKED,
+    _PRESERVED_REASON_BOOKING_PENDING,
+    _PRESERVED_REASON_PROPOSAL_SENT,
+    ApplyChipResponse,
     QuickActionChipCreate,
     QuickActionChipUpdate,
 )
+from app.schemas.lead import LeadRead
 from app.services.activities import log_activity
 from app.services.lead_actions import AUTO_CLOSE_TASK_TYPES
 from app.services.tasks import sync_lead_next_action_cache
@@ -152,13 +157,51 @@ def _calc_followup_due_at(now_utc: datetime, days: int) -> datetime:
     return candidate
 
 
+# סדר הזרימה של הסטטוסים הפתוחים (לפי §6). משמש ל-`_is_chip_regression`:
+# צ'יפ שמציב target מוקדם יותר ב-tuple מהסטטוס הנוכחי = סיגה אחורה →
+# שומרים את הסטטוס הנוכחי, מחילים שאר ה-side effects בלבד.
+# המטרה: שלא נאבד מידע (PROPOSAL_SENT שזה לא בארכיון "הצעות פתוחות",
+# Booking ש-cascade ידחה בלי שראו, event יומן שיהפוך יתום).
+_STATUS_PROGRESSION = (
+    LeadStatus.NEW.value,
+    LeadStatus.IN_PROGRESS.value,
+    LeadStatus.PROPOSAL_SENT.value,
+    LeadStatus.BOOKING_PENDING.value,
+    LeadStatus.BOOKED.value,
+)
+
+# Mapping מסטטוס שנשמר ל-`preserved_reason` ש-frontend מתרגם ל-toast.
+# רק 3 שלבים יכולים להופיע כאן — NEW/IN_PROGRESS לעולם לא יגרמו לסיגה
+# (IN_PROGRESS הוא ה-target של כל הצ'יפים הקנוניים).
+_PRESERVED_REASON_BY_STATUS = {
+    LeadStatus.PROPOSAL_SENT.value: _PRESERVED_REASON_PROPOSAL_SENT,
+    LeadStatus.BOOKING_PENDING.value: _PRESERVED_REASON_BOOKING_PENDING,
+    LeadStatus.BOOKED.value: _PRESERVED_REASON_BOOKED,
+}
+
+
+def _is_chip_regression(current: str, target: str) -> bool:
+    """True כש-target מוקדם יותר מ-current בזרימה (= סיגה אחורה).
+
+    החזרת False על סטטוסים שלא ב-_STATUS_PROGRESSION (closed_values
+    כבר נחסם למעלה ב-apply_chip; defense-in-depth להתנהגות שמרנית).
+    """
+    try:
+        return _STATUS_PROGRESSION.index(target) < _STATUS_PROGRESSION.index(
+            current
+        )
+    except ValueError:
+        return False
+
+
+
 async def apply_chip(
     db: AsyncSession,
     *,
     lead_id: UUID,
     chip_id: UUID,
     performed_by: UUID | None,
-) -> Lead:
+) -> ApplyChipResponse:
     """
     מבצע את 4 פעולות הצ'יפ אטומית. F-01 + F-05 + F-23.
 
@@ -205,7 +248,7 @@ async def apply_chip(
     if chip.target_status in forbidden_targets:
         raise ValidationError(
             "הצ'יפ מוגדר עם סטטוס שלא ניתן להציב דרך chip "
-            "(תור / סגירה / שליחת הצעה). השתמשי ב-flow הייעודי."
+            "(פגישה / סגירה / שליחת הצעה). השתמשי ב-flow הייעודי."
         )
 
     # Lead — חייב להיות פתוח. שליפה לבדיקה + הודעה ידידותית; ה-UPDATE
@@ -224,6 +267,21 @@ async def apply_chip(
     now_utc = datetime.now(timezone.utc)
     due_at = _calc_followup_due_at(now_utc, chip.auto_followup_days)
 
+    # **כלל "אין סיגה אחורה"** (§16.4 deviation): אם הליד בסטטוס מתקדם
+    # יותר מ-target של ה-chip (PROPOSAL_SENT / BOOKING_PENDING / BOOKED →
+    # IN_PROGRESS), שומרים על ה-status הנוכחי ומחילים רק את שאר ה-side
+    # effects (waiting_on / touchpoint / followup task / AUTO_CLOSE). זה
+    # מונע איבוד מידע: ליד שכבר הצעה לא נעלם מ"הצעות פתוחות"; Booking
+    # ממתינה לא נדחית בשקט; event ביומן לא יתום. ראה _is_chip_regression.
+    if _is_chip_regression(lead.status, chip.target_status):
+        effective_status = lead.status
+        status_preserved = True
+        preserved_reason = _PRESERVED_REASON_BY_STATUS.get(lead.status)
+    else:
+        effective_status = chip.target_status
+        status_preserved = False
+        preserved_reason = None
+
     # אטומי בטרנזקציה אחת (אין commit לפני הסוף).
     # 1. UPDATE Lead — מותנה ב-status פתוח. אם race עם close_lead → rowcount=0
     #    ואנחנו עוצרים בלי לבצע את שאר הצעדים.
@@ -237,7 +295,7 @@ async def apply_chip(
         update(Lead)
         .where(Lead.id == lead_id, Lead.status.notin_(closed_values))
         .values(
-            status=chip.target_status,
+            status=effective_status,
             waiting_on=chip.waiting_on,
             last_outbound_at=now_utc,
             last_activity_type=ActivityType.CHIP_APPLIED.value,
@@ -250,16 +308,17 @@ async def apply_chip(
             "מצב הליד השתנה תוך כדי הפעולה. רעני את הכרטיס ונסי שוב."
         )
 
-    # Cascade: אם chip הוציא ליד מ-BOOKING_PENDING, יש לדחות את הבקשה
-    # הממתינה. אחרת היא נעלמת מ-/dashboard/pending (sf F-06) למרות שהיא
-    # עדיין PENDING_APPROVAL ב-DB — נשכחת. סמנטית: chip = "סיכמתי, מה
-    # שקרה זה X" — אם X משנה את הסטטוס מבקשה ממתינה, הבקשה עצמה כבר לא
-    # רלוונטית.
+    # Cascade: אם chip *בפועל* הוציא ליד מ-BOOKING_PENDING, יש לדחות את
+    # הבקשה הממתינה. תלוי ב-`effective_status` (הסטטוס האמיתי שנקבע), לא
+    # ב-`chip.target_status` — כשנמנעת סיגה ל-IN_PROGRESS, effective_status
+    # נשאר BOOKING_PENDING → לא דוחים את ה-booking (זה ה-fix לפי הכלל החדש;
+    # נועה תראה את ה-PendingBookingCard ותחליט ידנית).
     # לא עושים cascade ל-BOOKED+APPROVED: זה ירצח Google Calendar event
-    # אמיתי. נועה תראה את ה-event ביומן ותחליט אם לבטל ב-UI הייעודי.
+    # אמיתי. עם הכלל החדש זה אוטומטי — סיגה מ-BOOKED נמנעת, אז ה-event
+    # לעולם לא יתום.
     if (
         lead.status == LeadStatus.BOOKING_PENDING.value
-        and chip.target_status != LeadStatus.BOOKING_PENDING.value
+        and effective_status != LeadStatus.BOOKING_PENDING.value
     ):
         rejected_result = await db.execute(
             update(Booking)
@@ -279,7 +338,7 @@ async def apply_chip(
                 lead_id=lead_id,
                 activity_type=ActivityType.MEETING_REJECTED,
                 performed_by=performed_by,
-                content="בקשת תור נדחתה אוטומטית — סיכום שיחה דרך chip",
+                content="בקשת פגישה נדחתה אוטומטית — סיכום שיחה דרך chip",
                 metadata={
                     "booking_id": str(booking_id),
                     "chip_id": str(chip.id),
@@ -340,7 +399,9 @@ async def apply_chip(
     db.add(task)
     await db.flush()  # מקבל id ל-activity
 
-    # 3. log activity
+    # 3. log activity — `intended_status` ו-`actual_status` נשמרים כדי שכל מי
+    # שמסתכל ב-timeline (debug, AI summaries) יראה את ה-decision: ה-chip ניסה
+    # X, בפועל נקבע Y. `status_preserved` flag נוח לחיפוש.
     await log_activity(
         db,
         lead_id=lead_id,
@@ -350,6 +411,10 @@ async def apply_chip(
         metadata={
             "chip_id": str(chip.id),
             "target_status": chip.target_status,
+            "intended_status": chip.target_status,
+            "actual_status": effective_status,
+            "status_preserved": status_preserved,
+            "preserved_reason": preserved_reason,
             "waiting_on": chip.waiting_on,
             "followup_task_type": chip.followup_task_type,
             "auto_followup_days": chip.auto_followup_days,
@@ -367,4 +432,8 @@ async def apply_chip(
     refreshed = (
         await db.execute(select(Lead).where(Lead.id == lead_id))
     ).scalar_one()
-    return refreshed
+    return ApplyChipResponse(
+        lead=LeadRead.model_validate(refreshed),
+        status_preserved=status_preserved,
+        preserved_reason=preserved_reason,
+    )

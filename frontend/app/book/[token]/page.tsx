@@ -1,96 +1,31 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import { AlertCircle, Calendar, CheckCircle2, Clock, Info } from "lucide-react";
+import { Calendar, Info } from "lucide-react";
+import { BookingCenteredCard } from "@/components/BookingCenteredCard";
+import { BookingPhoneField } from "@/components/BookingPhoneField";
+import { BookingSlotPicker } from "@/components/BookingSlotPicker";
+import { BookingSuccessCard } from "@/components/BookingSuccessCard";
 import { api, ApiError } from "@/lib/api";
-import { toIsraelISODate } from "@/lib/date";
+import { fullSlotLabel } from "@/lib/bookingDates";
 import { labelCategory, labelSubtype, pluralizeMinutes } from "@/lib/hebrew";
-import type {
-  AvailabilityResponse,
-  BookingPageInfo,
-  TimeSlot,
-} from "@/lib/types";
-import { cn } from "@/lib/utils";
+import type { BookingPageInfo, TimeSlot } from "@/lib/types";
+import { useBookingSlots } from "@/hooks/useBookingSlots";
 
 // דף קביעת תור ציבורי. לא ב-AuthGuard — הליד מגיע מקישור ש-נועה שלחה
 // לו ב-WhatsApp/מייל. הtoken בURL הוא ה-credential היחיד.
-
-const ISRAEL_TZ = "Asia/Jerusalem";
-const DAYS_TO_SHOW = 14;
-
-// formatDate היה wrapper מקומי; הוחלף ב-toIsraelISODate המשותף ב-
-// `lib/date.ts`. הוא משתמש באותו `en-CA` עם options מפורשות (year/
-// month/day) — כך שהפלט יציב לפורמט YYYY-MM-DD בכל הדפדפנים, ללא
-// חשש מ-CLDR defaults שעלולים להחזיר M/d/yyyy.
-const formatDate = toIsraelISODate;
-
-function shortDayName(d: Date): string {
-  return d.toLocaleDateString("he-IL", {
-    weekday: "short",
-    timeZone: ISRAEL_TZ,
-  });
-}
-
-function shortDate(d: Date): string {
-  return d.toLocaleDateString("he-IL", {
-    day: "2-digit",
-    month: "2-digit",
-    timeZone: ISRAEL_TZ,
-  });
-}
-
-function slotLabel(iso: string): string {
-  return new Date(iso).toLocaleTimeString("he-IL", {
-    hour: "2-digit",
-    minute: "2-digit",
-    timeZone: ISRAEL_TZ,
-  });
-}
-
-function fullSlotLabel(start: string, end: string): string {
-  const s = new Date(start).toLocaleString("he-IL", {
-    weekday: "long",
-    day: "2-digit",
-    month: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    timeZone: ISRAEL_TZ,
-  });
-  const e = slotLabel(end);
-  return `${s} - ${e}`;
-}
 
 export default function BookingPage() {
   const params = useParams<{ token: string }>();
   const token = params.token;
 
   const [info, setInfo] = useState<BookingPageInfo | null>(null);
-  const [availability, setAvailability] = useState<AvailabilityResponse | null>(
-    null,
-  );
   const [loading, setLoading] = useState(true);
-  const [loadingSlots, setLoadingSlots] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // מצב שגיאה נפרד לטעינת זמינות. חיוני להבחין בין "אין סלוטים פנויים"
-  // (יום עמוס לגיטימי) לבין "ה-fetch נכשל" (רשת/שרת/גוגל). אחרת הליד
-  // רואה "אין סלוטים" ומניח שאין מועדים כלל ב-14 הימים.
-  const [availabilityError, setAvailabilityError] = useState<string | null>(null);
 
-  // טווח ימים זמין לבחירה — מהיום ועד DAYS_TO_SHOW
-  const allDates = useMemo(() => {
-    const today = new Date();
-    const arr: Date[] = [];
-    for (let i = 0; i < DAYS_TO_SHOW; i++) {
-      const d = new Date(today);
-      d.setDate(today.getDate() + i);
-      arr.push(d);
-    }
-    return arr;
-  }, []);
-
-  const [selectedDate, setSelectedDate] = useState<string>(formatDate(new Date()));
   const [selectedSlot, setSelectedSlot] = useState<TimeSlot | null>(null);
+  const [phone, setPhone] = useState("");
   const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [success, setSuccess] = useState<{
@@ -98,7 +33,7 @@ export default function BookingPage() {
     end: string;
   } | null>(null);
 
-  // טעינת מידע ראשוני + זמינות
+  // טעינת מידע ראשוני
   useEffect(() => {
     if (!token) return;
     api
@@ -110,41 +45,19 @@ export default function BookingPage() {
       .finally(() => setLoading(false));
   }, [token]);
 
-  const fetchAvailability = useMemo(
-    () => async () => {
-      if (!token || !info || info.has_active_booking) return;
-      setLoadingSlots(true);
-      setAvailabilityError(null);
-      const first = allDates[0];
-      const last = allDates[allDates.length - 1];
-      try {
-        const result = await api.getBookingAvailability(
-          token,
-          formatDate(first),
-          formatDate(last),
-        );
-        setAvailability(result);
-      } catch (err) {
-        setAvailability(null);
-        setAvailabilityError(
-          err instanceof ApiError ? err.message : "שגיאה בטעינת זמינות",
-        );
-      } finally {
-        setLoadingSlots(false);
-      }
-    },
-    [token, info, allDates],
-  );
-
-  useEffect(() => {
-    void fetchAvailability();
-  }, [fetchAvailability]);
-
-  const slotsForSelectedDate = useMemo(() => {
-    if (!availability) return [];
-    const day = availability.days.find((d) => d.date === selectedDate);
-    return day?.slots ?? [];
-  }, [availability, selectedDate]);
+  // מנגנון הרשת החודשית משותף לשני מסלולי הקביעה — ראה
+  // `hooks/useBookingSlots.ts` ו-`components/BookingSlotPicker.tsx`.
+  // מה שנשאר כאן הוא רק מה ששייך לליד: התקרה, הפגישות הקיימות, וההערה.
+  // נקרא לפני כל return מוקדם (Rules of Hooks).
+  const slots = useBookingSlots({
+    today: info?.today ?? null,
+    horizonEnd: info?.booking_horizon_end ?? null,
+    // בעבר היה כאן גם `has_active_booking`, וזה מה שעצר את טעינת
+    // הזמינות כשללקוח כבר הייתה פגישה. עכשיו רק התקרה עוצרת.
+    enabled: !!info?.can_book_more,
+    loadAvailability: (from, to) =>
+      api.getBookingAvailability(token, from, to),
+  });
 
   async function submit() {
     if (!selectedSlot) return;
@@ -154,6 +67,7 @@ export default function BookingPage() {
       const result = await api.createBooking(token, {
         slot_start: selectedSlot.start,
         slot_end: selectedSlot.end,
+        contact_phone: phone.trim(),
         notes: notes.trim() || undefined,
       });
       setSuccess({ start: result.slot_start, end: result.slot_end });
@@ -161,85 +75,79 @@ export default function BookingPage() {
       setError(
         err instanceof ApiError ? err.message : "שגיאה ביצירת הבקשה",
       );
+      // המועד נתפס בינתיים — ההודעה מבקשת לבחור "מהרשימה המעודכנת",
+      // ולכן הרשימה חייבת להתעדכן באמת. הסלוט שנבחר **נשאר** במקומו:
+      // איפוס שלו היה מסתיר את כל סעיף הטופס, ואיתו את ההודעה עצמה.
+      if (err instanceof ApiError && err.status === 409) {
+        slots.reloadSelectedMonth();
+      }
     } finally {
       setSubmitting(false);
     }
   }
 
+  // בחירת מועד אחר מנקה את שגיאת הקביעה הקודמת — היא דיברה על המועד
+  // הקודם, ובלי זה "הסלוט כבר תפוס" היה נשאר מתחת למועד חדש ופנוי.
+  function selectSlot(slot: TimeSlot | null) {
+    setSelectedSlot(slot);
+    setError(null);
+  }
+
   // ===== מצבים שונים =====
 
   if (loading) {
-    return <CenteredCard>טוען…</CenteredCard>;
+    return <BookingCenteredCard>טוען…</BookingCenteredCard>;
   }
 
   if (error && !info) {
     return (
-      <CenteredCard>
+      <BookingCenteredCard>
         <div className="text-state-red text-center">{error}</div>
-      </CenteredCard>
+      </BookingCenteredCard>
     );
   }
 
   if (!info) return null;
 
-  // 1) הצלחה — אחרי submit
+  // 1) הצלחה — אחרי submit. הפגישה כבר קבועה; אין שלב אישור.
   if (success) {
-    return (
-      <CenteredCard>
-        <div className="text-center space-y-3">
-          <CheckCircle2
-            className="mx-auto text-state-green"
-            size={56}
-            aria-hidden
-          />
-          <div className="text-xl font-semibold">הבקשה התקבלה</div>
-          <div className="text-sm text-gray-600">
-            המועד המבוקש:
-          </div>
-          <div className="text-base font-medium text-gray-900">
-            {fullSlotLabel(success.start, success.end)}
-          </div>
-          <div className="text-sm text-gray-500 mt-4">
-            נועה תאשר את הפגישה ותחזור אליך בהקדם. תקבלי הודעה בערוץ שלך.
-          </div>
-        </div>
-      </CenteredCard>
-    );
+    return <BookingSuccessCard start={success.start} end={success.end} />;
   }
 
-  // 2) כבר יש תור פעיל
-  if (info.has_active_booking && info.active_booking_at) {
-    const statusLabel =
-      info.active_booking_status === "approved"
-        ? "אושר ע\"י נועה"
-        : "ממתין לאישור";
-    // active_booking_end עשוי להיות null בלידים ישנים מאוד; fallback ל-start
-    const endLabel = info.active_booking_end ?? info.active_booking_at;
+  // 2) הגעת לתקרת הפגישות — המצב היחיד שחוסם את הדף.
+  //    פגישה קיימת לבדה **אינה** חוסמת יותר: היא מוצגת כבאנר למטה,
+  //    והלקוח יכול לקבוע מועד נוסף. זו הייתה המגבלה שהוסרה.
+  if (!info.can_book_more) {
     return (
-      <CenteredCard>
+      <BookingCenteredCard>
         <div className="text-center space-y-3">
           <Calendar className="mx-auto text-state-green" size={48} aria-hidden />
-          <div className="text-lg font-semibold">כבר יש לך בקשת תור</div>
-          <div className="text-base text-gray-900">
-            {fullSlotLabel(info.active_booking_at, endLabel)}
+          <div className="text-lg font-semibold">
+            {info.upcoming_bookings.length === 1
+              ? "כבר קבועה לך פגישה"
+              : `כבר קבועות לך ${info.upcoming_bookings.length} פגישות`}
           </div>
-          <div className="text-sm text-state-orange bg-state-orange/10 rounded-lg px-3 py-2 mt-2">
-            {statusLabel}
+          <div className="space-y-1">
+            {info.upcoming_bookings.map((b) => (
+              <div key={b.start} className="text-base text-gray-900">
+                {fullSlotLabel(b.start, b.end)}
+              </div>
+            ))}
           </div>
           <div className="text-sm text-gray-500 mt-3">
-            אם רוצה להחליף מועד, צרי קשר עם נועה ישירות.
+            כדי לקבוע פגישה נוספת או לשנות מועד, צרי קשר עם נועה ישירות.
           </div>
         </div>
-      </CenteredCard>
+      </BookingCenteredCard>
     );
   }
 
-  // 3) טופס קביעת תור
+  // 3) טופס קביעת פגישה
   return (
     <div className="min-h-screen bg-gray-50">
       <header className="bg-white border-b border-gray-200">
         <div className="max-w-2xl mx-auto px-4 py-5">
-          <div className="text-xs text-gray-500 mb-1">קביעת תור עם נועה</div>
+          <div className="text-xs text-gray-500 mb-1">קביעת פגישה עם נועה</div>
           <h1 className="text-xl font-semibold">{info.lead_name}</h1>
           <div className="text-sm text-gray-600 mt-0.5">
             {labelCategory(info.service_category)}
@@ -253,105 +161,48 @@ export default function BookingPage() {
       </header>
 
       <main className="max-w-2xl mx-auto p-4 space-y-5">
-        {availability && !availability.includes_google_busy && (
+        {!slots.includesGoogleBusy && (
           <div className="text-xs text-state-orange bg-state-orange/10 rounded-lg px-3 py-2 flex items-start gap-2">
             <Info size={14} className="mt-0.5 shrink-0" aria-hidden />
             סנכרון יומן זמני לא פעיל. ייתכן שחלק מהסלוטים יתבררו כתפוסים
-            לאחר האישור.
+            בהמשך.
           </div>
         )}
 
-        {/* בחירת יום */}
-        <section>
-          <div className="text-sm font-semibold text-gray-700 mb-2">
-            בחרי יום
-          </div>
-          <div className="grid grid-cols-7 gap-1.5">
-            {allDates.map((d) => {
-              const key = formatDate(d);
-              const dayData = availability?.days.find((x) => x.date === key);
-              const hasSlots = (dayData?.slots.length ?? 0) > 0;
-              const isSelected = selectedDate === key;
-              return (
-                <button
-                  key={key}
-                  onClick={() => {
-                    setSelectedDate(key);
-                    setSelectedSlot(null);
-                  }}
-                  // כשיש שגיאת fetch — לא מכבים את הכפתורים, אחרת כל
-                  // השבועיים נראים אפורים כאילו אין זמינות אמיתית.
-                  disabled={
-                    !hasSlots && !loadingSlots && !availabilityError
-                  }
-                  className={cn(
-                    "flex flex-col items-center py-2 rounded-lg text-xs border",
-                    isSelected
-                      ? "bg-gray-900 text-white border-gray-900"
-                      : hasSlots || availabilityError
-                      ? "bg-white border-gray-200 text-gray-700"
-                      : "bg-gray-50 border-gray-100 text-gray-300",
-                  )}
-                >
-                  <span>{shortDayName(d)}</span>
-                  <span className="font-semibold mt-0.5">{shortDate(d)}</span>
-                </button>
-              );
-            })}
-          </div>
-        </section>
-
-        {/* סלוטים */}
-        <section>
-          <div className="text-sm font-semibold text-gray-700 mb-2">
-            בחרי שעה
-          </div>
-          {loadingSlots ? (
-            <div className="text-center text-gray-400 text-sm py-6">טוען…</div>
-          ) : availabilityError ? (
-            // שגיאה אמיתית — לא מציגים "אין סלוטים", כי זה מטעה: אולי
-            // היומן עמוס באמת ואולי הקריאה נכשלה. מבדילים ונותנים retry.
-            <div className="bg-white rounded-xl border border-state-red/30 px-4 py-5 flex flex-col items-center gap-3">
-              <div className="flex items-start gap-2 text-state-red text-sm">
-                <AlertCircle size={16} className="mt-0.5 shrink-0" aria-hidden />
-                <span>{availabilityError}</span>
+        {/* פגישות שכבר קבועות. באנר בלבד — הבורר נשאר פתוח מתחתיו,
+            כי אפשר לקבוע פגישה נוספת. */}
+        {info.upcoming_bookings.length > 0 && (
+          <div className="bg-white border border-gray-200 rounded-xl px-4 py-3">
+            <div className="flex items-start gap-2">
+              <Calendar
+                size={15}
+                className="text-state-green mt-0.5 shrink-0"
+                aria-hidden
+              />
+              <div className="text-sm">
+                <div className="font-medium text-gray-900">
+                  {info.upcoming_bookings.length === 1
+                    ? "כבר קבועה לך פגישה"
+                    : `כבר קבועות לך ${info.upcoming_bookings.length} פגישות`}
+                </div>
+                <ul className="text-gray-600 mt-1 space-y-0.5">
+                  {info.upcoming_bookings.map((b) => (
+                    <li key={b.start}>{fullSlotLabel(b.start, b.end)}</li>
+                  ))}
+                </ul>
+                <div className="text-xs text-gray-500 mt-1.5">
+                  אפשר לקבוע פגישה נוספת למטה.
+                </div>
               </div>
-              <button
-                onClick={() => void fetchAvailability()}
-                className="text-sm rounded-lg border border-gray-200 px-4 py-2 hover:bg-gray-50"
-              >
-                נסי שוב
-              </button>
             </div>
-          ) : slotsForSelectedDate.length === 0 ? (
-            <div className="bg-white rounded-xl border border-dashed border-gray-200 px-4 py-6 text-center text-sm text-gray-400">
-              אין סלוטים פנויים ביום זה.
-            </div>
-          ) : (
-            <div className="grid grid-cols-3 gap-2">
-              {slotsForSelectedDate.map((slot) => {
-                const isSelected =
-                  selectedSlot?.start === slot.start &&
-                  selectedSlot?.end === slot.end;
-                return (
-                  <button
-                    key={slot.start}
-                    onClick={() => setSelectedSlot(slot)}
-                    className={cn(
-                      "py-2.5 rounded-lg text-sm border flex items-center justify-center gap-1",
-                      isSelected
-                        ? "bg-gray-900 text-white border-gray-900"
-                        : "bg-white border-gray-200 text-gray-800",
-                    )}
-                  >
-                    <Clock size={12} aria-hidden />
-                    {slotLabel(slot.start)}
-                  </button>
-                );
-              })}
-            </div>
-          )}
-        </section>
+          </div>
+        )}
+
+        <BookingSlotPicker
+          slots={slots}
+          selectedSlot={selectedSlot}
+          onSelectSlot={selectSlot}
+        />
 
         {/* אישור + הערה */}
         {selectedSlot && (
@@ -362,6 +213,9 @@ export default function BookingPage() {
                 {fullSlotLabel(selectedSlot.start, selectedSlot.end)}
               </span>
             </div>
+
+            <BookingPhoneField value={phone} onChange={setPhone} />
+
             <label className="block">
               <div className="text-xs text-gray-500 mb-1">
                 הערה לנועה (אופציונלי)
@@ -384,27 +238,17 @@ export default function BookingPage() {
 
             <button
               onClick={submit}
-              disabled={submitting}
+              disabled={submitting || phone.trim().length === 0}
               className="w-full rounded-lg bg-gray-900 text-white py-3 font-medium disabled:opacity-50"
             >
-              {submitting ? "שולחת בקשה…" : "אישור בקשת תור"}
+              {submitting ? "קובעת…" : "קביעת הפגישה"}
             </button>
             <div className="text-xs text-gray-500 text-center">
-              המועד עדיין דורש אישור של נועה.
+              הפגישה תיקבע מיד ותיכנס ליומן.
             </div>
           </section>
         )}
       </main>
     </div>
-  );
-}
-
-function CenteredCard({ children }: { children: React.ReactNode }) {
-  return (
-    <main className="min-h-screen flex items-center justify-center p-6 bg-gray-50">
-      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 w-full max-w-md p-6">
-        {children}
-      </div>
-    </main>
   );
 }

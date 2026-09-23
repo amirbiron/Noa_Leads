@@ -55,8 +55,17 @@
 
 > רק חובה. לכל variable + שינויים אופציונליים → ראה
 > [`ENV-VARS-REFERENCE.md`](ENV-VARS-REFERENCE.md).
+>
+> **⚠ קריטי:** ה-env vars מחולקים בין **שני services נפרדים ב-Render**
+> (`noa-leads-backend` ו-`noa-leads-frontend`). הגדרת הכל ב-service אחד
+> בלבד היא תקלה נפוצה שתוצאתה — חצי מהמערכת לא עובדת. סעיף 3.A הוא
+> לבeckend, סעיף 3.B הוא ל-frontend.
 
-### 3.1 ליבה (חובה אבסולוטית — בלי זה השרת לא מתפקד)
+### 3.A — Backend (`noa-leads-backend` service)
+
+ב-Render UI: Dashboard → `noa-leads-backend` → Environment.
+
+#### 3.A.1 ליבה (חובה אבסולוטית — בלי זה השרת לא מתפקד)
 
 - [ ] `DATABASE_URL` — auto-provided ע"י Render (`fromDatabase` ב-render.yaml).
   לוודא רק שה-binding ל-`noa-leads-db` תקין.
@@ -65,18 +74,47 @@
 - [ ] `CORS_ORIGINS` — URL של ה-frontend (Section 2). דוגמה:
   `https://noa-leads-frontend-<hash>.onrender.com`
 - [ ] `FRONTEND_URL` — אותו URL של ה-frontend.
-- [ ] `BACKEND_URL` — URL של ה-backend (Section 2). דוגמה:
-  `https://noa-leads-backend-<hash>.onrender.com`
-- [ ] `NEXT_PUBLIC_API_BASE_URL` (ב-frontend service) — URL של ה-backend.
+- [ ] `BACKEND_URL` — URL של ה-backend עצמו (Section 2). דוגמה:
+  `https://noa-leads-backend-<hash>.onrender.com`.
+  **⚠ חובה גם אם נראה אופציונלי במבט ראשון — incident-grade, קרה
+  בפרודקשן.** בלעדיו `renew_calendar_watch` cron נכשל (משתמש ב-
+  `BACKEND_URL/webhooks/google-calendar` לרישום watch channels);
+  ה-watch channel של Google Calendar פג תוקף תוך ~7 ימים →
+  סנכרון הפוך של היומן (Google → DB) נשבר **בשקט**, ללא error
+  הנראה למשתמש. הגדר תמיד, גם אם הלקוח לא מתחבר ל-Calendar
+  ביום הראשון.
 
-### 3.2 AI (חובה אם הלקוח מפעיל סיכומים יומיים/שבועיים או Gmail intake)
+#### 3.A.2 AI (חובה אם הלקוח מפעיל סיכומים/Gmail intake/תמלול קולי)
 
-- [ ] `ANTHROPIC_API_KEY` — מ-`console.anthropic.com` → Settings → API Keys.
+המערכת משתמשת ב-**שני ספקי AI**: Anthropic לכל הניסוח/סיווג, OpenAI
+רק לתמלול קולי (§13.3). שני מפתחות נפרדים.
+
+- [ ] `ANTHROPIC_API_KEY` — מ-`console.anthropic.com` → Settings → API Keys
+  (Claude — סיכומים יומיים/שבועיים, סיווג מיילים, ניסוח, הצעות לרדומים).
+- [ ] `OPENAI_API_KEY` — מ-`platform.openai.com` → API Keys → Create new
+  secret key. **ספק AI שני, נפרד מ-Anthropic** — בלעדי לתמלול קולי
+  (gpt-4o-transcribe, §13.3). אם לא מוגדר → כפתור התמלול ב-UI מחזיר
+  שגיאה ידידותית; שאר ה-app עובד תקין.
 - [ ] `SYSTEM_START_DATE` — תאריך go-live של הלקוח, פורמט ISO
   (`YYYY-MM-DD`). דוגמה: `2026-09-01`. **חשוב** — בלי לעדכן ה-default
   הוא תאריך migration ישן (2026-05-23) שיתן אנליטיקות שגויות.
 
-### 3.3 Google integration (חובה אם הלקוח מפעיל Calendar / Gmail intake)
+#### 3.A.3 Google integration (חובה אם הלקוח מפעיל Calendar / Gmail intake)
+
+> ✅ **תוקן (06/2026): envVarGroup משותף `noa-leads-google`**.
+> כל ה-env vars של Google + `SECRETS_ENCRYPTION_KEY` + `BACKEND_URL`
+> מוגדרים ב-group יחיד ב-`render.yaml`, ומתפזרים אוטומטית ל-web ול-3
+> cron services שדורשים אותם (`renew_calendar_watch`, `renew_gmail_watch`,
+> `retry_pending_classification`).
+>
+> **מתאם**: הזן את הערכים *פעם אחת* ב-Render dashboard תחת
+> "Environment Groups → noa-leads-google". הם יתפזרו אוטומטית. בלי
+> ה-group היו 8 vars שדרשו עדכון ידני ב-4 places — drift שנשרף עליו
+> פעמיים (05/2026 GOOGLE_* חסר ב-cron; 06/2026 SECRETS_ENCRYPTION_KEY
+> חסר). ראה: `docs/recurring-bug-patterns.md` Pattern 5 Variant 5c.
+>
+> **דפוס כללי**: כל env שמשרת flow של cron (לא רק UI/API) חייב להופיע
+> ב-envVarGroup, לא ב-`sync: false` per-service.
 
 - [ ] `GOOGLE_CLIENT_ID` — מ-Google Cloud Console (ראה Section 4.1).
 - [ ] `GOOGLE_CLIENT_SECRET` — אותו מקום.
@@ -91,10 +129,31 @@
   פלט: 44 תווים base64. **חובה** ייצור ידני — Render `generateValue` לא יוצר
   ערך תקף ל-Fernet (האלגוריתם דורש פורמט ספציפי).
 
-### 3.4 אופציונלי לפי צורך
+#### 3.A.4 אופציונלי לפי צורך
 
 - [ ] `TELEGRAM_BOT_TOKEN` — אם הלקוח רוצה פוש על ליד חדש. ראה Section 4.3.
 - [ ] `TELEGRAM_OWNER_CHAT_ID` — אם `TELEGRAM_BOT_TOKEN` מוגדר.
+
+### 3.B — Frontend (`noa-leads-frontend` service)
+
+> **⚠ הגדר ב-service של ה-frontend בנפרד — לא ב-backend.**
+> ב-Render UI: Dashboard → `noa-leads-frontend` → Environment.
+> אם תגדיר רק ב-backend, ה-frontend לא יוכל לפנות ל-API.
+
+- [ ] `NEXT_PUBLIC_API_BASE_URL` — URL ציבורי של ה-backend (Section 2).
+  - דוגמה: `https://noa-leads-backend-<hash>.onrender.com`
+  - **חובה בפרודקשן.** ה-default ב-`lib/api.ts` הוא `http://localhost:8000`;
+    בלי override, ה-frontend בפרודקשן ינסה לפנות ל-localhost ויקבל
+    `ERR_CONNECTION_REFUSED` על כל בקשה.
+  - הקידומת `NEXT_PUBLIC_` נדרשת כדי שה-var תיחשף ל-bundle של ה-browser
+    בזמן build. שינוי דורש redeploy של ה-frontend (לא רק restart).
+
+### 3.C — לעתיד (?) — לא ממומש כיום
+
+> סעיף זה משמש כתזכורת ל-vars שיתווספו כשפיצ'רים עתידיים ייכנסו
+> למימוש. **אין צורך להגדיר אותם עכשיו.**
+>
+> (כרגע ריק — `OPENAI_API_KEY` הועבר ל-3.A.2 כשהתמלול הקולי נכנס למימוש.)
 
 ---
 
@@ -112,6 +171,16 @@
     - **External** אם חשבון אישי (gmail.com) — דורש Google verification
       לפני שמשתמשים אחרים יוכלו לאשר. **(?) לבחור לפי סוג חשבון.**
   - הגדרת App name, support email, developer contact.
+  - [ ] ⚠️ **Publishing status: PUBLISH APP (Production) — קריטי.**
+    אפליקציה ב-**Testing** status: Google **מבטל את ה-refresh tokens
+    אחרי 7 ימים**. התוצאה: חיבור Gmail ו-Calendar "פג תוקף" כל שבוע,
+    והלקוחה צריכה להתחבר מחדש שוב ושוב (+ מקבלת התראת טלגרם על פקיעה).
+    **הפתרון:** OAuth consent screen → **PUBLISH APP** → "In production".
+    אז ה-tokens מפסיקים לפוג כל 7 ימים. לחשבון gmail.com (External)
+    תופיע אזהרת "Google hasn't verified this app" בהתחברות — לוחצים
+    **Advanced → Go to <app> (unsafe)** ומאשרים; ה-tokens יציבים אחרי זה.
+    (verification מלא של Google מבטל גם את האזהרה, אבל לוקח שבועות
+    ואינו חובה ל-MVP — מספיק Production status.)
 - [ ] יצירת **OAuth 2.0 Client ID** (Credentials → Create Credentials →
   OAuth client ID → Web application).
 - [ ] Authorized redirect URIs — להוסיף **שתי כתובות**:
@@ -134,6 +203,15 @@
 - [ ] **בייצור, אחרי שכל ה-vars מוגדרים:** חיבור חשבון Google של הלקוחה
   דרך UI ב-`<FRONTEND_URL>/settings` (כפתור "חיבור Google") — מוביל
   ל-OAuth flow, האסימונים נשמרים מוצפנים ב-DB.
+- [ ] **בחירת יומנים (חדש, ספטמבר 2026).** מיד אחרי החיבור, באותה
+  סקציה ב-`/settings`, מופיעה רשימת היומנים של החשבון. יש להגדיר:
+  - **אילו יומנים נחשבים תפוסים** — כל יומן שהלקוחה מנהלת בו אירועים
+    שלא אמורים להתנגש עם פגישות. אם יש לה יומן משני (עבודה/אישי),
+    הוא **חייב** להיות מסומן, אחרת המערכת תציע ללקוחות שעות שהיא
+    תפוסה בהן.
+  - **לאיזה יומן ייקבעו הפגישות** — יומן אחד בלבד, חייב הרשאת כתיבה.
+  ברירת המחדל היא היומן הראשי בלבד, ולכן **בלי הצעד הזה יומן משני לא
+  נלקח בחשבון.** ההגדרה נשמרת גם בהתחברות מחדש.
 
 ### 4.2 Anthropic
 
@@ -179,7 +257,12 @@
   **דרך 1 — UI (מומלצת):** אחרי deploy ראשון, פתח את ה-frontend
   בכתובת `<FRONTEND_URL>`. ה-app יזהה ש-DB ריק (`GET /setup/status` →
   `setup_needed: true`) ויפנה אוטומטית ל-`/setup`. מלא email, name,
-  password (≥8 תווים) → הליד הופך ל-OWNER ומחובר אוטומטית.
+  password (≥8 תווים) → המשתמש הופך ל-OWNER ומחובר אוטומטית.
+
+  > **הסיסמה נקבעת פעם אחת ולא משמשת לכניסה.** מאז ספטמבר 2026 אין
+  > מסך התחברות (Spec §22.1.1) — פתיחת הכתובת היא הכניסה. השדה נשאר
+  > כאן רק מפני שעמודת `password_hash` היא NOT NULL. אין צורך לשמור
+  > את הסיסמה, אבל גם אין נזק בכך.
 
   **דרך 2 — CLI:** אם הלקוח רוצה משתמש דרך SSH/Render shell:
   ```bash
@@ -207,7 +290,8 @@
 - [ ] **Backend health check:**
   - `GET <BACKEND_URL>/health` → `{"status":"ok"}`. Render auto-runs
     זה ככה healthcheck.
-- [ ] **Login:** פתח את ה-frontend, התחבר כ-Owner שיצרת.
+- [ ] **כניסה:** פתח את ה-frontend בכתובת הראשית. אין מסך התחברות —
+  הדף נכנס אוטומטית כ-Owner. אם הוא מפנה ל-`/setup`, ה-Owner עוד לא נוצר.
 - [ ] **יצירת ליד ידני:** דרך UI (`/leads/new`) או API:
   ```bash
   curl -X POST <BACKEND_URL>/intake/manual \
@@ -220,11 +304,33 @@
 - [ ] **(אם Telegram מוגדר):** יצירת ליד חדש שולחת push לנועה
   בטלגרם תוך שניות.
 - [ ] **(אם Google מחובר):**
-  - `/settings/google` → כפתור "חיבור" → OAuth flow מצליח → חוזרים
+  - `/settings` → כפתור "חיבור" → OAuth flow מצליח → חוזרים
     לדף settings עם status מחובר.
+  - רשימת היומנים נטענת, והבחירה נשמרת ונשארת אחרי רענון.
   - בדיקה ידנית של sync: יצירת event ביומן Google → אמור להופיע ב-DB
     תוך דקות (`renew_calendar_watch` cron יוצר watch channel; ה-push
     מגיע ל-`/webhooks/google-calendar`).
+
+- [ ] **זרימת קביעת פגישה (מקצה לקצה):**
+  - בכרטיס ליד → "העתקת קישור לקביעת פגישה" → פתיחת הקישור בדפדפן
+    נפרד (או בגלישה פרטית).
+  - בחירת מועד, מילוי **טלפון** (שדה חובה) והערה → "קביעת הפגישה".
+  - הדף מציג "הפגישה נקבעה" — **בלי** שלב אישור.
+  - ביומן Google של הלקוחה נוצר אירוע סגול, ובתיאור שלו מופיעים
+    הטלפון וההערה.
+  - **פתיחת אותו קישור שוב** → אפשר לקבוע פגישה נוספת (עד 3).
+  - בכרטיס הליד מופיע כרטיס "פגישה קבועה" עם כפתור ביטול; ביטול
+    מוחק גם את האירוע מהיומן.
+
+- [ ] **(אם Google מחובר) קישור פתוח לקביעת פגישה (§11.5):**
+  - `/settings` → "קישור פתוח לקביעת פגישה" → "העתקת הקישור" → פתיחה בגלישה פרטית.
+  - בחירת מועד, מילוי **שם** ו**טלפון** (שניהם חובה) → "קביעת הפגישה" → "הפגישה נקבעה".
+  - ביומן **היעד בלבד** נוצר אירוע "פגישה — <השם>", ובתיאור שלו הטלפון. ביומנים הנוספים שסומנו כתפוסים לא נוצר דבר.
+  - **לא** נוצר ליד: רשימת הלידים והדשבורד לא השתנו.
+  - מחיקת האירוע ביומן Google → אחרי הסנכרון (דקות) המועד חוזר להיות פנוי בדף הקישור.
+
+- [ ] **כניסה ללא סיסמה:** פתיחת `<FRONTEND_URL>` בגלישה פרטית נכנסת
+  ישירות לדשבורד, בלי מסך התחברות.
 - [ ] **(אם AI מוגדר):**
   - הרצה ידנית של cron summary: דרך Render Dashboard → Cron service →
     "Trigger Run". או SSH:
