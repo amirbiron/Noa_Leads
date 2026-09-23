@@ -24,10 +24,14 @@ if TYPE_CHECKING:
 class Booking(UUIDPrimaryKeyMixin, Base):
     __tablename__ = "bookings"
 
-    lead_id: Mapped[UUID] = mapped_column(
+    # nullable מאז מיגרציה 0033: פגישה שנקבעה דרך הקישור הפתוח אינה
+    # שייכת לאף ליד. השורה קיימת **רק** בשביל שתי שכבות ההגנה מפני
+    # כפילות — `_fetch_db_busy` ו-`ck_bookings_no_overlap` — ולא
+    # מופיעה בשום מסך, כי כל תצוגות הליד מסננות לפי `lead_id`.
+    lead_id: Mapped[UUID | None] = mapped_column(
         PG_UUID(as_uuid=True),
         ForeignKey("leads.id", ondelete="CASCADE"),
-        nullable=False,
+        nullable=True,
     )
     requested_slot_start: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
@@ -62,6 +66,14 @@ class Booking(UUIDPrimaryKeyMixin, Base):
         String(255), nullable=True
     )
 
+    # השם שהלקוח הזין בקישור הפתוח. בזרימת הליד השם מגיע מכרטיס הליד;
+    # כאן אין כרטיס. 200 אינו מספר שנבחר — זו המידה שכבר קבועה ב-
+    # `leads.full_name`, כלומר התשובה הקיימת של המערכת לשאלה "כמה
+    # ארוך שם". nullable כי שורות של לידים לא משתמשות בו.
+    contact_name: Mapped[str | None] = mapped_column(
+        String(200), nullable=True
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
@@ -74,7 +86,7 @@ class Booking(UUIDPrimaryKeyMixin, Base):
         DateTime(timezone=True), nullable=True
     )
 
-    lead: Mapped["Lead"] = relationship(back_populates="bookings")
+    lead: Mapped["Lead | None"] = relationship(back_populates="bookings")
 
     # ה-constraint הזה נוצר במיגרציה 0006 ולא היה משוקף כאן. בלי השיקוף,
     # DB טרי שנבנה מה-metadata (CI / dev / prod חדש) מקבל schema שונה

@@ -57,6 +57,8 @@ from app.schemas.booking_page import (
     BookingPageInfo,
     CreateBookingResponse,
     DayAvailability,
+    OpenBookingPageInfo,
+    OpenBookingResponse,
     TimeSlot,
     UpcomingBooking,
 )
@@ -85,6 +87,24 @@ class CalendarTemporarilyUnavailable(AppException):
     )
 
 
+class OpenBookingUnavailable(AppException):
+    """הקישור הפתוח אינו יכול לקבוע פגישה — יומן Google אינו מחובר.
+
+    נפרד מ-`CalendarTemporarilyUnavailable` כי זה מצב אחר לגמרי. שם
+    היומן מחובר ו-Google נכשל רגע אחד, ו"נסי שוב בעוד דקה" נכון. כאן
+    היומן פשוט לא מחובר, והמצב יישאר כך עד שנועה תחבר אותו מחדש —
+    הודעה שמבטיחה "עוד דקה" הייתה שולחת את הלקוח לנסות שוב לשווא.
+
+    בזרימת הליד מצב כזה אינו שגיאה: הפגישה נשמרת ומסומנת, ונועה רואה
+    אזהרה בכרטיס. בקישור הפתוח אין כרטיס, ואירוע ביומן הוא כל מה
+    שהפיצ'ר עושה — ולכן אין מה לקבוע בלעדיו.
+    """
+
+    status_code = 503
+    code = "open_booking_unavailable"
+    user_message = "לא ניתן לקבוע פגישה דרך הקישור הזה כרגע."
+
+
 # ===== ברירות מחדל למשך תור לפי קטגוריה =====
 _DEFAULT_BOOKING_DURATION_MIN: dict[str, int] = {
     "clinic": 60,
@@ -96,8 +116,22 @@ _FALLBACK_DURATION = 60
 _SLOT_STEP_MINUTES = 30
 
 
-def default_duration_minutes(service_category: str) -> int:
+def default_duration_minutes(service_category: str | None) -> int:
+    # `None` חוקי: קטגוריית השירות אופציונלית בליד (F-04), ובקישור
+    # הפתוח אין ליד בכלל. שניהם נופלים למשך ברירת המחדל.
     return _DEFAULT_BOOKING_DURATION_MIN.get(service_category, _FALLBACK_DURATION)
+
+
+def open_booking_duration_minutes() -> int:
+    """משך הפגישה בקישור הפתוח — מקור אחד לשלושה צרכנים.
+
+    הרשת (`get_open_availability`), הולידציה (`create_open_booking`)
+    והדף (`get_open_booking_page_info`) חייבים להסכים על אותו מספר:
+    אם הרשת מציעה סלוטים של שעה והולידציה מצפה לשעה וחצי, כל קביעה
+    נדחית עם "משך הסלוט חייב להיות...". אין קטגוריית שירות, ולכן זה
+    משך ברירת המחדל.
+    """
+    return default_duration_minutes(None)
 
 
 # ===== אופק ההזמנה =====
@@ -289,7 +323,13 @@ async def _expire_stale_bookings(
     if not affected_rows:
         return 0
 
-    affected_lead_ids = list({row.lead_id for row in affected_rows})
+    # `None` מסונן במפורש: פגישות מהקישור הפתוח אין להן ליד, והן כן
+    # נכנסות ל-cleanup הגלובלי (וזה נכון — צריך לסמן אותן כמבוטלות).
+    # `IN (NULL)` אמנם לא מתאים לשום שורה ולכן אינו משנה התנהגות, אבל
+    # NULL בתוך קבוצת השוואה הוא בדיוק המקום שבו קל לטעות בהמשך.
+    affected_lead_ids = [
+        lid for lid in {row.lead_id for row in affected_rows} if lid is not None
+    ]
 
     # 2. מבטלים את ה-bookings הפגים
     cancel_stmt = (
@@ -347,8 +387,16 @@ async def _expire_stale_bookings(
     # 4. activity לכל booking שבוטל — לתיעוד בtimeline. נעשה רק במצב הגלובלי
     # (lead_id=None) כדי לא להציף את ה-timeline ב-cleanup pre-insert של
     # create_booking_request (שם הוא חלק מ-flow רגיל ולא מעניין למשתמש).
+    #
+    # **רק שורות שיש להן ליד.** פגישה מהקישור הפתוח "פגה" ברגע שהמועד
+    # שלה עובר — זה מחזור החיים הרגיל שלה, לא מקרה קצה — ואין לה ציר
+    # זמן לרשום אליו. `activities.lead_id` הוא NOT NULL ו-`log_activity`
+    # עושה flush, כלומר רישום עבורה היה מפיל את כל הריצה: שום פגישה לא
+    # הייתה מסומנת, ואף ליד לא היה משתחרר מ-BOOKED — בכל לילה מחדש,
+    # מהלילה שאחרי הפגישה הפתוחה הראשונה. שלב 2 כן מסמן אותה, וזה מה
+    # שמוציא אותה מה-filter של הריצה הבאה.
     if lead_id is None:
-        for row in affected_rows:
+        for row in (r for r in affected_rows if r.lead_id is not None):
             await log_activity(
                 db,
                 lead_id=row.lead_id,
@@ -429,6 +477,31 @@ async def get_availability(
     - MAX_AVAILABILITY_RANGE_DAYS — כמה ימים בקריאה אחת (הגנה על FreeBusy).
     - booking_horizon_end() — עד מתי בכלל אפשר לקבוע (סוף החודש הבא).
     """
+    lead = await get_lead_by_booking_token(db, token)
+    return await _compute_availability(
+        db, date_from, date_to, default_duration_minutes(lead.service_category)
+    )
+
+
+async def _compute_availability(
+    db: AsyncSession, date_from: date, date_to: date, duration: int
+) -> tuple[list[DayAvailability], bool]:
+    """חישוב הזמינות עצמו — זהה לשני מסלולי הקביעה.
+
+    מה שמשתנה ביניהם הוא רק משך הפגישה: אצל ליד הוא נגזר מקטגוריית
+    השירות, ובקישור הפתוח הוא ברירת המחדל. כל השאר — מקורות ה-busy,
+    שעות העבודה, החגים והסינון — חייב להיות זהה, אחרת רשת אחת תציע
+    מועד שהשנייה כבר תפסה.
+
+    `_fetch_db_busy` אינה מסננת לפי ליד, ולכן היא ממילא רואה גם את
+    הפגישות של הקישור הפתוח. זו הסיבה ששתי הרשתות מסכימות בלי שום
+    סנכרון נוסף.
+
+    **ולידציית הטווח יושבת כאן ולא אצל הקוראים**: שניהם endpoints
+    ציבוריים ולא מאומתים, ובלי תקרה אפשר לבקש שנה של זמינות בקריאה
+    אחת ולהעמיס את FreeBusy. כשהיא ישבה רק אצל הקורא האחד, הקורא
+    השני נולד בלעדיה.
+    """
     if date_to < date_from:
         raise ValidationError("date_to חייב להיות אחרי date_from.")
     # +1 כי שני הקצוות נכללים: 01/10→31/10 הוא חודש של 31 ימים, לא 30.
@@ -440,9 +513,6 @@ async def get_availability(
         )
     if date_to > booking_horizon_end():
         raise ValidationError(_BEYOND_HORIZON_MESSAGE)
-
-    lead = await get_lead_by_booking_token(db, token)
-    duration = default_duration_minutes(lead.service_category)
 
     # שליפת busy ranges פעם אחת לכל הטווח (יעיל יותר מקריאה ליום)
     range_start_utc, range_end_utc = _range_utc_bounds(date_from, date_to)
@@ -696,6 +766,10 @@ async def _fetch_db_busy(
 # החיתוך כאן הוא רשת בטחון לשורות ישנות ולא המקום שבו אוכפים.
 _MAX_NOTES_IN_EVENT = 500
 
+# תקרת אורך לכותרת האירוע. רשת בטחון בלבד — האכיפה האמיתית היא
+# `max_length` בסכמה, שמחזיר שגיאת ולידציה בעברית במקום לחתוך.
+_MAX_TITLE_IN_EVENT = 200
+
 
 def _sanitize_for_event(value: str) -> str:
     """מכין טקסט חופשי מהלקוח להטמעה בתיאור אירוע ב-Google Calendar.
@@ -719,7 +793,27 @@ def _sanitize_for_event(value: str) -> str:
     return html.escape(stripped)
 
 
-def build_event_description(lead: Lead, booking: Booking) -> str:
+def _sanitize_for_title(value: str) -> str:
+    """מכין טקסט מהלקוח לכותרת האירוע — **בלי** html.escape.
+
+    זה אינו אותו טיפול כמו `_sanitize_for_event`, ובכוונה. מסמך ה-
+    discovery של Calendar v3 אומר על `description` — "Can contain
+    HTML" — ועל `summary` רק "Title of the event". כלומר התיאור
+    מרונדר כ-HTML והכותרת לא, ו-escape על הכותרת היה גורם לשם כמו
+    "בן & ג'רי" להופיע ביומן כ-"בן &amp;amp; ג'רי".
+
+    זה בדיוק כלל 6 ב-CLAUDE.md: formatter נפרד לכל יעד, כי כללי
+    ה-escape שונים ותבנית אחת תעבוד על אחד ותשבור את השני.
+    """
+    stripped = "".join(ch for ch in value if ord(ch) >= 32).strip()
+    # רצפי רווחים ותווי שורה בכותרת אינם שגיאה, אבל הם מכערים את היומן.
+    stripped = " ".join(stripped.split())
+    if len(stripped) > _MAX_TITLE_IN_EVENT:
+        stripped = stripped[:_MAX_TITLE_IN_EVENT] + "…"
+    return stripped
+
+
+def build_event_description(lead: Lead | None, booking: Booking) -> str:
     """בונה את גוף האירוע ביומן — פונקציה טהורה, ניתנת לבדיקה בלי Google.
 
     התוכן לפי `docs/phase-2.5-plan.md §3.6`: רק מה ששימושי לפגישה עצמה.
@@ -743,21 +837,91 @@ def build_event_description(lead: Lead, booking: Booking) -> str:
         return _sanitize_for_event(value) if value else ""
 
     lines: list[str] = []
-    if lead.service_subtype:
+    # `lead` הוא None בקישור הפתוח — שם אין כרטיס ליד, ורק מה שהלקוח
+    # הזין בטופס זמין. שאר השדות פשוט נשמטים.
+    if lead is not None and lead.service_subtype:
         subtype_he = SERVICE_SUBTYPE_HE.get(
             lead.service_subtype, lead.service_subtype
         )
         lines.append(f"סוג שירות: {subtype_he}")
-    if organization := clean(lead.organization_name):
+    if organization := clean(lead.organization_name if lead else None):
         lines.append(f"ארגון: {organization}")
-    if phone := clean(booking.contact_phone or lead.phone):
+    if phone := clean(booking.contact_phone or (lead.phone if lead else None)):
         lines.append(f"טלפון: {phone}")
-    if email := clean(lead.email):
+    if email := clean(lead.email if lead else None):
         lines.append(f"מייל: {email}")
     if notes := clean(booking.notes):
         lines.append("")
         lines.append(f"הערה מהלקוח: {notes}")
     return "\n".join(lines)
+
+
+# ===== ולידציית סלוט — משותפת לשני מסלולי הקביעה =====
+#
+# שני המסלולים — קישור של ליד וקישור פתוח — חייבים לאכוף בדיוק את אותם
+# כללים. העוזרים כאן קיימים כדי שהכללים יהיו כתובים **פעם אחת**: עותק
+# שני היה נסחף ברגע שמישהו משנה שעות עבודה או אופק הזמנה באחד מהם
+# בלבד, והמסלול השני היה ממשיך לקבל מועדים שהראשון כבר דוחה.
+
+
+def _validate_slot_shape(
+    slot_start: datetime,
+    slot_end: datetime,
+    duration: int,
+    now_utc: datetime,
+) -> None:
+    """הסלוט עתידי, בסדר הנכון, בתוך האופק, ותואם לרשת הסלוטים.
+
+    האכיפה כאן ולא ב-UI: שני ה-endpoints ציבוריים, וקלינט שנכתב ביד
+    יכול לבקש 03:00 בשבת בלילה. הסתרת מועדים בממשק היא נוחות בלבד.
+    """
+    if slot_start < now_utc:
+        raise ValidationError("הסלוט שנבחר כבר עבר. רעני את הדף וכבחרי שוב.")
+    if slot_end <= slot_start:
+        raise ValidationError("נתוני זמן לא תקינים.")
+    if slot_start.astimezone(ISRAEL_TZ).date() > booking_horizon_end(now_utc):
+        raise ValidationError(_BEYOND_HORIZON_MESSAGE)
+
+    actual_duration = (slot_end - slot_start).total_seconds() / 60
+    if abs(actual_duration - duration) > 0.01:
+        raise ValidationError(f"משך הסלוט חייב להיות {duration} דקות.")
+
+    day_local = slot_start.astimezone(ISRAEL_TZ).date()
+    candidates = _candidate_slots(day_local, duration)
+    # השוואה ב-UTC כדי לא להסתבך עם offset
+    target = (
+        slot_start.astimezone(timezone.utc),
+        slot_end.astimezone(timezone.utc),
+    )
+    candidates_utc = [
+        (cs.astimezone(timezone.utc), ce.astimezone(timezone.utc))
+        for cs, ce in candidates
+    ]
+    if target not in candidates_utc:
+        raise ValidationError(
+            "המועד לא בטווח הסלוטים המוצעים. בחרי מועד מהרשימה."
+        )
+
+
+async def _assert_slot_still_free(
+    db: AsyncSession,
+    slot_start: datetime,
+    slot_end: datetime,
+    now_utc: datetime,
+) -> None:
+    """בדיקה חוזרת מול busy — מגנה מ-race בין הצגת הסלוט לקביעה.
+
+    זו לא ההגנה האחרונה אלא הראשונה: היא נותנת הודעה ברורה ללקוח במקום
+    שגיאת DB. ההגנה שבאמת תופסת שתי קביעות מקבילות היא
+    `ck_bookings_no_overlap` ברמת ה-DB, שמכסה את **שני** המסלולים —
+    האילוץ מותנה ב-`status` בלבד ואינו מזכיר `lead_id`.
+    """
+    google_busy, _ = await _fetch_google_busy(db, slot_start, slot_end)
+    db_busy = await _fetch_db_busy(db, slot_start, slot_end)
+    if not _slot_free(slot_start, slot_end, google_busy + db_busy, now_utc):
+        raise ConflictError(
+            "הסלוט כבר תפוס. בחרי מועד אחר מהרשימה המעודכנת."
+        )
 
 
 # ===== Create booking =====
@@ -795,41 +959,9 @@ async def create_booking_request(
     """
     lead = await get_lead_by_booking_token(db, token)
 
-    # ולידציה בסיסית: עתידי + סדר זמנים
     now_utc = datetime.now(timezone.utc)
-    if slot_start < now_utc:
-        raise ValidationError("הסלוט שנבחר כבר עבר. רעני את הדף וכבחרי שוב.")
-    if slot_end <= slot_start:
-        raise ValidationError("נתוני זמן לא תקינים.")
-    # אופק ההזמנה — האכיפה האמיתית. ה-UI מסתיר תאריכים רחוקים, אבל
-    # ה-endpoint ציבורי וה-token הוא ה-credential היחיד.
-    if slot_start.astimezone(ISRAEL_TZ).date() > booking_horizon_end(now_utc):
-        raise ValidationError(_BEYOND_HORIZON_MESSAGE)
-
-    # ולידציה מחמירה: הסלוט חייב להתאים לכללי הזמינות (שעות עבודה,
-    # יום עבודה, אורך לפי קטגוריה, יישור ל-grid 30 דק'). אחרת קלינט
-    # זדוני יכול לבקש 03:00 בשבת בלילה.
     duration = default_duration_minutes(lead.service_category)
-    actual_duration = (slot_end - slot_start).total_seconds() / 60
-    if abs(actual_duration - duration) > 0.01:
-        raise ValidationError(
-            f"משך הסלוט חייב להיות {duration} דקות."
-        )
-    day_local = slot_start.astimezone(ISRAEL_TZ).date()
-    candidates = _candidate_slots(day_local, duration)
-    # השוואה ב-UTC כדי לא להסתבך עם offset
-    target = (
-        slot_start.astimezone(timezone.utc),
-        slot_end.astimezone(timezone.utc),
-    )
-    candidates_utc = [
-        (cs.astimezone(timezone.utc), ce.astimezone(timezone.utc))
-        for cs, ce in candidates
-    ]
-    if target not in candidates_utc:
-        raise ValidationError(
-            "המועד לא בטווח הסלוטים המוצעים. בחרי מועד מהרשימה."
-        )
+    _validate_slot_shape(slot_start, slot_end, duration, now_utc)
 
     from sqlalchemy import func, select as sa_select, update
 
@@ -862,14 +994,7 @@ async def create_booking_request(
             "צרי קשר עם נועה אם צריך לקבוע עוד אחת."
         )
 
-    # בדיקה חוזרת מול busy ranges — מגן מ-race בין הצגת הסלוט לקביעה.
-    # ה-DB EXCLUDE constraint יתפוס כל race שיחמוק מכאן.
-    google_busy, _ = await _fetch_google_busy(db, slot_start, slot_end)
-    db_busy = await _fetch_db_busy(db, slot_start, slot_end)
-    if not _slot_free(slot_start, slot_end, google_busy + db_busy, now_utc):
-        raise ConflictError(
-            "הסלוט כבר תפוס. בחרי מועד אחר מהרשימה המעודכנת."
-        )
+    await _assert_slot_still_free(db, slot_start, slot_end, now_utc)
 
     # ===== 1. INSERT — לפני כל קריאה חיצונית =====
     # `ck_bookings_no_overlap` (EXCLUDE USING gist, migration 0006) הוא
@@ -1074,6 +1199,164 @@ async def _delete_orphan_event(
 
 
 
+# ===== קישור פתוח — קביעה בלי ליד =====
+
+
+async def create_open_booking(
+    db: AsyncSession,
+    *,
+    full_name: str,
+    contact_phone: str,
+    slot_start: datetime,
+    slot_end: datetime,
+) -> OpenBookingResponse:
+    """קובעת פגישה מהקישור הפתוח — בלי ליד, בלי activity, בלי משימות.
+
+    **מה שונה מ-`create_booking_request`, ומה זהה:**
+
+    זהה, ובכוונה — אותה ולידציית סלוט (`_validate_slot_shape`), אותה
+    בדיקת busy (`_assert_slot_still_free`), אותו סדר נעול שבו השורה
+    נכנסת ל-DB **לפני** הקריאה ל-Google, ואותו compensation שמוחק את
+    האירוע אם ה-commit נכשל. הכללים האלה כתובים פעם אחת ומשמשים את
+    שני המסלולים; עותק שני היה נסחף בשינוי הראשון.
+
+    שונה — אין `lead_id` ולכן אין נעילת שורת ליד, אין תקרת פגישות לליד,
+    אין עדכון סטטוס, אין `Activity`, ואין `Task`. זה כל מה שהתבקש
+    להיעדר.
+
+    **מה שמחליף את נעילת הליד:** במסלול הליד ה-`FOR UPDATE` הוא שמסדר
+    בטור בקשות מקבילות של אותו ליד, כי התקרה היא ספירה. כאן אין תקרה
+    ואין ליד, וההגנה היחידה שצריך היא מפני שתי קביעות על אותו מועד —
+    וזו בדיוק `ck_bookings_no_overlap`, שמותנית ב-`status` בלבד ולכן
+    מכסה גם שורות בלי ליד. אומת ב-DB, בשני הכיוונים: שתי קביעות פתוחות
+    חופפות נדחות, וגם קביעה פתוחה מול פגישה של ליד.
+
+    **אם היומן אינו מחובר — נכשל, ולא "מצליח" בשקט.** במסלול הליד יש
+    למה ליפול אחורה: הפגישה נשמרת, מסומנת, ונועה רואה אזהרה בכרטיס.
+    כאן אין כרטיס, אין activity ואין מסך — פגישה בלי אירוע ביומן היא
+    שורה שאיש לעולם לא יראה, בזמן שהלקוח קיבל "נקבע". זה בדיוק המסלול
+    החלופי שמדווח הצלחה מלאה, והתשובה הנכונה היא לסרב.
+    """
+    from sqlalchemy import update
+
+    from app.services import google_calendar as gc_service
+
+    now_utc = datetime.now(timezone.utc)
+    duration = open_booking_duration_minutes()
+    _validate_slot_shape(slot_start, slot_end, duration, now_utc)
+    await _assert_slot_still_free(db, slot_start, slot_end, now_utc)
+
+    # ===== 1. INSERT — לפני כל קריאה חיצונית =====
+    booking = Booking(
+        lead_id=None,
+        requested_slot_start=slot_start,
+        requested_slot_end=slot_end,
+        status=BookingStatus.APPROVED.value,
+        approved_at=now_utc,
+        contact_name=full_name,
+        contact_phone=contact_phone,
+    )
+    db.add(booking)
+    try:
+        await db.flush()
+    except IntegrityError as e:
+        await db.rollback()
+        raise ConflictError(
+            "הסלוט כבר תפוס. בחרי מועד אחר מהרשימה המעודכנת."
+        ) from e
+
+    booking_id = booking.id
+    summary = f"פגישה — {_sanitize_for_title(full_name)}"
+    description = build_event_description(None, booking)
+
+    # ===== 2. האירוע ביומן =====
+    try:
+        event_id, event_calendar_id = await gc_service.create_calendar_event(
+            db,
+            booking_id=booking_id,
+            summary=summary,
+            description=description,
+            start=slot_start,
+            end=slot_end,
+        )
+    except (
+        gc_service.GoogleNotConfiguredError,
+        gc_service.GoogleNotConnectedError,
+    ) as e:
+        # ראה ה-docstring: כאן אין מסך שיראה שהפגישה לא נכנסה ליומן.
+        # יומן שאינו מחובר הוא מצב קבוע עד חיבור מחדש, ולא תקלה רגעית
+        # — ולכן הודעה משלו ולא "נסי שוב בעוד דקה".
+        await db.rollback()
+        raise OpenBookingUnavailable() from e
+    except gc_service.GoogleAuthInvalidError as e:
+        # מחובר אבל ההרשאה נשברה. אותו סיווג כמו ב-`_fetch_google_busy`,
+        # כדי שהלקוח יקבל כאן את אותה הודעה שהרשת כבר הראתה לו.
+        await db.rollback()
+        raise CalendarTemporarilyUnavailable() from e
+    except Exception as e:
+        logger.exception("Failed to create Google event for open booking")
+        await db.rollback()
+        raise CalendarTemporarilyUnavailable() from e
+
+    # ===== 3. שמירת מזהי האירוע + commit עם compensation =====
+    try:
+        await db.execute(
+            update(Booking)
+            .where(Booking.id == booking_id)
+            .values(
+                google_calendar_event_id=event_id,
+                google_calendar_id=event_calendar_id,
+            )
+        )
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        await _delete_orphan_event(event_id, event_calendar_id)
+        raise
+
+    return OpenBookingResponse(
+        slot_start=slot_start,
+        slot_end=slot_end,
+    )
+
+
+async def get_open_availability(
+    db: AsyncSession, date_from: date, date_to: date
+) -> tuple[list[DayAvailability], bool]:
+    """זמינות לקישור הפתוח — אותם מקורות busy בדיוק כמו אצל ליד.
+
+    ההבדל הראשון הוא שאין ליד שממנו נגזר משך הפגישה, ולכן נלקח משך
+    ברירת המחדל. `_fetch_db_busy` אינה מסננת לפי ליד וממילא רואה גם
+    את הפגישות של הקישור הפתוח, ולכן שני המסלולים מציגים תמונה אחת.
+
+    ההבדל השני: **כשהיומן אינו מחובר — סירוב, ולא רשת חלקית.** אצל ליד
+    רשת בלי Google היא מצב מוגבל-אבל-שמיש, כי הקביעה עצמה עובדת בלעדיו.
+    כאן `create_open_booking` מסרב בלי יומן, ולכן רשת כזו הייתה מציעה
+    ללקוח מועדים שאי אפשר לקבוע — הוא היה ממלא שם וטלפון ורק אז מגלה.
+    """
+    days, includes_google = await _compute_availability(
+        db, date_from, date_to, open_booking_duration_minutes()
+    )
+    if not includes_google:
+        raise OpenBookingUnavailable()
+    return days, includes_google
+
+
+def get_open_booking_page_info() -> OpenBookingPageInfo:
+    """הגבולות שהדף הפתוח בונה מהם את הגריד.
+
+    קריאת שעון **אחת** לשני השדות, מאותה סיבה כמו ב-
+    `get_booking_page_info`: שתי קריאות משני צדי חצות (שעון ישראל)
+    היו מחזירות `today` מיום אחד ואופק מיום אחר.
+    """
+    now_utc = datetime.now(timezone.utc)
+    return OpenBookingPageInfo(
+        default_duration_minutes=open_booking_duration_minutes(),
+        today=to_israel_tz(now_utc).date(),
+        booking_horizon_end=booking_horizon_end(now_utc),
+    )
+
+
 # ===== קריאה + ביטול ע"י נועה =====
 
 
@@ -1143,6 +1426,12 @@ async def cancel_booking(
 
     now_utc = datetime.now(timezone.utc)
 
+    # **רק פגישות של ליד.** פגישה מהקישור הפתוח אינה ישות שהממשק שלנו
+    # מנהל — אין מסך שמציג אותה, והיא מתבטלת רק כשנועה מוחקת את האירוע
+    # ביומן (הסנכרון ההפוך מפנה את המועד). בלי התנאי הזה, מזהה של שורה
+    # כזו היה מגיע עד `log_activity` עם `lead_id=None` ונופל ב-500
+    # (`activities.lead_id` הוא NOT NULL). מבחינת ה-API הזה היא פשוט
+    # לא קיימת, וזו התשובה הנכונה.
     row = (
         await db.execute(
             select(
@@ -1150,7 +1439,7 @@ async def cancel_booking(
                 Booking.google_calendar_event_id,
                 Booking.google_calendar_id,
                 Booking.status,
-            ).where(Booking.id == booking_id)
+            ).where(Booking.id == booking_id, Booking.lead_id.is_not(None))
         )
     ).first()
     if row is None:

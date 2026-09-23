@@ -670,7 +670,34 @@ psql $DATABASE_URL -c "SELECT label, target_status, auto_followup_days FROM quic
 
 ---
 
+### F-35: אינדקסים ואילוצים שקיימים במיגרציות ולא במודלים — 🟠
+
+**איך נמצא:** `alembic check`, שהורץ כדי לוודא שמיגרציה 0033 תואמת למודל `Booking`. על `bookings` עצמה אין סטייה — והבדיקה רגישה לטבלה: שינוי זמני של `contact_name` ל-`String(100)` במודל דווח מיד. הסטייה שנמצאה נמצאת בשש טבלאות אחרות, וכולה מלפני הסבב.
+
+**הסטייה** (8 פריטים — קיימים ב-DB שנבנה מהמיגרציות, חסרים ב-`__table_args__`):
+- `idx_daily_summaries_date_desc` על `daily_summaries`
+- `idx_leads_booking_token`, `idx_leads_closed_at`, `idx_leads_pending_suggestion` על `leads` — ובנוסף המודל מצהיר `unique=True` על `booking_token`, כך ש-autogenerate רוצה *גם* ליצור אילוץ ייחודי נוסף לצד האינדקס הקיים
+- `uq_service_rates_cat_subtype` על `service_rates`
+- `idx_tasks_booking_id` על `tasks`
+- `idx_weekly_open_state_snapshots_week_end_desc` על `weekly_open_state_snapshots`
+
+**Severity:** בינוני. לא שובר כלום היום, אבל `alembic revision --autogenerate` יציע למחוק את כל הרשימה — ומי שיקבל את ההצעה כמות שהיא ימחק אינדקסים מהפרודקשן. DB שנבנה מהמודלים (`create_all`) ייצא בלעדיהם. זה `CORE-PATTERNS.md` U6 ב-amir-bug-patterns.
+
+**Acceptance:**
+- [ ] כל אינדקס ואילוץ מהרשימה מוצהר ב-`__table_args__` של המודל שלו
+- [ ] `idx_leads_booking_token` ו-`unique=True` על `booking_token` מיושבים לייצוג אחד
+- [ ] `alembic check` נקי על DB שעבר `upgrade head`
+
+**למה לא תוקן בסבב הזה:** שש טבלאות שהסבב לא נגע בהן, וכל תיקון הוא שינוי מודל שדורש בדיקה משלו.
+
+---
+
 ## Changelog
+
+- **v1.4 (ספטמבר 2026):** קישור פתוח לקביעת פגישה (§11.5).
+  - האפיון עודכן: §5.5 (`lead_id` nullable, `contact_name`), §11.5 חדש, §22.6, §27.12.
+  - **ארבעה באגים שנמצאו בביקורת חוזרת של הקוד עצמו, לפני merge** — כולם מאותו שורש: `lead_id` הפך ל-nullable, וצרכנים של הטבלה המשיכו להניח ליד. (1) סנכרון מ-Google: ענף נפרד לשורה בלי ליד החזיר ערך שאינו מפתח ב-`stats`, כך שכל ביטול נספר כשגיאה וה-sync token לא התקדם. (2) באותו ענף חסר `except IntegrityError`, כך שהזזה על מועד תפוס הייתה תוקעת את הסנכרון לתמיד. (3) ה-cron הלילי רשם activity עם `lead_id=None`, כך שהריצה כולה הייתה נופלת מהלילה שאחרי הפגישה הפתוחה הראשונה — ומפסיקה לנקות גם ללידים. (4) ביטול ידני על שורה בלי ליד → 500. לכל אחד טסט שהורץ על הקוד שלפני התיקון ונפל.
+  - **F-35 חדש** — סטייה בין מיגרציות למודלים בשש טבלאות אחרות, שנמצאה ב-`alembic check`.
 
 - **v1.3 (ספטמבר 2026):** סבב ביטול שלב האישור.
   - **F-06 נסגר סופית** — לא רק שההתראה הוסרה, אלא שכל מנגנון האישור בוטל (§11.1). `BOOKING_PENDING` הפך ל-legacy, ולכן גם ה-surfacing שלו ב-`/pending` כבר לא רלוונטי לפגישות חדשות.

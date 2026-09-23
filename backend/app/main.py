@@ -54,7 +54,7 @@ async def lifespan(app: FastAPI):
 _FIELD_FRIENDLY_MESSAGES: dict[str, str] = {
     "phone": "מספר הטלפון שהוזן לא תקין.",
     "email": "כתובת המייל שהוזנה לא תקינה.",
-    "full_name": "שם הליד נדרש.",
+    "full_name": "יש להזין שם.",
     "service_category": "יש לבחור קטגוריית שירות.",
     "service_subtype": "יש לבחור תת-קטגוריית שירות.",
     "source_channel": "יש לבחור מקור פנייה.",
@@ -86,6 +86,29 @@ def _humanize_validation_error(exc: RequestValidationError) -> str:
     # מדלגים על "body"/"query"/"path" שמופיע ראשון, ולוקחים את השדה
     field_parts = [str(p) for p in loc if p not in ("body", "query", "path")]
     field = field_parts[-1] if field_parts else ""
+
+    # **סוג השגיאה קודם לשם השדה.** המיפוי למטה הוא פר-שדה בלבד, ולכן
+    # הוא מוחץ שלוש תקלות שונות לאותה הודעה: שדה חסר, ערך שנדחה
+    # בוולידטור, וערך ארוך מדי. התוצאה היא סירוב שלא נוקב בסיבתו —
+    # שם באורך 201 תווים קיבל "שם הליד נדרש", כלומר נאמר למשתמש
+    # שהשדה *חסר* בזמן שהוא *ארוך מדי*, והוא שולח לחפש במקום הלא נכון.
+    error_type = first.get("type", "")
+    raw_msg = str(first.get("msg", ""))
+
+    # ולידטור שלנו שזרק ValueError כבר כתב הודעה בעברית למשתמש —
+    # מעבירים אותה כמות שהיא במקום לבלוע אותה. הבדיקה על תו עברי היא
+    # מה שמבטיח שלא נדליף הודעת ברירת מחדל באנגלית של Pydantic
+    # (כלל 3 ב-CLAUDE.md).
+    if error_type == "value_error":
+        own = raw_msg.removeprefix("Value error, ").strip()
+        if any("\u0590" <= ch <= "\u05ea" for ch in own):
+            return own
+
+    if error_type in ("string_too_long", "too_long"):
+        limit = (first.get("ctx") or {}).get("max_length")
+        if limit:
+            return f"הערך שהוזן ארוך מדי. מותרים עד {limit} תווים."
+        return "הערך שהוזן ארוך מדי."
 
     if field in _FIELD_FRIENDLY_MESSAGES:
         return _FIELD_FRIENDLY_MESSAGES[field]

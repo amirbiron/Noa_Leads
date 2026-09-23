@@ -14,6 +14,7 @@ import {
 import { AppShell } from "@/components/AppShell";
 import { GmailConnectionSection } from "@/components/GmailConnectionSection";
 import { GoogleCalendarSection } from "@/components/GoogleCalendarSection";
+import { OpenBookingLinkSection } from "@/components/OpenBookingLinkSection";
 import { SectionHeader } from "@/components/SectionHeader";
 import { api, ApiError } from "@/lib/api";
 import type { User } from "@/lib/types";
@@ -105,6 +106,13 @@ export default function SettingsPage() {
           </div>
         </>
       )}
+
+      {/* הקישור הפתוח (§11.5) — מחוץ לבלוק האינטגרציות ובכוונה: הבלוק
+          ההוא owner-only כי מסלולי /google/* דורשים OwnerOnly, אבל כאן
+          אין קריאה לשרת בכלל — זו כתובת ציבורית, כמו הקישור שבכרטיס
+          הליד, שגם העוזרת יכולה להעביר ללקוח. */}
+      <SectionHeader title="קביעת פגישה" />
+      <OpenBookingLinkSection />
 
       {/* הגדרת עוזרת ראשונית (§13.5) — setup חד-פעמי. מופיע רק ל-owner וכל עוד
           אין עוזרת במערכת; נעלם לצמיתות אחרי שנוצרה. לא חלק מהזרימה היומיומית. */}
