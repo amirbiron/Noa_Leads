@@ -117,6 +117,21 @@ async def _apply_cancellation(
         return "skipped"
     lead_id, existing_status = existing
 
+    # **פגישה מהקישור הפתוח אין לה ליד, ולכן אין לה ציר זמן.**
+    #
+    # `activities.lead_id` הוא NOT NULL, כלומר ניסיון לרשום activity
+    # כאן היה מפיל את ה-webhook כולו — ואיתו את עיבוד כל שאר השינויים
+    # באותה מנה. הביטול עצמו כן מוחל: השורה קיימת בדיוק כדי להחזיק את
+    # המועד, ואם נועה מחקה את האירוע ביומן המועד חייב להתפנות.
+    if lead_id is None:
+        if applied:
+            logger.info(
+                "Open-link booking %s canceled from Google calendar",
+                change.booking_id,
+            )
+        await db.commit()
+        return "applied" if applied else "skipped"
+
     # **הד של ביטול שאנחנו עצמנו ביצענו — לא נרשם שוב.**
     #
     # `cancel_booking` ו-`close_lead` מוחקים את האירוע מ-Google אחרי
@@ -219,6 +234,25 @@ async def _apply_reschedule(
     old_start_iso = old_start.isoformat()
     old_end_iso = old_end.isoformat()
     booking_lead_id = booking.lead_id  # cache למקרה של exception
+
+    # פגישה מהקישור הפתוח — אין ליד ולכן אין ציר זמן לרשום אליו
+    # (`activities.lead_id` הוא NOT NULL). ה-UPDATE על המועד כן מוחל:
+    # אם נועה הזיזה את האירוע ביומן, המועד החדש הוא זה שצריך להחזיק
+    # את הסלוט, אחרת הישן נשאר חסום והחדש נראה פנוי.
+    if booking_lead_id is None:
+        update_result = await db.execute(
+            update(Booking)
+            .where(
+                Booking.id == change.booking_id,
+                Booking.google_calendar_event_id == change.event_id,
+                Booking.status.in_(ACTIVE_BOOKING_STATUSES),
+                Booking.requested_slot_start == old_start,
+                Booking.requested_slot_end == old_end,
+            )
+            .values(requested_slot_start=new_start, requested_slot_end=new_end)
+        )
+        await db.commit()
+        return "applied" if update_result.rowcount == 1 else "skipped"
 
     # WHERE כולל סטטוסים פעילים *וגם* הערכים הישנים של start/end —
     # optimistic locking. אם webhook מקביל הקדים אותנו ושינה את ה-slot,

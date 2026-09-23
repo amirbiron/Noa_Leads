@@ -126,3 +126,72 @@ class CreateBookingResponse(BaseModel):
     slot_start: datetime
     slot_end: datetime
 
+
+
+# ===== קישור פתוח — קביעה בלי ליד =====
+
+
+class CreateOpenBookingRequest(BaseModel):
+    """בקשה מהקישור הפתוח. אין token ואין ליד — רק מה שהלקוח מילא."""
+
+    slot_start: datetime
+    slot_end: datetime
+
+    # **חובה.** בזרימת הליד השם מגיע מכרטיס הליד; כאן אין כרטיס, ולכן
+    # בלי השדה הזה נועה מקבלת ביומן פגישה בלי לדעת עם מי.
+    #
+    # 200 אינו מספר עגול שנבחר: זו המידה שכבר קבועה ב-`leads.full_name`
+    # וב-`LeadCreate`, כלומר התשובה הקיימת של המערכת לשאלה "כמה ארוך
+    # שם". השדה **נדחה** ולא נחתך — חיתוך שקט היה שולח ליומן שם אחר
+    # מזה שהלקוח הקליד, ולנועה אין דרך לדעת שזה קרה.
+    full_name: str = Field(min_length=1, max_length=200)
+
+    # אותה ולידציה בדיוק כמו בכרטיס הליד ובקישור של הליד — פונקציה אחת
+    # משותפת, כדי שכללי הטלפון לא יסטו בין שלושת המקומות.
+    contact_phone: str = Field(min_length=1, max_length=32)
+
+    @field_validator("full_name")
+    @classmethod
+    def normalize_full_name(cls, v: str) -> str:
+        """שם של רווחים בלבד הוא שם ריק.
+
+        בלי זה `"   "` עובר את `min_length=1` (הוא באורך 3), נשמר,
+        ומגיע לכותרת האירוע ביומן כ-"פגישה — ". אותו דפוס בדיוק של
+        ההערה הריקה: ההחלטה נבדקת על הערך הגולמי בזמן שהניקוי קורה
+        אחריה.
+        """
+        stripped = v.strip()
+        if not stripped:
+            raise ValueError("יש להזין שם.")
+        return stripped
+
+    @field_validator("contact_phone")
+    @classmethod
+    def validate_contact_phone(cls, v: str) -> str:
+        from app.utils.phone import normalize_phone_input
+
+        normalized = normalize_phone_input(v)
+        if not normalized:
+            raise ValueError("יש להזין מספר טלפון.")
+        return normalized
+
+    @field_validator("slot_start", "slot_end")
+    @classmethod
+    def must_be_tz_aware(cls, v: datetime) -> datetime:
+        if v.tzinfo is None:
+            raise ValueError(
+                "תאריך/שעה חייבים לכלול אזור זמן (ISO 8601 עם offset)."
+            )
+        return v.astimezone(timezone.utc)
+
+
+class OpenBookingResponse(BaseModel):
+    """תשובה ללקוח. **בלי `booking_id`** — אין לו מה לעשות איתו.
+
+    השורה ב-DB קיימת רק כדי לשריין את המועד, ואינה ישות שהלקוח מנהל:
+    אין לו דף, אין לו ביטול עצמי, ואין מסך שמציג אותה. חשיפת המזהה
+    הייתה מרמזת על ממשק שלא קיים.
+    """
+
+    slot_start: datetime
+    slot_end: datetime
