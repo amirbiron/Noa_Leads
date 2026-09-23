@@ -659,3 +659,19 @@ export interface GoogleCalendarListItem {
   primary: boolean;
   access_role: GoogleCalendarAccessRole | string;
 }
+
+/** מה שהדף הפתוח צריך לפני שהוא טוען זמינות. אין כאן שם, קטגוריה או
+ *  פגישות קיימות — אין ליד שממנו הם היו נלקחים. `today` ו-
+ *  `booking_horizon_end` הם YYYY-MM-DD בשעון ישראל, מחושבים בשרת. */
+export interface OpenBookingPageInfo {
+  default_duration_minutes: number;
+  timezone: string;
+  today: string;
+  booking_horizon_end: string;
+}
+
+/** תשובת הקישור הפתוח. בלי מזהה — אין ללקוח מה לעשות איתו. */
+export interface OpenBookingResponse {
+  slot_start: string;
+  slot_end: string;
+}

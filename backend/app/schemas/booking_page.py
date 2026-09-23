@@ -3,9 +3,65 @@
 """
 
 from datetime import date, datetime, timezone
+from typing import Annotated
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import AfterValidator, BaseModel, Field, field_validator
+
+
+# ===== טיפוסי שדה משותפים לשני מסלולי הקביעה =====
+#
+# קישור של ליד וקישור פתוח מקבלים את אותו מועד ואת אותו טלפון, ולכן
+# הכללים שלהם כתובים כאן **פעם אחת**, כטיפוס. עותק שני של ולידטור היה
+# נסחף בשינוי הראשון, ואז אותו מספר היה מתקבל בדף אחד ונדחה בשני.
+#
+# `Annotated` + `AfterValidator` ולא מחלקת בסיס עם השדות: ירושה הייתה
+# מקבעת את שדות הבסיס *לפני* שדות המחלקה, ומשנה את סדר השדות בקישור
+# הפתוח — ואיתו את השגיאה שמוצגת ראשונה (`_humanize_validation_error`
+# לוקח את הראשונה). ב-Pydantic 2.10 `field_validator` במצב after הופך
+# פנימית בדיוק ל-`AfterValidator`, כך שההתנהגות זהה.
+# מקור: pydantic/functional_validators.py, `AfterValidator._from_decorator`.
+
+
+def _require_aware_utc(v: datetime) -> datetime:
+    # חובה לכלול timezone offset — אחרת ההשוואה עם now_utc בשירות
+    # תיכשל. מנרמלים ל-UTC כדי להבטיח אחידות בכל הקוד.
+    if v.tzinfo is None:
+        raise ValueError(
+            "תאריך/שעה חייבים לכלול אזור זמן (ISO 8601 עם offset)."
+        )
+    return v.astimezone(timezone.utc)
+
+
+def _normalize_contact_phone(v: str) -> str:
+    """אותה ולידציה בדיוק כמו בכרטיס הליד.
+
+    הנרמול קורה כאן ולא ב-service, כי `ValueError` מתוך validator של
+    Pydantic הופך לתשובת ולידציה עם ההודעה בעברית — בעוד שקריאה ישירה
+    ל-`normalize_for_storage` מתוך ה-service הייתה מייצרת 500 (CLAUDE.md
+    כלל 3).
+    """
+    from app.utils.phone import normalize_phone_input
+
+    normalized = normalize_phone_input(v)
+    if not normalized:
+        raise ValueError("יש להזין מספר טלפון.")
+    return normalized
+
+
+SlotTime = Annotated[datetime, AfterValidator(_require_aware_utc)]
+
+# **חובה.** הטלפון שבו נועה תיצור קשר עם הלקוח אם הפגישה מתבטלת או
+# משתנה, והוא מגיע גם לתיאור האירוע ביומן. מאוחסן על הפגישה ולא נוגע
+# ב-`lead.phone` — זה המספר לפגישה הזו, לא עדכון לכרטיס.
+#
+# max_length תואם לעמודה `bookings.contact_phone` (VARCHAR(32)), כדי
+# שקלט ארוך מדי יחזור כשגיאת ולידציה בעברית ולא כ-500 מה-DB.
+ContactPhone = Annotated[
+    str,
+    Field(min_length=1, max_length=32),
+    AfterValidator(_normalize_contact_phone),
+]
 
 
 class UpcomingBooking(BaseModel):
@@ -60,15 +116,9 @@ class AvailabilityResponse(BaseModel):
 
 
 class CreateBookingRequest(BaseModel):
-    slot_start: datetime
-    slot_end: datetime
-    # **חובה.** הטלפון שבו נועה תיצור קשר עם הלקוח אם הפגישה מתבטלת או
-    # משתנה. מגיע גם לתיאור האירוע ביומן. מאוחסן על הפגישה ולא נוגע
-    # ב-`lead.phone` — זה המספר לפגישה הזו, לא עדכון לכרטיס.
-    #
-    # max_length תואם לעמודה `bookings.contact_phone` (VARCHAR(32)),
-    # כדי שקלט ארוך מדי יחזור כשגיאת ולידציה בעברית ולא כ-500 מה-DB.
-    contact_phone: str = Field(min_length=1, max_length=32)
+    slot_start: SlotTime
+    slot_end: SlotTime
+    contact_phone: ContactPhone
     # פרטים אופציונליים שהליד יכול לעדכן בעת הזמנה
     notes: str | None = Field(default=None, max_length=500)
 
@@ -91,34 +141,6 @@ class CreateBookingRequest(BaseModel):
         stripped = v.strip()
         return stripped or None
 
-    @field_validator("contact_phone")
-    @classmethod
-    def validate_contact_phone(cls, v: str) -> str:
-        """אותה ולידציה בדיוק כמו בכרטיס הליד.
-
-        הנרמול קורה כאן ולא ב-service, כי `ValueError` מתוך validator
-        של Pydantic הופך לתשובת ולידציה עם ההודעה בעברית — בעוד שקריאה
-        ישירה ל-`normalize_for_storage` מתוך ה-service הייתה מייצרת 500
-        (CLAUDE.md כלל 3).
-        """
-        from app.utils.phone import normalize_phone_input
-
-        normalized = normalize_phone_input(v)
-        if not normalized:
-            raise ValueError("יש להזין מספר טלפון.")
-        return normalized
-
-    @field_validator("slot_start", "slot_end")
-    @classmethod
-    def must_be_tz_aware(cls, v: datetime) -> datetime:
-        # חובה לכלול timezone offset — אחרת השוואה עם now_utc למטה תיכשל.
-        # מנרמלים ל-UTC כדי להבטיח אחידות בכל הקוד.
-        if v.tzinfo is None:
-            raise ValueError(
-                "תאריך/שעה חייבים לכלול אזור זמן (ISO 8601 עם offset)."
-            )
-        return v.astimezone(timezone.utc)
-
 
 class CreateBookingResponse(BaseModel):
     booking_id: UUID
@@ -127,15 +149,29 @@ class CreateBookingResponse(BaseModel):
     slot_end: datetime
 
 
-
 # ===== קישור פתוח — קביעה בלי ליד =====
+
+
+class OpenBookingPageInfo(BaseModel):
+    """מה שהדף הפתוח צריך לפני שהוא טוען זמינות.
+
+    הגבולות מחושבים בשרת בשעון ישראל מאותה סיבה בדיוק כמו ב-
+    `BookingPageInfo`: מכשיר שמוגדר לאזור זמן אחר, או עם תאריך שגוי,
+    היה בונה גריד שהשרת לא מוכן לקבל. אין כאן שם, קטגוריה או פגישות
+    קיימות — אין ליד שממנו הם היו נלקחים.
+    """
+
+    default_duration_minutes: int
+    timezone: str = "Asia/Jerusalem"
+    today: date
+    booking_horizon_end: date
 
 
 class CreateOpenBookingRequest(BaseModel):
     """בקשה מהקישור הפתוח. אין token ואין ליד — רק מה שהלקוח מילא."""
 
-    slot_start: datetime
-    slot_end: datetime
+    slot_start: SlotTime
+    slot_end: SlotTime
 
     # **חובה.** בזרימת הליד השם מגיע מכרטיס הליד; כאן אין כרטיס, ולכן
     # בלי השדה הזה נועה מקבלת ביומן פגישה בלי לדעת עם מי.
@@ -146,9 +182,8 @@ class CreateOpenBookingRequest(BaseModel):
     # מזה שהלקוח הקליד, ולנועה אין דרך לדעת שזה קרה.
     full_name: str = Field(min_length=1, max_length=200)
 
-    # אותה ולידציה בדיוק כמו בכרטיס הליד ובקישור של הליד — פונקציה אחת
-    # משותפת, כדי שכללי הטלפון לא יסטו בין שלושת המקומות.
-    contact_phone: str = Field(min_length=1, max_length=32)
+    # אותו טיפוס בדיוק כמו בקישור של הליד — ראה `ContactPhone` למעלה.
+    contact_phone: ContactPhone
 
     @field_validator("full_name")
     @classmethod
@@ -164,25 +199,6 @@ class CreateOpenBookingRequest(BaseModel):
         if not stripped:
             raise ValueError("יש להזין שם.")
         return stripped
-
-    @field_validator("contact_phone")
-    @classmethod
-    def validate_contact_phone(cls, v: str) -> str:
-        from app.utils.phone import normalize_phone_input
-
-        normalized = normalize_phone_input(v)
-        if not normalized:
-            raise ValueError("יש להזין מספר טלפון.")
-        return normalized
-
-    @field_validator("slot_start", "slot_end")
-    @classmethod
-    def must_be_tz_aware(cls, v: datetime) -> datetime:
-        if v.tzinfo is None:
-            raise ValueError(
-                "תאריך/שעה חייבים לכלול אזור זמן (ISO 8601 עם offset)."
-            )
-        return v.astimezone(timezone.utc)
 
 
 class OpenBookingResponse(BaseModel):

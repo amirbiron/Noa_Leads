@@ -1,110 +1,20 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import {
-  AlertCircle,
-  Calendar,
-  CheckCircle2,
-  ChevronDown,
-  Clock,
-  Info,
-} from "lucide-react";
+import { Calendar, Info } from "lucide-react";
+import { BookingCenteredCard } from "@/components/BookingCenteredCard";
+import { BookingPhoneField } from "@/components/BookingPhoneField";
+import { BookingSlotPicker } from "@/components/BookingSlotPicker";
+import { BookingSuccessCard } from "@/components/BookingSuccessCard";
 import { api, ApiError } from "@/lib/api";
-import { toIsraelISODate } from "@/lib/date";
+import { fullSlotLabel } from "@/lib/bookingDates";
 import { labelCategory, labelSubtype, pluralizeMinutes } from "@/lib/hebrew";
-import type {
-  AvailabilityResponse,
-  BookingPageInfo,
-  TimeSlot,
-} from "@/lib/types";
-import { cn } from "@/lib/utils";
+import type { BookingPageInfo, TimeSlot } from "@/lib/types";
+import { useBookingSlots } from "@/hooks/useBookingSlots";
 
 // דף קביעת תור ציבורי. לא ב-AuthGuard — הליד מגיע מקישור ש-נועה שלחה
 // לו ב-WhatsApp/מייל. הtoken בURL הוא ה-credential היחיד.
-
-const ISRAEL_TZ = "Asia/Jerusalem";
-
-// formatDate היה wrapper מקומי; הוחלף ב-toIsraelISODate המשותף ב-
-// `lib/date.ts`. הוא משתמש באותו `en-CA` עם options מפורשות (year/
-// month/day) — כך שהפלט יציב לפורמט YYYY-MM-DD בכל הדפדפנים, ללא
-// חשש מ-CLDR defaults שעלולים להחזיר M/d/yyyy.
-const formatDate = toIsraelISODate;
-
-// ===== עזרי תאריך לגריד החודשי =====
-// כל יום נבנה כ-12:00 UTC. בישראל (UTC+2/+3) זה תמיד אותו תאריך קלנדרי,
-// כך שהגריד זהה לחישוב של השרת גם כשהמכשיר מוגדר לאזור זמן אחר. בניית
-// `new Date()` מקומי הייתה יכולה להזיז את היום הראשון ביום שלם.
-function dateAtNoonUTC(year: number, month: number, day: number): Date {
-  return new Date(Date.UTC(year, month - 1, day, 12));
-}
-
-function parseISODate(iso: string): { year: number; month: number; day: number } {
-  const [year, month, day] = iso.split("-").map(Number);
-  return { year, month, day };
-}
-
-// יום 0 של החודש הבא = היום האחרון של החודש המבוקש.
-function daysInMonth(year: number, month: number): number {
-  return new Date(Date.UTC(year, month, 0)).getUTCDate();
-}
-
-function monthLabel(year: number, month: number): string {
-  return dateAtNoonUTC(year, month, 1).toLocaleDateString("he-IL", {
-    month: "long",
-    timeZone: ISRAEL_TZ,
-  });
-}
-
-function monthKeyOf(iso: string): string {
-  const { year, month } = parseISODate(iso);
-  return `${year}-${month}`;
-}
-
-// חודש בחירה אחד בגריד: התוויות שלו והטווח לשליפה מהשרת.
-type BookingMonth = {
-  key: string;
-  label: string;
-  dates: Date[];
-  from: string;
-  to: string;
-};
-
-function shortDayName(d: Date): string {
-  return d.toLocaleDateString("he-IL", {
-    weekday: "short",
-    timeZone: ISRAEL_TZ,
-  });
-}
-
-function shortDate(d: Date): string {
-  return d.toLocaleDateString("he-IL", {
-    day: "2-digit",
-    month: "2-digit",
-    timeZone: ISRAEL_TZ,
-  });
-}
-
-function slotLabel(iso: string): string {
-  return new Date(iso).toLocaleTimeString("he-IL", {
-    hour: "2-digit",
-    minute: "2-digit",
-    timeZone: ISRAEL_TZ,
-  });
-}
-
-function fullSlotLabel(start: string, end: string): string {
-  const s = new Date(start).toLocaleString("he-IL", {
-    weekday: "long",
-    day: "2-digit",
-    month: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    timeZone: ISRAEL_TZ,
-  });
-  const e = slotLabel(end);
-  return `${s} - ${e}`;
-}
 
 export default function BookingPage() {
   const params = useParams<{ token: string }>();
@@ -114,71 +24,6 @@ export default function BookingPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // זמינות נשמרת פר-חודש. שגיאה וטעינה גם הן פר-חודש: כישלון בטעינת
-  // החודש הבא לא צריך למחוק את החודש הנוכחי שכבר נטען בהצלחה.
-  //
-  // ההפרדה בין "אין סלוטים פנויים" (יום עמוס לגיטימי) לבין "ה-fetch נכשל"
-  // נשמרת — אחרת הלקוח רואה "אין סלוטים" ומסיק שאין מועדים כלל בחודש.
-  const [monthAvailability, setMonthAvailability] = useState<
-    Record<string, AvailabilityResponse>
-  >({});
-  const [monthLoading, setMonthLoading] = useState<Record<string, boolean>>({});
-  const [monthError, setMonthError] = useState<Record<string, string | null>>({});
-  // כמה חודשים פתוחים בגריד. מתחילים בחודש הנוכחי בלבד; הכפתור פותח
-  // את החודש הבא, שהוא גם הסוף — אין חודש שלישי.
-  const [openMonthCount, setOpenMonthCount] = useState(1);
-
-  // חודשי הבחירה נגזרים מ-`info.today` ומ-`info.booking_horizon_end` —
-  // שני ערכים שהשרת חישב בשעון ישראל. כך הגריד מתאר בדיוק את מה שהשרת
-  // מוכן לקבל, ולא את מה ששעון המכשיר מנחש. הלולאה על החודשים כללית
-  // בכוונה: אם האופק בשרת ישתנה אי-פעם, ה-UI יעקוב בלי שינוי קוד.
-  const months = useMemo<BookingMonth[]>(() => {
-    if (!info) return [];
-    const today = parseISODate(info.today);
-    const horizon = parseISODate(info.booking_horizon_end);
-    const result: BookingMonth[] = [];
-    let year = today.year;
-    let month = today.month;
-    while (year < horizon.year || (year === horizon.year && month <= horizon.month)) {
-      const isFirstMonth = year === today.year && month === today.month;
-      const isLastMonth = year === horizon.year && month === horizon.month;
-      const fromDay = isFirstMonth ? today.day : 1;
-      const toDay = isLastMonth ? horizon.day : daysInMonth(year, month);
-      const dates: Date[] = [];
-      for (let day = fromDay; day <= toDay; day++) {
-        dates.push(dateAtNoonUTC(year, month, day));
-      }
-      if (dates.length > 0) {
-        result.push({
-          key: `${year}-${month}`,
-          label: monthLabel(year, month),
-          dates,
-          from: formatDate(dates[0]),
-          to: formatDate(dates[dates.length - 1]),
-        });
-      }
-      month += 1;
-      if (month > 12) {
-        month = 1;
-        year += 1;
-      }
-    }
-    return result;
-  }, [info]);
-
-  const visibleMonths = useMemo(
-    () => months.slice(0, openMonthCount),
-    [months, openMonthCount],
-  );
-  const nextMonth = months[openMonthCount] ?? null;
-  // היום האחרון שאפשר לקבוע בו — לתווית "אפשר לקבוע פגישה עד X".
-  const lastBookableDate = useMemo(() => {
-    if (!info) return null;
-    const { year, month, day } = parseISODate(info.booking_horizon_end);
-    return dateAtNoonUTC(year, month, day);
-  }, [info]);
-
-  const [selectedDate, setSelectedDate] = useState<string>("");
   const [selectedSlot, setSelectedSlot] = useState<TimeSlot | null>(null);
   const [phone, setPhone] = useState("");
   const [notes, setNotes] = useState("");
@@ -188,7 +33,7 @@ export default function BookingPage() {
     end: string;
   } | null>(null);
 
-  // טעינת מידע ראשוני + זמינות
+  // טעינת מידע ראשוני
   useEffect(() => {
     if (!token) return;
     api
@@ -200,102 +45,19 @@ export default function BookingPage() {
       .finally(() => setLoading(false));
   }, [token]);
 
-  // מונה בקשות פר-חודש — "הבקשה האחרונה מנצחת". חודשים *שונים* לא
-  // יכולים לדרוס זה את זה (כל תגובה נכתבת למפתח שלה), אבל שתי בקשות
-  // לאותו חודש כן: לחיצה כפולה על "נסי שוב" ברשת חלשה יכולה להחזיר
-  // קודם את ההצלחה ואז את הכישלון הישן, והלקוח היה רואה שגיאה על חודש
-  // שנטען בסדר. תגובה שאינה של הבקשה האחרונה נזרקת בשקט.
-  const monthRequestIdRef = useRef<Record<string, number>>({});
-
-  // טעינת חודש בודד.
-  const fetchMonth = useMemo(
-    () => async (month: BookingMonth) => {
-      if (!token) return;
-      const requestId = (monthRequestIdRef.current[month.key] ?? 0) + 1;
-      monthRequestIdRef.current[month.key] = requestId;
-      const isStale = () => monthRequestIdRef.current[month.key] !== requestId;
-
-      setMonthLoading((prev) => ({ ...prev, [month.key]: true }));
-      setMonthError((prev) => ({ ...prev, [month.key]: null }));
-      try {
-        const result = await api.getBookingAvailability(
-          token,
-          month.from,
-          month.to,
-        );
-        if (isStale()) return;
-        setMonthAvailability((prev) => ({ ...prev, [month.key]: result }));
-      } catch (err) {
-        if (isStale()) return;
-        setMonthAvailability((prev) => {
-          const next = { ...prev };
-          delete next[month.key];
-          return next;
-        });
-        setMonthError((prev) => ({
-          ...prev,
-          [month.key]: err instanceof ApiError ? err.message : "שגיאה בטעינת זמינות",
-        }));
-      } finally {
-        // רק הבקשה הפעילה מכבה את מצב הטעינה; בקשה stale מותירה אותו
-        // דולק עבור הבקשה שעדיין רצה.
-        if (!isStale()) {
-          setMonthLoading((prev) => ({ ...prev, [month.key]: false }));
-        }
-      }
-    },
-    [token],
-  );
-
-  // טעינה ראשונית: החודש הנוכחי בלבד. החודש הבא נטען רק אם הלקוח
-  // פותח אותו — רוב הלקוחות קובעים בחודש הקרוב, ואין טעם בקריאה
-  // שנייה ל-FreeBusy בכל כניסה לדף.
-  useEffect(() => {
-    // בעבר היה כאן גם `|| info.has_active_booking`, וזה מה שעצר את
-    // טעינת הזמינות כשללקוח כבר הייתה פגישה — הדף לא היה מציע מועדים
-    // בכלל. עכשיו רק התקרה עוצרת.
-    if (!info || !info.can_book_more) return;
-    const first = months[0];
-    if (!first) return;
-    setSelectedDate((prev) => prev || info.today);
-    void fetchMonth(first);
-  }, [info, months, fetchMonth]);
-
-  function showNextMonth() {
-    if (!nextMonth) return;
-    setOpenMonthCount((count) => count + 1);
-    if (!monthAvailability[nextMonth.key] && !monthLoading[nextMonth.key]) {
-      void fetchMonth(nextMonth);
-    }
-  }
-
-  // חיפוש יום בכל החודשים שנטענו — התאריך הנבחר יכול להיות בכל אחד מהם.
-  const dayLookup = useMemo(() => {
-    const map = new Map<string, TimeSlot[]>();
-    for (const response of Object.values(monthAvailability)) {
-      for (const day of response.days) {
-        map.set(day.date, day.slots);
-      }
-    }
-    return map;
-  }, [monthAvailability]);
-
-  const slotsForSelectedDate = useMemo(
-    () => dayLookup.get(selectedDate) ?? [],
-    [dayLookup, selectedDate],
-  );
-
-  // מצב הטעינה/שגיאה של החודש שאליו שייך התאריך הנבחר.
-  const selectedMonthKey = selectedDate ? monthKeyOf(selectedDate) : "";
-  const selectedMonthLoading = !!monthLoading[selectedMonthKey];
-  const selectedMonthError = monthError[selectedMonthKey] ?? null;
-  const selectedMonth = months.find((m) => m.key === selectedMonthKey) ?? null;
-
-  // ההערה על סנכרון היומן מגיעה מכל חודש שנטען — הדגל זהה לכולם.
-  const includesGoogleBusy = useMemo(() => {
-    const loaded = Object.values(monthAvailability);
-    return loaded.length === 0 || loaded.every((r) => r.includes_google_busy);
-  }, [monthAvailability]);
+  // מנגנון הרשת החודשית משותף לשני מסלולי הקביעה — ראה
+  // `hooks/useBookingSlots.ts` ו-`components/BookingSlotPicker.tsx`.
+  // מה שנשאר כאן הוא רק מה ששייך לליד: התקרה, הפגישות הקיימות, וההערה.
+  // נקרא לפני כל return מוקדם (Rules of Hooks).
+  const slots = useBookingSlots({
+    today: info?.today ?? null,
+    horizonEnd: info?.booking_horizon_end ?? null,
+    // בעבר היה כאן גם `has_active_booking`, וזה מה שעצר את טעינת
+    // הזמינות כשללקוח כבר הייתה פגישה. עכשיו רק התקרה עוצרת.
+    enabled: !!info?.can_book_more,
+    loadAvailability: (from, to) =>
+      api.getBookingAvailability(token, from, to),
+  });
 
   async function submit() {
     if (!selectedSlot) return;
@@ -313,22 +75,35 @@ export default function BookingPage() {
       setError(
         err instanceof ApiError ? err.message : "שגיאה ביצירת הבקשה",
       );
+      // המועד נתפס בינתיים — ההודעה מבקשת לבחור "מהרשימה המעודכנת",
+      // ולכן הרשימה חייבת להתעדכן באמת. הסלוט שנבחר **נשאר** במקומו:
+      // איפוס שלו היה מסתיר את כל סעיף הטופס, ואיתו את ההודעה עצמה.
+      if (err instanceof ApiError && err.status === 409) {
+        slots.reloadSelectedMonth();
+      }
     } finally {
       setSubmitting(false);
     }
   }
 
+  // בחירת מועד אחר מנקה את שגיאת הקביעה הקודמת — היא דיברה על המועד
+  // הקודם, ובלי זה "הסלוט כבר תפוס" היה נשאר מתחת למועד חדש ופנוי.
+  function selectSlot(slot: TimeSlot | null) {
+    setSelectedSlot(slot);
+    setError(null);
+  }
+
   // ===== מצבים שונים =====
 
   if (loading) {
-    return <CenteredCard>טוען…</CenteredCard>;
+    return <BookingCenteredCard>טוען…</BookingCenteredCard>;
   }
 
   if (error && !info) {
     return (
-      <CenteredCard>
+      <BookingCenteredCard>
         <div className="text-state-red text-center">{error}</div>
-      </CenteredCard>
+      </BookingCenteredCard>
     );
   }
 
@@ -336,25 +111,7 @@ export default function BookingPage() {
 
   // 1) הצלחה — אחרי submit. הפגישה כבר קבועה; אין שלב אישור.
   if (success) {
-    return (
-      <CenteredCard>
-        <div className="text-center space-y-3">
-          <CheckCircle2
-            className="mx-auto text-state-green"
-            size={56}
-            aria-hidden
-          />
-          <div className="text-xl font-semibold">הפגישה נקבעה</div>
-          <div className="text-base font-medium text-gray-900">
-            {fullSlotLabel(success.start, success.end)}
-          </div>
-          <div className="text-sm text-gray-500 mt-4">
-            הפגישה נכנסה ליומן של נועה. אם משהו משתנה, היא תיצור איתך
-            קשר בטלפון שהשארת.
-          </div>
-        </div>
-      </CenteredCard>
-    );
+    return <BookingSuccessCard start={success.start} end={success.end} />;
   }
 
   // 2) הגעת לתקרת הפגישות — המצב היחיד שחוסם את הדף.
@@ -362,7 +119,7 @@ export default function BookingPage() {
   //    והלקוח יכול לקבוע מועד נוסף. זו הייתה המגבלה שהוסרה.
   if (!info.can_book_more) {
     return (
-      <CenteredCard>
+      <BookingCenteredCard>
         <div className="text-center space-y-3">
           <Calendar className="mx-auto text-state-green" size={48} aria-hidden />
           <div className="text-lg font-semibold">
@@ -381,7 +138,7 @@ export default function BookingPage() {
             כדי לקבוע פגישה נוספת או לשנות מועד, צרי קשר עם נועה ישירות.
           </div>
         </div>
-      </CenteredCard>
+      </BookingCenteredCard>
     );
   }
 
@@ -404,7 +161,7 @@ export default function BookingPage() {
       </header>
 
       <main className="max-w-2xl mx-auto p-4 space-y-5">
-        {!includesGoogleBusy && (
+        {!slots.includesGoogleBusy && (
           <div className="text-xs text-state-orange bg-state-orange/10 rounded-lg px-3 py-2 flex items-start gap-2">
             <Info size={14} className="mt-0.5 shrink-0" aria-hidden />
             סנכרון יומן זמני לא פעיל. ייתכן שחלק מהסלוטים יתבררו כתפוסים
@@ -441,137 +198,11 @@ export default function BookingPage() {
           </div>
         )}
 
-        {/* בחירת יום */}
-        <section>
-          <div className="text-sm font-semibold text-gray-700 mb-2">
-            בחרי יום
-          </div>
-
-          {/* גריד לכל חודש פתוח. החודש הנוכחי מוצג מהיום ועד סופו;
-              החודש הבא נפתח בכפתור ומוצג במלואו. מעבר לזה אין — האופק
-              מגיע מהשרת (`booking_horizon_end`) ולא מחושב כאן. */}
-          {visibleMonths.map((month) => (
-            <div key={month.key} className="mb-3 last:mb-0">
-              {/* כותרת החודש מוצגת רק כששני החודשים פתוחים — בחודש
-                  יחיד היא רעש, כי אין ממה להבדיל. */}
-              {visibleMonths.length > 1 && (
-                <div className="text-xs font-medium text-gray-500 mb-1.5">
-                  {month.label}
-                </div>
-              )}
-              <div className="grid grid-cols-7 gap-1.5">
-                {month.dates.map((d, indexInMonth) => {
-                  const key = formatDate(d);
-                  // היום הראשון בכל חודש מוצב בעמודה של יום השבוע שלו,
-                  // כך שהגריד נקרא כלוח שנה: כל השבתות בעמודה אחת. שאר
-                  // הימים זורמים אחריו. ב-RTL עמודה 1 היא הימנית, ולכן
-                  // ראשון=1 ... שבת=7 מייצר בדיוק את הסדר העברי.
-                  // getUTCDay נכון כאן כי כל יום נבנה כ-12:00 UTC.
-                  const gridColumnStart =
-                    indexInMonth === 0 ? d.getUTCDay() + 1 : undefined;
-                  const slots = dayLookup.get(key);
-                  const hasSlots = (slots?.length ?? 0) > 0;
-                  const isSelected = selectedDate === key;
-                  const isLoading = !!monthLoading[month.key];
-                  const hasError = !!monthError[month.key];
-                  return (
-                    <button
-                      key={key}
-                      style={{ gridColumnStart }}
-                      onClick={() => {
-                        setSelectedDate(key);
-                        setSelectedSlot(null);
-                      }}
-                      // כשיש שגיאת fetch — לא מכבים את הכפתורים, אחרת כל
-                      // החודש נראה אפור כאילו אין זמינות אמיתית.
-                      disabled={!hasSlots && !isLoading && !hasError}
-                      className={cn(
-                        "flex flex-col items-center py-2 rounded-lg text-xs border",
-                        isSelected
-                          ? "bg-gray-900 text-white border-gray-900"
-                          : hasSlots || hasError
-                          ? "bg-white border-gray-200 text-gray-700"
-                          : "bg-gray-50 border-gray-100 text-gray-300",
-                      )}
-                    >
-                      <span>{shortDayName(d)}</span>
-                      <span className="font-semibold mt-0.5">{shortDate(d)}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          ))}
-
-          {/* פתיחת החודש הבא — האפשרות היחידה להתקדם קדימה. אין בורר
-              תאריכים חופשי: הוא אפשר לבחור כל תאריך בכל שנה, והשרת ממילא
-              דוחה כל מועד מעבר לאופק. */}
-          {nextMonth ? (
-            <button
-              onClick={showNextMonth}
-              className="mt-1 w-full rounded-lg border border-gray-200 bg-white py-2.5 text-sm text-gray-700 flex items-center justify-center gap-1.5 active:bg-gray-50"
-            >
-              <ChevronDown size={14} aria-hidden />
-              הצגת {nextMonth.label}
-            </button>
-          ) : lastBookableDate ? (
-            <div className="mt-1 text-xs text-gray-500 text-center">
-              אפשר לקבוע פגישה עד {shortDate(lastBookableDate)}.
-            </div>
-          ) : null}
-        </section>
-
-        {/* סלוטים */}
-        <section>
-          <div className="text-sm font-semibold text-gray-700 mb-2">
-            בחרי שעה
-          </div>
-          {selectedMonthLoading ? (
-            <div className="text-center text-gray-400 text-sm py-6">טוען…</div>
-          ) : selectedMonthError ? (
-            // שגיאה אמיתית בטעינת החודש — לא מציגים "אין סלוטים", כי זה
-            // מטעה: אולי היומן עמוס באמת ואולי הקריאה נכשלה. retry לאותו חודש.
-            <div className="bg-white rounded-xl border border-state-red/30 px-4 py-5 flex flex-col items-center gap-3">
-              <div className="flex items-start gap-2 text-state-red text-sm">
-                <AlertCircle size={16} className="mt-0.5 shrink-0" aria-hidden />
-                <span>{selectedMonthError}</span>
-              </div>
-              <button
-                onClick={() => selectedMonth && void fetchMonth(selectedMonth)}
-                className="text-sm rounded-lg border border-gray-200 px-4 py-2 hover:bg-gray-50"
-              >
-                נסי שוב
-              </button>
-            </div>
-          ) : slotsForSelectedDate.length === 0 ? (
-            <div className="bg-white rounded-xl border border-dashed border-gray-200 px-4 py-6 text-center text-sm text-gray-400">
-              אין סלוטים פנויים ביום זה.
-            </div>
-          ) : (
-            <div className="grid grid-cols-3 gap-2">
-              {slotsForSelectedDate.map((slot) => {
-                const isSelected =
-                  selectedSlot?.start === slot.start &&
-                  selectedSlot?.end === slot.end;
-                return (
-                  <button
-                    key={slot.start}
-                    onClick={() => setSelectedSlot(slot)}
-                    className={cn(
-                      "py-2.5 rounded-lg text-sm border flex items-center justify-center gap-1",
-                      isSelected
-                        ? "bg-gray-900 text-white border-gray-900"
-                        : "bg-white border-gray-200 text-gray-800",
-                    )}
-                  >
-                    <Clock size={12} aria-hidden />
-                    {slotLabel(slot.start)}
-                  </button>
-                );
-              })}
-            </div>
-          )}
-        </section>
+        <BookingSlotPicker
+          slots={slots}
+          selectedSlot={selectedSlot}
+          onSelectSlot={selectSlot}
+        />
 
         {/* אישור + הערה */}
         {selectedSlot && (
@@ -582,30 +213,8 @@ export default function BookingPage() {
                 {fullSlotLabel(selectedSlot.start, selectedSlot.end)}
               </span>
             </div>
-            <label className="block">
-              <div className="text-xs text-gray-500 mb-1">
-                טלפון ליצירת קשר <span className="text-state-red">*</span>
-              </div>
-              {/* dir="ltr" + textAlign start: מספר טלפון הוא רצף LTR
-                  בתוך דף RTL. בלי זה הסימנים בקצוות (+, מקף) קופצים
-                  לצד הלא נכון בזמן ההקלדה.
-                  inputMode="tel" פותח מקלדת ספרות בנייד, ו-autoComplete
-                  מאפשר מילוי אוטומטי. */}
-              <input
-                type="tel"
-                inputMode="tel"
-                autoComplete="tel"
-                dir="ltr"
-                value={phone}
-                onChange={(e) => setPhone(e.target.value)}
-                maxLength={32}
-                placeholder="050-0000000"
-                className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-start focus:outline-none focus:border-gray-900"
-              />
-              <div className="text-xs text-gray-500 mt-1">
-                כדי שנועה תוכל ליצור קשר אם משהו משתנה.
-              </div>
-            </label>
+
+            <BookingPhoneField value={phone} onChange={setPhone} />
 
             <label className="block">
               <div className="text-xs text-gray-500 mb-1">
@@ -641,15 +250,5 @@ export default function BookingPage() {
         )}
       </main>
     </div>
-  );
-}
-
-function CenteredCard({ children }: { children: React.ReactNode }) {
-  return (
-    <main className="min-h-screen flex items-center justify-center p-6 bg-gray-50">
-      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 w-full max-w-md p-6">
-        {children}
-      </div>
-    </main>
   );
 }

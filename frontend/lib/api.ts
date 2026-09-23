@@ -10,6 +10,8 @@ import type {
   BookingPageInfo,
   BookingRead,
   CreateBookingResponse,
+  OpenBookingPageInfo,
+  OpenBookingResponse,
   DashboardPollResponse,
   DormantSuggestion,
   EmailMessage,
@@ -571,6 +573,29 @@ export const api = {
     },
   ) =>
     fetcher<CreateBookingResponse>(`/booking/${token}`, {
+      method: "POST",
+      body: payload,
+      retryAuth: false,
+    }),
+
+  // ----- קישור פתוח (ציבורי, בלי token ובלי ליד) -----
+  // שלוש קריאות שמקבילות אחת-לאחת לשלוש של הליד למעלה.
+  getOpenBookingPageInfo: () =>
+    fetcher<OpenBookingPageInfo>("/booking/open", { retryAuth: false }),
+
+  getOpenBookingAvailability: (dateFrom: string, dateTo: string) =>
+    fetcher<AvailabilityResponse>(
+      `/booking/open/availability?date_from=${dateFrom}&date_to=${dateTo}`,
+      { retryAuth: false },
+    ),
+
+  createOpenBooking: (payload: {
+    slot_start: string;
+    slot_end: string;
+    full_name: string;
+    contact_phone: string;
+  }) =>
+    fetcher<OpenBookingResponse>("/booking/open", {
       method: "POST",
       body: payload,
       retryAuth: false,

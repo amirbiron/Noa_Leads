@@ -18,6 +18,7 @@ from app.schemas.booking_page import (
     CreateBookingRequest,
     CreateBookingResponse,
     CreateOpenBookingRequest,
+    OpenBookingPageInfo,
     OpenBookingResponse,
 )
 from app.services import booking as booking_service
@@ -58,10 +59,20 @@ _ACQUIRE_TIMEOUT_SECONDS = 2
 
 # ===== הקישור הפתוח =====
 #
-# **הסדר כאן משמעותי.** שני ה-routes האלה חייבים להירשם *לפני*
-# `/{token}`, אחרת FastAPI מנסה להתאים `/booking/open` לתבנית
-# `/booking/{token}` — ומכיוון ש-`token` מוטפס כ-UUID, התוצאה היא 422
-# ולא נפילה ל-route הבא. אומת בבקשה אמיתית.
+# שלושה routes שמקבילים אחד-לאחד לשלושה של הליד: מידע לדף, זמינות,
+# וקביעה — רק בלי token.
+#
+# **הסדר כאן משמעותי.** הם חייבים להירשם *לפני* `/{token}`, אחרת FastAPI
+# מנסה להתאים `/booking/open` לתבנית `/booking/{token}` — ומכיוון ש-
+# `token` מוטפס כ-UUID, התוצאה היא 422 ולא נפילה ל-route הבא. אומת
+# בבקשה אמיתית. מקור: fastapi.tiangolo.com/tutorial/path-params/#order-matters
+
+
+@router.get("/open", response_model=OpenBookingPageInfo)
+async def get_open_page_info() -> OpenBookingPageInfo:
+    # בלי מגבלת קצב, כמו `GET /{token}`: חישוב תאריכים בלבד — בלי DB
+    # ובלי קריאה ל-Google — כך שאין כאן משאב שאפשר להעמיס.
+    return booking_service.get_open_booking_page_info()
 
 
 @router.get("/open/availability", response_model=AvailabilityResponse)

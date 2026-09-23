@@ -57,6 +57,7 @@ from app.schemas.booking_page import (
     BookingPageInfo,
     CreateBookingResponse,
     DayAvailability,
+    OpenBookingPageInfo,
     OpenBookingResponse,
     TimeSlot,
     UpcomingBooking,
@@ -86,6 +87,24 @@ class CalendarTemporarilyUnavailable(AppException):
     )
 
 
+class OpenBookingUnavailable(AppException):
+    """הקישור הפתוח אינו יכול לקבוע פגישה — יומן Google אינו מחובר.
+
+    נפרד מ-`CalendarTemporarilyUnavailable` כי זה מצב אחר לגמרי. שם
+    היומן מחובר ו-Google נכשל רגע אחד, ו"נסי שוב בעוד דקה" נכון. כאן
+    היומן פשוט לא מחובר, והמצב יישאר כך עד שנועה תחבר אותו מחדש —
+    הודעה שמבטיחה "עוד דקה" הייתה שולחת את הלקוח לנסות שוב לשווא.
+
+    בזרימת הליד מצב כזה אינו שגיאה: הפגישה נשמרת ומסומנת, ונועה רואה
+    אזהרה בכרטיס. בקישור הפתוח אין כרטיס, ואירוע ביומן הוא כל מה
+    שהפיצ'ר עושה — ולכן אין מה לקבוע בלעדיו.
+    """
+
+    status_code = 503
+    code = "open_booking_unavailable"
+    user_message = "לא ניתן לקבוע פגישה דרך הקישור הזה כרגע."
+
+
 # ===== ברירות מחדל למשך תור לפי קטגוריה =====
 _DEFAULT_BOOKING_DURATION_MIN: dict[str, int] = {
     "clinic": 60,
@@ -97,8 +116,22 @@ _FALLBACK_DURATION = 60
 _SLOT_STEP_MINUTES = 30
 
 
-def default_duration_minutes(service_category: str) -> int:
+def default_duration_minutes(service_category: str | None) -> int:
+    # `None` חוקי: קטגוריית השירות אופציונלית בליד (F-04), ובקישור
+    # הפתוח אין ליד בכלל. שניהם נופלים למשך ברירת המחדל.
     return _DEFAULT_BOOKING_DURATION_MIN.get(service_category, _FALLBACK_DURATION)
+
+
+def open_booking_duration_minutes() -> int:
+    """משך הפגישה בקישור הפתוח — מקור אחד לשלושה צרכנים.
+
+    הרשת (`get_open_availability`), הולידציה (`create_open_booking`)
+    והדף (`get_open_booking_page_info`) חייבים להסכים על אותו מספר:
+    אם הרשת מציעה סלוטים של שעה והולידציה מצפה לשעה וחצי, כל קביעה
+    נדחית עם "משך הסלוט חייב להיות...". אין קטגוריית שירות, ולכן זה
+    משך ברירת המחדל.
+    """
+    return default_duration_minutes(None)
 
 
 # ===== אופק ההזמנה =====
@@ -354,8 +387,16 @@ async def _expire_stale_bookings(
     # 4. activity לכל booking שבוטל — לתיעוד בtimeline. נעשה רק במצב הגלובלי
     # (lead_id=None) כדי לא להציף את ה-timeline ב-cleanup pre-insert של
     # create_booking_request (שם הוא חלק מ-flow רגיל ולא מעניין למשתמש).
+    #
+    # **רק שורות שיש להן ליד.** פגישה מהקישור הפתוח "פגה" ברגע שהמועד
+    # שלה עובר — זה מחזור החיים הרגיל שלה, לא מקרה קצה — ואין לה ציר
+    # זמן לרשום אליו. `activities.lead_id` הוא NOT NULL ו-`log_activity`
+    # עושה flush, כלומר רישום עבורה היה מפיל את כל הריצה: שום פגישה לא
+    # הייתה מסומנת, ואף ליד לא היה משתחרר מ-BOOKED — בכל לילה מחדש,
+    # מהלילה שאחרי הפגישה הפתוחה הראשונה. שלב 2 כן מסמן אותה, וזה מה
+    # שמוציא אותה מה-filter של הריצה הבאה.
     if lead_id is None:
-        for row in affected_rows:
+        for row in (r for r in affected_rows if r.lead_id is not None):
             await log_activity(
                 db,
                 lead_id=row.lead_id,
@@ -1201,9 +1242,7 @@ async def create_open_booking(
     from app.services import google_calendar as gc_service
 
     now_utc = datetime.now(timezone.utc)
-    # אין קטגוריית שירות בקישור הפתוח — `default_duration_minutes`
-    # נופל למשך ברירת המחדל, וזה גם המשך שהרשת מציעה.
-    duration = default_duration_minutes(None)
+    duration = open_booking_duration_minutes()
     _validate_slot_shape(slot_start, slot_end, duration, now_utc)
     await _assert_slot_still_free(db, slot_start, slot_end, now_utc)
 
@@ -1243,9 +1282,15 @@ async def create_open_booking(
     except (
         gc_service.GoogleNotConfiguredError,
         gc_service.GoogleNotConnectedError,
-        gc_service.GoogleAuthInvalidError,
     ) as e:
         # ראה ה-docstring: כאן אין מסך שיראה שהפגישה לא נכנסה ליומן.
+        # יומן שאינו מחובר הוא מצב קבוע עד חיבור מחדש, ולא תקלה רגעית
+        # — ולכן הודעה משלו ולא "נסי שוב בעוד דקה".
+        await db.rollback()
+        raise OpenBookingUnavailable() from e
+    except gc_service.GoogleAuthInvalidError as e:
+        # מחובר אבל ההרשאה נשברה. אותו סיווג כמו ב-`_fetch_google_busy`,
+        # כדי שהלקוח יקבל כאן את אותה הודעה שהרשת כבר הראתה לו.
         await db.rollback()
         raise CalendarTemporarilyUnavailable() from e
     except Exception as e:
@@ -1280,12 +1325,35 @@ async def get_open_availability(
 ) -> tuple[list[DayAvailability], bool]:
     """זמינות לקישור הפתוח — אותם מקורות busy בדיוק כמו אצל ליד.
 
-    ההבדל היחיד הוא שאין ליד שממנו נגזר משך הפגישה, ולכן נלקח משך
+    ההבדל הראשון הוא שאין ליד שממנו נגזר משך הפגישה, ולכן נלקח משך
     ברירת המחדל. `_fetch_db_busy` אינה מסננת לפי ליד וממילא רואה גם
     את הפגישות של הקישור הפתוח, ולכן שני המסלולים מציגים תמונה אחת.
+
+    ההבדל השני: **כשהיומן אינו מחובר — סירוב, ולא רשת חלקית.** אצל ליד
+    רשת בלי Google היא מצב מוגבל-אבל-שמיש, כי הקביעה עצמה עובדת בלעדיו.
+    כאן `create_open_booking` מסרב בלי יומן, ולכן רשת כזו הייתה מציעה
+    ללקוח מועדים שאי אפשר לקבוע — הוא היה ממלא שם וטלפון ורק אז מגלה.
     """
-    return await _compute_availability(
-        db, date_from, date_to, default_duration_minutes(None)
+    days, includes_google = await _compute_availability(
+        db, date_from, date_to, open_booking_duration_minutes()
+    )
+    if not includes_google:
+        raise OpenBookingUnavailable()
+    return days, includes_google
+
+
+def get_open_booking_page_info() -> OpenBookingPageInfo:
+    """הגבולות שהדף הפתוח בונה מהם את הגריד.
+
+    קריאת שעון **אחת** לשני השדות, מאותה סיבה כמו ב-
+    `get_booking_page_info`: שתי קריאות משני צדי חצות (שעון ישראל)
+    היו מחזירות `today` מיום אחד ואופק מיום אחר.
+    """
+    now_utc = datetime.now(timezone.utc)
+    return OpenBookingPageInfo(
+        default_duration_minutes=open_booking_duration_minutes(),
+        today=to_israel_tz(now_utc).date(),
+        booking_horizon_end=booking_horizon_end(now_utc),
     )
 
 
@@ -1358,6 +1426,12 @@ async def cancel_booking(
 
     now_utc = datetime.now(timezone.utc)
 
+    # **רק פגישות של ליד.** פגישה מהקישור הפתוח אינה ישות שהממשק שלנו
+    # מנהל — אין מסך שמציג אותה, והיא מתבטלת רק כשנועה מוחקת את האירוע
+    # ביומן (הסנכרון ההפוך מפנה את המועד). בלי התנאי הזה, מזהה של שורה
+    # כזו היה מגיע עד `log_activity` עם `lead_id=None` ונופל ב-500
+    # (`activities.lead_id` הוא NOT NULL). מבחינת ה-API הזה היא פשוט
+    # לא קיימת, וזו התשובה הנכונה.
     row = (
         await db.execute(
             select(
@@ -1365,7 +1439,7 @@ async def cancel_booking(
                 Booking.google_calendar_event_id,
                 Booking.google_calendar_id,
                 Booking.status,
-            ).where(Booking.id == booking_id)
+            ).where(Booking.id == booking_id, Booking.lead_id.is_not(None))
         )
     ).first()
     if row is None:
