@@ -4,7 +4,6 @@
 
 from datetime import date, datetime, time, timedelta, timezone
 from uuid import UUID
-from zoneinfo import ZoneInfo
 
 from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -91,20 +90,24 @@ async def create_first_response_task(
 ) -> Task:
     """
     נוצרת אוטומטית עם פתיחת ליד חדש: משימת תזכורת לטיפול ראשון.
-    אותו SLA של 24h (Spec §17.1), אבל סוג ה-task משתנה לפי subtype:
+    סוג ה-task משתנה לפי subtype:
     - lecture_organization / lecture_academic → LECTURE_INQUIRY (F-08).
     - אחרת → FIRST_RESPONSE (ברירת מחדל).
 
     ההבחנה נותנת סמנטיקה ברורה בדשבורד ("פניות מארגונים") ובסיס
     לשימוש בתבנית "פתיחה לארגון" (§18) בעתיד.
 
-    אם הליד נכנס בשעות עבודה — due_at = עכשיו+24h. אם נופל מחוץ לשעות
-    עבודה — נדחה לתחילת יום העבודה הבא, 09:00.
+    המרווח (default 24h לפי §17.1) נקרא live מ-FollowupRule לפי
+    task_type — כך שעריכת נועה ב-UI משפיעה מיידית על לידים חדשים.
+    fallback ל-FOLLOWUP_GRACE_FIRST_RESPONSE אם migration לא רץ.
+
+    אם הליד נכנס בשעות עבודה — due_at = עכשיו+interval. אם נופל מחוץ
+    לשעות עבודה — נדחה לתחילת יום העבודה הבא, 09:00.
     """
-    from app.constants import LECTURE_SUBTYPES
+    from app.constants import FOLLOWUP_GRACE_FIRST_RESPONSE, LECTURE_SUBTYPES
+    from app.services.followup_rules import get_rule_interval_seconds
 
     now = datetime.now(timezone.utc)
-    due_at = _due_at_for_first_response(now)
 
     if lead.service_subtype in LECTURE_SUBTYPES:
         task_type = TaskType.LECTURE_INQUIRY.value
@@ -112,6 +115,15 @@ async def create_first_response_task(
     else:
         task_type = TaskType.FIRST_RESPONSE.value
         origin = "auto_first_response"
+
+    # live lookup לפי task_type — שני הסוגים (FIRST_RESPONSE / LECTURE_INQUIRY)
+    # מקבלים את ה-interval מה-rule המתאים להם.
+    interval_sec = await get_rule_interval_seconds(
+        db,
+        task_type,
+        default_seconds=int(FOLLOWUP_GRACE_FIRST_RESPONSE.total_seconds()),
+    )
+    due_at = _due_at_for_first_response(now, interval_sec)
 
     task = Task(
         lead_id=lead.id,
@@ -199,22 +211,25 @@ async def sync_lead_next_action_cache(
     )
 
 
-def _due_at_for_first_response(now: datetime) -> datetime:
+def _due_at_for_first_response(now: datetime, interval_seconds: int) -> datetime:
     """
-    due_at של FIRST_RESPONSE = now + FOLLOWUP_GRACE_FIRST_RESPONSE,
-    מותאם לשעות עבודה.
+    due_at של FIRST_RESPONSE/LECTURE_INQUIRY = now + interval, מותאם
+    לשעות עבודה.
 
-    לפי האפיון יב סעיף 482: "ליד חדש שלא טופל: 24 שעות". ה-due_at
-    מייצג את הזמן שבו ה-task נחשב overdue. לפני הזמן הזה הליד מוצג
-    ב"פניות חדשות" של דף הבית, ומגיע push לטלגרם — לא נופל בין הכיסאות.
+    `interval_seconds` מגיע מ-FollowupRule (live lookup ב-
+    `create_first_response_task`). ברירת מחדל לפי §17.1 = 24h, אבל
+    ניתן לעריכה ב-UI ההגדרות.
+
+    ה-due_at מייצג את הזמן שבו ה-task נחשב overdue. לפני הזמן הזה הליד
+    מוצג ב"פניות חדשות" של דף הבית, ומגיע push לטלגרם — לא נופל בין
+    הכיסאות.
 
     אם הזמן נופל מחוץ לשעות עבודה (לילה/שבת/חג) — נדחה לתחילת יום
     העבודה הבא, כדי שה-alert יקרה בזמן שנועה עובדת.
     """
-    from app.constants import FOLLOWUP_GRACE_FIRST_RESPONSE
     from app.utils.work_hours import is_working_time  # avoid circular at import
 
-    alert_time = now + FOLLOWUP_GRACE_FIRST_RESPONSE
+    alert_time = now + timedelta(seconds=interval_seconds)
     if is_working_time(alert_time):
         return alert_time
     return next_working_day_start(alert_time).astimezone(timezone.utc)

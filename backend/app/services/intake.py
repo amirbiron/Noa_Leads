@@ -89,8 +89,11 @@ async def intake_after_hours_whatsapp(
         # סקשן ייעודי אחר בכרטיס. AI לא נוגע בו — raw בלבד. ראה §7.1.
         lead_message=message,
     )
+    # set_last_inbound=True — הליד נוצר מהודעת הלקוח (WhatsApp). last_inbound_at
+    # נקבע ביצירה כדי ש-silence-break detection ומיון הדשבורד יעבדו (קטגוריה B
+    # ב-inbound chokepoint — לא register_inbound, כי FIRST_RESPONSE עוד פתוח).
     lead = await leads_service.create_lead(
-        db, payload, current_user_id, commit=False
+        db, payload, current_user_id, commit=False, set_last_inbound=True
     )
 
     # תיעוד הקשר אחרי שעות — חשוב ל-audit. עדיין בתוך אותה טרנזקציה.

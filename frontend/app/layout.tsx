@@ -13,6 +13,10 @@ const heebo = Heebo({
 export const metadata: Metadata = {
   title: "ניהול לידים — נועה",
   description: "מערכת ניהול לידים ולקוחות",
+  // המערכת נכנסת אוטומטית ללא סיסמה, ודף קביעת הפגישה מוגן בטוקן
+  // שב-URL בלבד. שניהם לא אמורים להופיע בתוצאות חיפוש.
+  // שכבה 2 מתוך 3 — ראה `app/robots.ts` להסבר על כל השכבות.
+  robots: { index: false, follow: false },
 };
 
 export default function RootLayout({

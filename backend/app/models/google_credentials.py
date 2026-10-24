@@ -7,7 +7,16 @@ Google של נועה. CHECK(id=1) מבטיח שורה אחת בלבד.
 
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, DateTime, Integer, String, Text, func
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    Integer,
+    String,
+    Text,
+    func,
+    text,
+)
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -18,8 +27,28 @@ class GoogleCalendarCredentials(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
     google_account_email: Mapped[str] = mapped_column(String(255), nullable=False)
+    # **יומן היעד** — היומן היחיד שאליו נכתבים אירועים ושעליו רשום ה-watch.
+    # "primary" הוא כינוי של Google ליומן הראשי של החשבון, ולכן ערך ברירת
+    # המחדל תקף גם בלי שנועה תבחר דבר. עד מיגרציה 0032 העמודה נכתבה תמיד
+    # כ-"primary" ומעולם לא *נקראה* — הקוד השתמש במחרוזת קשיחה. מאז היא
+    # מקור האמת, כדי שנועה תוכל לבחור יומן אחר.
     calendar_id: Mapped[str] = mapped_column(
         String(255), nullable=False, default="primary"
+    )
+    # מזהי יומנים *נוספים* שנחשבים "תפוס" בחישוב הזמינות בלבד — לא נכתב
+    # אליהם דבר. הצורך: נועה מנהלת חלק מהאירועים ביומן משני שמופיע
+    # ברשימת היומנים של אותו חשבון, והמערכת הציעה את השעות האלה כפנויות.
+    # רשימת מחרוזות; ברירת מחדל [] (server_default ב-migration 0032, כדי
+    # שהשורה הקיימת לא תקבל NULL).
+    # `server_default` חייב להופיע כאן ולא רק במיגרציה: `default=list`
+    # הוא ברירת מחדל של Python ולכן מכסה רק INSERT דרך ה-ORM. בלי
+    # ההצהרה הזו המודל והמיגרציה חלוקים על מה שה-DB עושה, ו-
+    # `alembic autogenerate` יראה את זה כהפרש בסבב הבא.
+    busy_calendar_ids: Mapped[list[str]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=list,
+        server_default=text("'[]'::jsonb"),
     )
 
     # tokens מוצפנים ע"י app.utils.encryption (Fernet)

@@ -18,28 +18,15 @@ from app.constants import (
     SourceChannel,
     WaitingOn,
 )
-from app.utils.phone import normalize_for_storage
-
-
 # ולידציה משותפת לטלפון — מונעת ייבוא של תווי שליטה / סינטקס פעיל,
 # ומפרמטת מספרים ישראליים לפורמט אחיד עם hyphen.
-# משמשת גם ב-LeadCreate וגם ב-LeadUpdate כדי לא ליצור drift.
+#
+# הלוגיקה עברה ל-`app/utils/phone.py::normalize_phone_input` כדי שגם דף
+# קביעת הפגישה הציבורי (`app/schemas/booking_page.py`) ישתמש *באותה*
+# פונקציה. כשהיא ישבה כאן, כל צרכן חדש היה צריך לשכפל אותה — וזה הרגע
+# שבו כללי הטלפון מתחילים לסטות בין מסלולי הקליטה.
 # ראה: docs/Skills/israeli-phone-formatter/SKILL.md
-_PHONE_ALLOWED_CHARS = set("0123456789+-() .*")
-
-
-def _normalize_phone(v: str | None) -> str | None:
-    if v is None or v == "":
-        return None
-    cleaned = v.strip()
-    if not cleaned:
-        return None
-    # סינון תווים לא חוקיים לפני העברה ל-normalize_for_storage שמטפל בסמנטיקה
-    if not all(c in _PHONE_ALLOWED_CHARS for c in cleaned):
-        raise ValueError("מספר טלפון מכיל תווים לא חוקיים")
-    # אימות תבנית ישראלית מלאה + פורמטינג אחיד.
-    # ValueError ניזרק עם הסבר בעברית אם נראה ישראלי אבל לא תקין.
-    return normalize_for_storage(cleaned)
+from app.utils.phone import normalize_phone_input as _normalize_phone
 
 
 # ===================== יצירה =====================
@@ -68,6 +55,11 @@ class LeadCreate(BaseModel):
 
     owner_id: UUID | None = None
     personal_note: str | None = None
+
+    # §7.2: לקוח שכבר עבד עם נועה בעבר. ברירת מחדל False (חדש). על המודל
+    # יש default=False; אם לא נשלח בקריאה, ה-DB יקבע False. נחשף כ-checkbox
+    # ב-NewLeadModal expand section.
+    is_returning_customer: bool = False
 
     # תוכן הפנייה — ההודעה שהגיעה בוואטסאפ / תיאור מה הלקוח רצה. אופציונלי
     # ב-base כדי לא לשבור קליטה אוטומטית (טופס/וואטסאפ/מייל ממלאים מהתוכן
@@ -191,6 +183,10 @@ class LeadRead(BaseModel):
 
     service_category: str | None  # אופציונלי לפי Spec §7.1 (F-04)
     service_subtype: str | None
+    # הצעת AI לסיווג, ממתינה לאישור (Gmail intake). UI מציג banner כל
+    # עוד `suggested_service_category` קיים ו-`service_category` עוד null.
+    suggested_service_category: str | None = None
+    suggested_service_subtype: str | None = None
 
     status: str
     waiting_on: str

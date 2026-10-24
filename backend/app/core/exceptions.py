@@ -55,3 +55,22 @@ class ConflictError(AppException):
     status_code = 409
     code = "conflict"
     user_message = "הפעולה לא ניתנת לביצוע — ייתכן שמישהו אחר עדכן את המשאב."
+
+
+class ExternalServiceError(AppException):
+    """502 — שירות חיצוני (OpenAI, Anthropic, Google) החזיר שגיאה /
+    הרשת נכשלה / response invalid. מבדיל מ-500 (באג אצלנו) ו-503
+    (פיצ'ר כבוי גלובלית). למשתמש: "נסי שוב מאוחר יותר"."""
+
+    status_code = 502
+    code = "external_service_error"
+    user_message = "שירות חיצוני נכשל. נסי שוב מאוחר יותר."
+
+
+class ServiceUnavailableError(AppException):
+    """503 — פיצ'ר אופציונלי לא מוגדר (env var חסר) או כבוי. שונה מ-502
+    בכך שאין סיבה לנסות שוב — צריך הגדרה אדמיניסטרטיבית."""
+
+    status_code = 503
+    code = "service_unavailable"
+    user_message = "השירות לא זמין כרגע."

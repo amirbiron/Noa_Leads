@@ -5,6 +5,7 @@
 זה מבטל race conditions בין שני משתמשים שמנסים לעדכן אותו ליד בו-זמנית.
 """
 
+import logging
 from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
@@ -16,7 +17,7 @@ from app.constants import (
     CLOSED_LEAD_STATUSES,
     OPEN_LEAD_STATUSES,
     ActivityType,
-    ClosureReason,
+    BookingCancelSource,
     LeadStatus,
 )
 from app.core.exceptions import (
@@ -37,6 +38,8 @@ from app.schemas.lead import (
 )
 from app.services.activities import log_activity
 
+logger = logging.getLogger(__name__)
+
 
 # ===================== יצירה =====================
 
@@ -47,6 +50,7 @@ async def create_lead(
     *,
     create_first_response_task: bool = True,
     commit: bool = True,
+    set_last_inbound: bool = False,
 ) -> Lead:
     """
     יוצרת ליד חדש + רישום ב-audit log + (כברירת מחדל) משימת first_response.
@@ -54,10 +58,17 @@ async def create_lead(
 
     commit=False — מאפשר לקוראים להוסיף activities נוספים לפני commit,
     כדי לשמור על אטומיות (ראה intake_after_hours_whatsapp).
+
+    set_last_inbound=True — לליד שנוצר *מ-inbound* של הלקוח (WhatsApp
+    after-hours, Gmail intake): קובע last_inbound_at=now ביצירה. בלי זה
+    silence-break detection ומיון הדשבורד מתבססים על NULL. *לא* סוגר
+    FIRST_RESPONSE — נועה עדיין צריכה לענות (זה קטגוריה B במיפוי, לא
+    register_inbound; ראה inbound chokepoint).
     """
     # אם לא צוין owner מפורש, מקצים לפי המשתמש שיצר
     owner_id = payload.owner_id or current_user_id
 
+    now = datetime.now(timezone.utc)
     lead = Lead(
         full_name=payload.full_name,
         phone=payload.phone,
@@ -80,9 +91,15 @@ async def create_lead(
         priority_level=str(payload.priority_level),
         owner_id=owner_id,
         personal_note=payload.personal_note,
+        # §7.2 — נמסר מ-NewLeadModal (expand section). cursor bugbot
+        # caught: בלי השורה הזו השדה אובד בשתיקה והליד נשמר תמיד עם
+        # default False של המודל.
+        is_returning_customer=payload.is_returning_customer,
         lead_message=payload.lead_message,
         status=LeadStatus.NEW.value,
         waiting_on="NOAH",
+        # ליד שנוצר מ-inbound — last_inbound_at=now. ברירת מחדל None.
+        last_inbound_at=now if set_last_inbound else None,
     )
     db.add(lead)
     await db.flush()  # כדי לקבל id
@@ -150,18 +167,31 @@ async def list_leads(
 ) -> tuple[list[Lead], int]:
     """מחזיר (items, total).
 
-    closed=True → רק לידים סגורים (WON/LOST/ARCHIVED) ממוינים לפי closed_at
-    יורד (תצוגת הארכיון). אחרת המיון הרגיל לפי updated_at יורד.
+    `closed`:
+    - **True** → רק לידים סגורים (WON/LOST/ARCHIVED), ממוינים לפי
+      `closed_at` יורד. תצוגת טאב הארכיון (§12.12).
+    - **None / False** → רק לידים **פתוחים**. לידים סגורים לעולם לא
+      מופיעים ברשימה הראשית (§12.12 — "סגורים בארכיון בלבד"). cursor
+      bugbot: הגרסה הישנה `if closed:` החזירה הכל כש-closed=None וגרמה
+      ל-WON/LOST/ARCHIVED להיחשף ב-/leads.
+
+    סינון לפי `status` מופעל בנפרד מעל ה-default — אם user שולח
+    `status=WON` ב-main list, התוצאה ריקה (closed תמיד נחסם).
     """
     from sqlalchemy import or_
 
     base = select(Lead)
     if status:
         base = base.where(Lead.status == status)
-    if closed:
+    if closed is True:
         # טאב הארכיון — שלושת הסטטוסים הסגורים יחד (status יחיד לא מספיק).
         base = base.where(
             Lead.status.in_([s.value for s in CLOSED_LEAD_STATUSES])
+        )
+    else:
+        # רשימה ראשית — closed=None ו-False כאחד מוציאים סגורים (§12.12).
+        base = base.where(
+            Lead.status.notin_([s.value for s in CLOSED_LEAD_STATUSES])
         )
     if waiting_on:
         base = base.where(Lead.waiting_on == waiting_on)
@@ -240,6 +270,12 @@ async def update_lead(
     for key, value in updates.items():
         setattr(lead, key, value)
 
+    # אם נועה בחרה service_category במפורש (אישור ההצעה או בחירה ידנית
+    # אחרת) — מנקים את ה-suggested. ה-banner ב-UI נעלם, ההחלטה סופית.
+    if "service_category" in updates and updates["service_category"] is not None:
+        lead.suggested_service_category = None
+        lead.suggested_service_subtype = None
+
     await log_activity(
         db,
         lead_id=lead.id,
@@ -251,6 +287,71 @@ async def update_lead(
     await db.commit()
     await db.refresh(lead)
     return lead
+
+
+# ===================== אישור הצעת AI לסיווג =====================
+
+async def approve_ai_classification(
+    db: AsyncSession, lead_id: UUID, current_user_id: UUID | None
+) -> Lead:
+    """מעתיק suggested_service_category/subtype → actual + מנקה suggested.
+
+    נקרא מ-POST /leads/{id}/approve-classification בעקבות לחיצה על "אישור"
+    ב-banner. אם אין הצעה ממתינה (suggested_service_category is None) —
+    raises ValidationError. אם service_category כבר מאוכלסת (נועה כבר
+    בחרה ידנית בעבר) — COALESCE שומר עליה, רק suggested מתנקה (idempotent).
+    """
+    # ולידציית קיום (404 vs 422). לא חלק מהאטומיות — אם הליד נמחק בין
+    # ה-SELECT ל-UPDATE, ה-UPDATE יחזיר rowcount=0 וניזרק ValidationError.
+    await get_lead_or_404(db, lead_id)
+
+    # אטומי (כלל 2): UPDATE עם WHERE suggested IS NOT NULL + rowcount.
+    # שני requests מקבילים — רק אחד יקבל rowcount=1; השני ייכשל ב-422,
+    # ולכן רק activity log אחד יירשם. COALESCE שומר על idempotency:
+    # אם service_category כבר מאוכלסת (נועה בחרה ידנית קודם) — היא
+    # נשמרת, רק ה-suggested מתנקה.
+    result = await db.execute(
+        update(Lead)
+        .where(
+            Lead.id == lead_id,
+            Lead.suggested_service_category.is_not(None),
+        )
+        .values(
+            # אם service_category ריקה — מעתיקים *את הזוג* (category +
+            # subtype) מההצעה. אם כבר מאוכלסת — שני השדות נשמרים. CASE
+            # ולא COALESCE כי subtype תלוי category: לוקחים subtype מההצעה
+            # רק אם גם category נלקחת ממנה (אחרת ייווצר זוג לא-עקבי כמו
+            # category=workshops + subtype=voice_development).
+            service_category=func.coalesce(
+                Lead.service_category, Lead.suggested_service_category
+            ),
+            service_subtype=case(
+                (Lead.service_category.is_(None), Lead.suggested_service_subtype),
+                else_=Lead.service_subtype,
+            ),
+            suggested_service_category=None,
+            suggested_service_subtype=None,
+        )
+    )
+    if result.rowcount == 0:
+        raise ValidationError("אין הצעת סיווג ממתינה לליד הזה.")
+
+    await log_activity(
+        db,
+        lead_id=lead_id,
+        activity_type=ActivityType.LEAD_UPDATED,
+        performed_by=current_user_id,
+        metadata={
+            "fields": ["service_category", "service_subtype"],
+            "ai_classification_approved": True,
+        },
+    )
+
+    # כלל 15: service עושה flush, route עושה commit. re-fetch דרך
+    # get_lead_or_404 — populate_existing מבטל את ה-identity-map cache
+    # שיכול היה להחזיק ערכים ישנים אחרי ה-Core update.
+    await db.flush()
+    return await get_lead_or_404(db, lead_id)
 
 
 # ===================== סגירה =====================
@@ -340,6 +441,19 @@ async def close_lead(
         .values(status=TaskStatus.CANCELED.value)
     )
 
+    # ביטול פגישות עתידיות + מחיקת האירועים מיומן Google.
+    #
+    # למה זה נוסף עכשיו: עד שהפגישות דרשו אישור של נועה, ליד שנסגר
+    # השאיר מאחוריו *בקשה* שלא אושרה — מטרד בלבד. מרגע שהפגישה נקבעת
+    # ומאושרת מיד, סגירת ליד משאירה **פגישה אמיתית ביומן של נועה**
+    # לליד שכבר נסגר, ו-`expire_stale_bookings` לעולם לא ינקה אותה
+    # (ה-WHERE שלו נוגע רק בלידים ב-BOOKING_PENDING/BOOKED).
+    # CLAUDE.md כלל 13 מחייב לטפל בזה: מעבר ל-WON/LOST/ARCHIVED דורש
+    # cascade על ה-Booking הפעיל.
+    canceled_events = await _cancel_future_bookings_for_closed_lead(
+        db, lead_id
+    )
+
     # תיוג סמנטי מדויק לכל סוג סגירה — חשוב ל-audit timeline
     activity_type = {
         LeadStatus.WON: ActivityType.LEAD_WON,
@@ -361,7 +475,100 @@ async def close_lead(
     )
 
     await db.commit()
+
+    # מחיקת האירועים אחרי ה-commit: המצב הבטוח כאן הוא "בוטל במערכת".
+    # אירוע שנשאר ביומן הוא מטרד שנועה רואה ויכולה למחוק; פגישה שנשארת
+    # פעילה במערכת על ליד סגור היא נתון שגוי שאיש לא רואה.
+    for event_id, event_calendar_id in canceled_events:
+        await _delete_calendar_event_best_effort(db, event_id, event_calendar_id)
+
     return await get_lead_or_404(db, lead_id)
+
+
+async def _cancel_future_bookings_for_closed_lead(
+    db: AsyncSession, lead_id: UUID
+) -> list[tuple[str, str | None]]:
+    """מבטל את הפגישות העתידיות של ליד שנסגר. מחזיר את ה-event_ids למחיקה.
+
+    ה-UPDATE אטומי (`WHERE status IN (active)`), ולכן ביטול מקביל —
+    מהיומן או מהממשק — לא ייספר פעמיים. כל פגישה שבוטלה מקבלת activity
+    עם `source="lead_closed"`, כדי שהיא תהיה נפרדת ובת-זיהוי מביטול
+    ידני או מביטול שמקורו ב-Google.
+    """
+    from app.constants import BookingStatus
+    from app.models.booking import Booking
+    from app.services.booking import ACTIVE_BOOKING_STATUSES
+
+    now_utc = datetime.now(timezone.utc)
+
+    # UPDATE אחד עם RETURNING, ולא SELECT ואז UPDATE (CLAUDE.md כלל 2).
+    # הפרדה בין השניים היא check-then-act: ביטול מקביל — מ-`cancel_booking`
+    # או מסנכרון Google — יכול לתפוס פגישה בין השאילתות, ואז ה-UPDATE
+    # מבטל פחות שורות מאלה שנשלפו. התוצאה הייתה רשומת `MEETING_CANCELED`
+    # עם `"applied": True` על פגישה שהפעולה הזו **לא** ביטלה — כלומר
+    # בדיוק ההבחנה שהדגל הזה נועד לשמור עליה, הפוכה. עם RETURNING,
+    # כל שורה שחוזרת היא שורה שהמשפט הזה באמת שינה.
+    rows = (
+        await db.execute(
+            update(Booking)
+            .where(
+                Booking.lead_id == lead_id,
+                Booking.status.in_(ACTIVE_BOOKING_STATUSES),
+                Booking.requested_slot_end > now_utc,
+            )
+            .values(status=BookingStatus.CANCELED.value)
+            .returning(
+                Booking.id,
+                Booking.google_calendar_event_id,
+                Booking.google_calendar_id,
+            )
+        )
+    ).all()
+    if not rows:
+        return []
+
+    for row in rows:
+        await log_activity(
+            db,
+            lead_id=lead_id,
+            activity_type=ActivityType.MEETING_CANCELED,
+            performed_by=None,  # נגזר מסגירת הליד, לא פעולה נפרדת
+            content="הפגישה בוטלה אוטומטית כי הליד נסגר",
+            metadata={
+                "booking_id": str(row.id),
+                "source": BookingCancelSource.LEAD_CLOSED.value,
+                "applied": True,
+            },
+        )
+
+    return [
+        (r.google_calendar_event_id, r.google_calendar_id)
+        for r in rows
+        if r.google_calendar_event_id
+    ]
+
+
+async def _delete_calendar_event_best_effort(
+    db: AsyncSession, event_id: str, calendar_id: str | None = None
+) -> None:
+    """מוחק אירוע מהיומן בלי להכשיל את הפעולה שקראה לו."""
+    from app.services import google_calendar as gc_service
+
+    try:
+        await gc_service.delete_calendar_event(db, event_id, calendar_id)
+    except (
+        gc_service.GoogleNotConfiguredError,
+        gc_service.GoogleNotConnectedError,
+        gc_service.GoogleAuthInvalidError,
+    ):
+        logger.warning(
+            "Lead closed but calendar unavailable — event %s left in place",
+            event_id,
+        )
+    except Exception:
+        logger.exception(
+            "Lead closed but failed to delete calendar event %s", event_id
+        )
 
 
 # ===================== העברה לעוזרת / בחזרה =====================

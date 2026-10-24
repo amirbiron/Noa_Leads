@@ -11,6 +11,32 @@ envVarGroups:
         sync: false
       - key: ANTHROPIC_API_KEY
         sync: false
+  # קבוצה משותפת לכל service שנוגע ב-Google OAuth / DB-stored tokens /
+  # webhook URLs. המתאם מזין את הערכים *פעם אחת* ב-Render dashboard,
+  # והם מתפזרים אוטומטית ל-web + ל-cron services הרלוונטיים. בלי
+  # ה-group הזה, כל ייצור cron חדש חייב הזנה ידנית של 8 vars — drift
+  # שכבר נשרף עליו פעמיים (GOOGLE_* + SECRETS_ENCRYPTION_KEY חסרים
+  # בcron, 05-06/2026). ראה: recurring-bug-patterns Pattern 5 Variant 5c.
+  - name: noa-leads-google
+    envVars:
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_REDIRECT_URI
+        sync: false
+      - key: GMAIL_REDIRECT_URI
+        sync: false
+      - key: GMAIL_PUBSUB_TOPIC
+        sync: false
+      - key: GMAIL_PUBSUB_SERVICE_ACCOUNT
+        sync: false
+      # Fernet key — חייב פורמט ספציפי (32 bytes URL-safe base64, 44 תווים).
+      # ייצור ידני: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+      - key: SECRETS_ENCRYPTION_KEY
+        sync: false
+      - key: BACKEND_URL
+        sync: false
   - name: noa-leads-python
     # ננעל Python ל-3.12.7 — ברירת המחדל של Render (כיום 3.14) היא beta
     # שאין לה prebuilt wheels ל-pydantic-core; הbuild נופל ב-Rust compile.
@@ -55,36 +81,13 @@ services:
         generateValue: true
       - key: CORS_ORIGINS
         sync: false
-      # פאזה 2 — Google Calendar OAuth. ראה: docs/google-calendar-setup.md
-      - key: GOOGLE_CLIENT_ID
-        sync: false
-      - key: GOOGLE_CLIENT_SECRET
-        sync: false
-      - key: GOOGLE_REDIRECT_URI
-        sync: false
-      # פאזה 3 — Gmail OAuth. callback נפרד מ-Calendar (scope שונה).
-      # GMAIL_PUBSUB_TOPIC נדרש ל-watch (Push notifications מ-Gmail).
-      - key: GMAIL_REDIRECT_URI
-        sync: false
-      - key: GMAIL_PUBSUB_TOPIC
-        sync: false
-      # Fernet key — חייב פורמט ספציפי (32 bytes URL-safe base64, 44 תווים).
-      # Render's generateValue יוצר מחרוזת אלפא-נומרית אקראית שלא תקפה כ-Fernet
-      # → encryption.py יחזיר plaintext fallback ו-secrets ישמרו לא מוצפנים.
-      # ייצור ידני: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
-      - key: SECRETS_ENCRYPTION_KEY
-        sync: false
       - key: FRONTEND_URL
         sync: false
-      # BACKEND_URL נדרש ל-Calendar watch (Stage 12) ול-Pub/Sub JWT audience
-      # verification ב-webhook של Gmail (Phase 3 Stage 18 commit 4/4).
-      - key: BACKEND_URL
-        sync: false
-      # Phase 3 Stage 18 commit 4/4 — אופציונלי.
-      # אם מוגדר: ה-webhook של Gmail יאמת שה-OIDC token חתום ע"י ה-SA הספציפי
-      # (defense in depth מעבר לחתימת Google). אם None — רק חתימת Google תאומת.
-      - key: GMAIL_PUBSUB_SERVICE_ACCOUNT
-        sync: false
+      # Google OAuth + Gmail + SECRETS_ENCRYPTION_KEY + BACKEND_URL —
+      # כולם דרך ה-group כדי שהם יזרמו אוטומטית גם ל-cron services
+      # שדורשים אותם (renew_calendar_watch, renew_gmail_watch,
+      # retry_pending_classification). ראה: envVarGroups.noa-leads-google.
+      - fromGroup: noa-leads-google
       - fromGroup: noa-leads-shared
       - fromGroup: noa-leads-python
 
@@ -283,11 +286,11 @@ services:
       - fromGroup: noa-leads-python
 
   # חידוש watch channel של Google Calendar (תוקף ~שבוע) — יומי 04:00 ישראל (01:00 UTC, F-13)
-  # נדרשים אותם Google env vars כמו ב-web service: ה-job מפענח tokens מ-DB
-  # (SECRETS_ENCRYPTION_KEY), מרענן access token (GOOGLE_CLIENT_ID/SECRET),
-  # ורושם webhook URL חזרה ל-backend (BACKEND_URL).
-  # יש להזין את הערכים ידנית ב-Render UI עבור ה-cron (sync:false → לא אוטומטי
-  # מה-web). אחרת `renew_watch_if_needed` ידלג בשקט ו-watch channels יפוגו.
+  # ה-job מפענח tokens מ-DB (SECRETS_ENCRYPTION_KEY), מרענן access token
+  # (GOOGLE_CLIENT_ID/SECRET), ורושם webhook URL חזרה ל-backend (BACKEND_URL).
+  # כל ה-vars האלה ב-noa-leads-google group, כך שערכים מסונכרנים אוטומטית
+  # עם web — אין יותר drift ידני (תוקן 06/2026 אחרי שהגישה הקודמת sync:false
+  # per-cron גרמה לחיבור של נועה להישבר ב-31/05).
   - type: cron
     name: noa-renew-calendar-watch
     runtime: python
@@ -297,27 +300,20 @@ services:
     buildCommand: pip install --upgrade pip && pip install -r requirements.txt
     startCommand: python -m jobs.renew_calendar_watch
     envVars:
+      - key: APP_ENV
+        value: production
       - key: DATABASE_URL
         fromDatabase:
           name: noa-leads-db
           property: connectionString
-      - key: GOOGLE_CLIENT_ID
-        sync: false
-      - key: GOOGLE_CLIENT_SECRET
-        sync: false
-      - key: GOOGLE_REDIRECT_URI
-        sync: false
-      - key: SECRETS_ENCRYPTION_KEY
-        sync: false
-      - key: BACKEND_URL
-        sync: false
+      - fromGroup: noa-leads-google
       - fromGroup: noa-leads-shared
       - fromGroup: noa-leads-python
 
   # חידוש watch channel של Gmail (תוקף ~7 ימים) — יומי 05:00 ישראל (02:00 UTC).
-  # Phase 3 Stage 17. דורש GOOGLE_CLIENT_ID/SECRET (אותם של Calendar) +
-  # GMAIL_REDIRECT_URI (נפרד) + GMAIL_PUBSUB_TOPIC + SECRETS_ENCRYPTION_KEY.
-  # אם topic לא מוגדר — דילוג שקט (DB-side default).
+  # Phase 3 Stage 17. כל ה-vars (GOOGLE_*, GMAIL_*, SECRETS_ENCRYPTION_KEY)
+  # ב-noa-leads-google group, מסונכרנים עם web. אם topic לא מוגדר ב-DB —
+  # דילוג שקט (DB-side default).
   - type: cron
     name: noa-renew-gmail-watch
     runtime: python
@@ -327,20 +323,13 @@ services:
     buildCommand: pip install --upgrade pip && pip install -r requirements.txt
     startCommand: python -m jobs.renew_gmail_watch
     envVars:
+      - key: APP_ENV
+        value: production
       - key: DATABASE_URL
         fromDatabase:
           name: noa-leads-db
           property: connectionString
-      - key: GOOGLE_CLIENT_ID
-        sync: false
-      - key: GOOGLE_CLIENT_SECRET
-        sync: false
-      - key: GMAIL_REDIRECT_URI
-        sync: false
-      - key: GMAIL_PUBSUB_TOPIC
-        sync: false
-      - key: SECRETS_ENCRYPTION_KEY
-        sync: false
+      - fromGroup: noa-leads-google
       - fromGroup: noa-leads-shared
       - fromGroup: noa-leads-python
 
@@ -348,8 +337,8 @@ services:
   # רץ כל דקה (Spec §23). מטפל ב-AIRateLimitError ו-AIError שדחו את הclassify
   # ב-webhook הראשי — כל ריצה לוקחת batch של עד 10 רשומות. אחרי
   # AI_MAX_CLASSIFICATION_RETRIES ניסיונות נוצר ליד עם manual_review_needed=True.
-  # דורש: ANTHROPIC_API_KEY (shared) + Google OAuth (לרענון tokens של Gmail
-  # למקרה שצריך apply_filter_label) + SECRETS_ENCRYPTION_KEY.
+  # דורש: ANTHROPIC_API_KEY (shared) + Google OAuth + SECRETS_ENCRYPTION_KEY,
+  # הכל ב-noa-leads-google group.
   - type: cron
     name: noa-retry-pending-classification
     runtime: python
@@ -359,21 +348,16 @@ services:
     buildCommand: pip install --upgrade pip && pip install -r requirements.txt
     startCommand: python -m jobs.retry_pending_classification
     envVars:
+      - key: APP_ENV
+        value: production
       - key: DATABASE_URL
         fromDatabase:
           name: noa-leads-db
           property: connectionString
-      - key: GOOGLE_CLIENT_ID
-        sync: false
-      - key: GOOGLE_CLIENT_SECRET
-        sync: false
-      - key: GMAIL_REDIRECT_URI
-        sync: false
-      - key: SECRETS_ENCRYPTION_KEY
-        sync: false
+      - fromGroup: noa-leads-google
+      - fromGroup: noa-leads-shared
+      - fromGroup: noa-leads-python
       # AI_MODEL_* envs יורשים defaults מ-config.py אם לא מוגדרים.
       # AI_CLASSIFY_CONFIDENCE_THRESHOLD, AI_MAX_CLASSIFICATION_RETRIES,
       # AI_FILTER_LABEL_NAME גם defaults — אם מתאם רוצה לכוונן אחרי deploy,
       # יוסיף ידנית ב-Render UI.
-      - fromGroup: noa-leads-shared
-      - fromGroup: noa-leads-python

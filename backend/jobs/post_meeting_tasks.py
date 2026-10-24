@@ -13,13 +13,15 @@ booking שהפגישה שלו אכן התקיימה).
 48h lookback = רשת בטחון ליום אחד פספוס (אם cron לא רץ או deploy יצא
 באמצע).
 
-מסנן ביטולים שמקורם ב-Google Calendar reverse sync (type=meeting_canceled,
-source=google_calendar_sync) — שם הפגישה *לא* קרתה כי בוטלה ביומן.
-שינויי זמן (meeting_rescheduled) דווקא כן מקבלים משימה — הפגישה התקיימה
-במועד החדש.
+מסנן ביטולים שקרו *לפני* מועד הפגישה — מ-Google Calendar reverse sync
+או מביטול ידני בממשק. שם הפגישה לא קרתה. שינויי זמן
+(meeting_rescheduled) דווקא כן מקבלים משימה — הפגישה התקיימה במועד החדש.
 
-dedup: dedup לפי lead_id לאחר השאילתה. ליד עם מספר bookings בחלון יקבל
-משימה אחת בלבד. (race עם cron runs מקבילים לא רלוונטי כי Render
+dedup: **לפי `booking_id`**, לא לפי ליד. ליד עם שתי פגישות שהסתיימו
+באותו חלון 48h מקבל שתי משימות נפרדות — אחת לכל פגישה — וזה הנכון:
+כל פגישה צריכה עדכון משלה. (ה-docstring כאן טען בעבר dedup לפי
+`lead_id`, בסתירה לקוד; מאז מיגרציה 0032 ליד יכול להחזיק כמה פגישות
+וההבדל הפך למשמעותי. race עם cron runs מקבילים לא רלוונטי כי Render
 מבטיח run יחיד; וזה ה-caller היחיד של POST_MEETING_UPDATE.)
 """
 
@@ -30,6 +32,7 @@ from sqlalchemy import String, and_, cast, exists, func, not_, or_, select
 from sqlalchemy.dialects import postgresql
 
 from app.constants import (
+    BOOKING_CANCEL_SOURCES_MEETING_NOT_HELD,
     ActivityType,
     BookingStatus,
     LeadStatus,
@@ -49,15 +52,24 @@ logger = logging.getLogger("jobs.post_meeting_tasks")
 # כמה זמן אחורה לסרוק. 48h נותן רשת בטחון של יום אחד פספוס (אם cron לא רץ).
 _LOOKBACK_HOURS = 48
 
+# הרשימה עצמה חיה ב-`app/constants.py` (`BookingCancelSource`) כדי
+# שמסלול ביטול חדש לא יישכח כאן. אליאס מקומי לקריאוּת בלבד.
+
 
 async def create_post_meeting_tasks() -> None:
     now_utc = datetime.now(timezone.utc)
     lookback = now_utc - timedelta(hours=_LOOKBACK_HOURS)
 
     async with AsyncSessionLocal() as db:
-        # ביטול מ-Google = הפגישה לא קרתה — אבל *רק* אם הביטול קרה לפני
-        # מועד הפגישה. אם נועה מוחקת אירוע אחרי שהפגישה התקיימה (ניקיון
+        # ביטול = הפגישה לא קרתה — אבל *רק* אם הביטול קרה לפני מועד
+        # הפגישה. אם נועה מוחקת אירוע אחרי שהפגישה התקיימה (ניקיון
         # יומן), לא רוצים לדכא את ה-post_meeting task.
+        #
+        # שלמות הרשימה קריטית כאן: פגישה שבוטלה לפני מועדה ממשיכה
+        # לעמוד בתנאי `approval_qualified` למטה (canceled + אושרה
+        # בעבר), ולכן מקור ביטול שחסר מהרשימה מייצר משימת "עדכני מה
+        # היה בפגישה" לפגישה שמעולם לא התקיימה. לכן הרשימה מרוכזת
+        # ב-`BookingCancelSource` ולא נכתבת כאן כמחרוזות.
         #
         # זמן הביטול: עדיפות ל-event_updated_at ממטא-דאטה (זמן אמיתי
         # ב-Google), עם fallback ל-Activity.created_at למשימות ישנות
@@ -71,13 +83,14 @@ async def create_post_meeting_tasks() -> None:
             ),
             Activity.created_at,
         )
-        google_canceled_subq = (
+        canceled_before_meeting_subq = (
             select(Activity.id)
             .where(
                 Activity.lead_id == Booking.lead_id,
                 Activity.type == ActivityType.MEETING_CANCELED.value,
-                Activity.activity_metadata["source"].astext
-                == "google_calendar_sync",
+                Activity.activity_metadata["source"].astext.in_(
+                    BOOKING_CANCEL_SOURCES_MEETING_NOT_HELD
+                ),
                 Activity.activity_metadata["booking_id"].astext
                 == cast(Booking.id, String),
                 cancel_time < Booking.requested_slot_end,
@@ -170,7 +183,7 @@ async def create_post_meeting_tasks() -> None:
                         LeadStatus.ARCHIVED.value,
                     ]
                 ),
-                not_(exists(google_canceled_subq)),
+                not_(exists(canceled_before_meeting_subq)),
                 # latest reschedule (אם קיים) חייב להיות בעבר — אחרת
                 # הפגישה עוד לא קרתה. None = אין reschedule כלל = ok.
                 or_(

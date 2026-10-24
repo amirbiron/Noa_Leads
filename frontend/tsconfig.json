@@ -20,5 +20,9 @@
     }
   },
   "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],
-  "exclude": ["node_modules"]
+  // קובצי `*.test.ts` רצים ישירות תחת Node (`--experimental-strip-types`)
+  // ולא נכנסים ל-build של Next. Node דורש סיומת מפורשת ב-import,
+  // ו-`moduleResolution: bundler` של tsc דוחה אותה — שתי הדרישות
+  // סותרות, ולכן הטסטים מוחרגים מה-typecheck של האפליקציה.
+  "exclude": ["node_modules", "**/*.test.ts"]
 }

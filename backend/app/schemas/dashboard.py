@@ -150,11 +150,18 @@ class AiSummaryRead(BaseModel):
 # ===== מסך הבית =====
 
 class HomeDashboardResponse(BaseModel):
-    """תמונת מצב מרוכזת — סדר הבלוקים תואם את האפיון."""
+    """תמונת מצב למסך הבית — "לוח בוקר" של בלוקי סטטוס + סיכומי AI/תובנות.
 
-    today_actions: list[TodayActionItem]
-    new_leads: list[LeadCard]
-    pending: list[LeadCard]
+    הבית מציג: בלוקי counter ("פניות חדשות 24h" + "דחוף 48h ללא מענה"),
+    סיכומי AI יומי/שבועי לפי toggle, ותובנות השבוע + השעה הרווחית.
+    הרשימות המלאות (today_actions / new_leads / pending) חיות בדפים
+    ייעודיים (/today, /pending, /leads) ולא נשלחות יותר מ-/dashboard/home.
+    """
+
+    # בלוקי "לוח בוקר" — מונים בלבד, כפתורים בקליינט מובילים לדפים הייעודיים.
+    new_leads_24h_count: int
+    urgent_no_first_response_count: int
+
     weekly_insights: WeeklyInsights
     daily_summary: DailySummaryRead | None = None  # F-07: bubble בדשבורד
     # סיכומי AI נרטיביים (§6.8). ai_daily_summary נשאר null עד שחיווט ה-cron
@@ -164,6 +171,13 @@ class HomeDashboardResponse(BaseModel):
 
 
 class PendingResponse(BaseModel):
+    items: list[LeadCard]
+
+
+class UrgentResponse(BaseModel):
+    """הרשימה מאחורי Block 3 בבית ("דחוף — ללא מענה 48 שעות").
+    אותם לידים בדיוק ש-urgent_no_first_response_count סופר."""
+
     items: list[LeadCard]
 
 

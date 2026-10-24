@@ -23,7 +23,7 @@ export default function PendingPage() {
   }, []);
 
   return (
-    <AppShell title="ממתין לטיפול">
+    <AppShell title="ממתין לטיפול" titleTermKey="page_pending">
       {loading && (
         <div className="text-center text-gray-400 py-10 text-sm">טוען…</div>
       )}

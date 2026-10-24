@@ -511,7 +511,9 @@ async def test_highlighted_leads_block_silence_break(db):
     block = await si.compute_highlighted_leads_block(db, _NOW - timedelta(hours=24), _NOW)
     assert "מירב כהן" in block
     assert "ימי שתיקה" in block
-    assert str(lead.id) not in block  # לא חושפים IDs
+    # §13.X — `lead_id:` עובר ל-prompt כדי שה-AI יעטוף את שם הליד ב-marker
+    # `[[lead:<uuid>|<טקסט>]]`, וה-frontend ימיר ל-link ל-/leads/<id>.
+    assert f"lead_id: {lead.id}" in block
 
 
 async def test_silence_break_survives_reply_in_same_window(db):
@@ -639,9 +641,9 @@ async def test_attention_block_dedups_same_lead(db):
 
 
 async def test_attention_items_block_stale_proposal(db):
-    """הצעה תקועה מופיעה ב-block עם מספר הימים."""
+    """הצעה תקועה מופיעה ב-block עם מספר הימים + lead_id ל-marker."""
     five_days_ago = _NOW - timedelta(days=5)
-    await _mk_lead(
+    lead = await _mk_lead(
         db, full_name="דניאל",
         created_at=_NOW - timedelta(days=10),
         status=LeadStatus.PROPOSAL_SENT.value,
@@ -651,6 +653,8 @@ async def test_attention_items_block_stale_proposal(db):
     block = await si.compute_attention_items_block(db, _NOW)
     assert "הצעה ללא מענה" in block
     assert "דניאל" in block
+    # §13.X — lead_id ב-block כדי שה-AI יוכל לעטוף את הליד ב-marker.
+    assert f"lead_id: {lead.id}" in block
 
 
 async def test_attention_stuck_days_from_status_changed_at(db):
@@ -710,6 +714,37 @@ async def test_tomorrow_focus_vip_plus_attention_pointer(db):
     assert "(VIP)" in tomorrow
     assert "דניאל" not in tomorrow        # לא משוכפל — הוא בסקציית attention
     assert "דורש מעקב" in tomorrow        # שורת המצביע לעומס ה-attention
+
+
+async def test_tomorrow_focus_extract_name_is_clean_of_lead_id(db):
+    """Regression (cursor finding): פיצ'ר ההיפר-קישור הוסיף `lead_id` לשורת
+    tomorrow_focus. אם ה-lead_id נדחף *לפני* `(<kind>)`, pattern 3 של
+    `_extract_input_names` (שעוצר ב-`(` הראשון) תופס את כל המידע ביניהם
+    כ-name — מה שגרם ל-§6.6#3 לא למצוא את השם הנקי שClaude מזכירה.
+
+    ה-fix: lead_id בסוף השורה + pattern 3 עוצר גם ב-`|` (defense-in-depth).
+    """
+    from app.services.summaries import _extract_input_names
+
+    one_hour_ago = _NOW - timedelta(hours=1)
+    lead = await _mk_lead(
+        db, full_name="שרון VIP",
+        created_at=one_hour_ago,
+        priority_level=PriorityLevel.VIP.value,
+        waiting_on=WaitingOn.NOAH.value,
+    )
+    lines, seen = await si._collect_attention_items(db, _NOW)
+    tomorrow = await si.compute_tomorrow_focus_block(db, _NOW, lines, seen)
+    assert tomorrow is not None
+    # ה-lead_id עדיין מופיע ב-block — נחוץ ל-AI לבניית ה-marker.
+    assert f"lead_id: {lead.id}" in tomorrow
+
+    # _extract_input_names מחזיר רק את השם הנקי. לפני ה-fix היה מקבל
+    # "שרון VIP | lead_id: ... |".
+    names = _extract_input_names(tomorrow)
+    assert "שרון VIP" in names
+    assert not any("lead_id" in n for n in names), names
+    assert not any("|" in n for n in names), names
 
 
 async def test_tomorrow_focus_none_when_only_attention(db):

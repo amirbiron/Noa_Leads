@@ -1,9 +1,12 @@
 """
-Routes לadmin של bookings — list pending + approve/reject ע"י נועה/עוזרת.
+Routes לadmin של פגישות — צפייה וביטול ע"י נועה/עוזרת.
 שונה מ-routes/booking_page.py שמשרת את הדף הציבורי לליד.
 
-הרשאה: CurrentUser — גם owner וגם assistant. עוזרת יכולה לאשר/לדחות
-בשם נועה (זה מה שמייחד את ה-role הזה).
+**מה השתנה:** `/pending`, `/{id}/approve` ו-`/{id}/reject` נמחקו יחד עם
+שלב האישור — פגישה נקבעת מאושרת מיד. במקומם `/{id}/cancel`, ו-
+`/lead/{lead_id}` שמחזיר **רשימה** (ליד יכול להחזיק כמה פגישות).
+
+הרשאה: CurrentUser — גם owner וגם assistant.
 """
 
 from uuid import UUID
@@ -11,65 +14,28 @@ from uuid import UUID
 from fastapi import APIRouter
 
 from app.api.deps import CurrentUser, DbSession
-from app.schemas.booking import (
-    BookingRead,
-    PendingBookingItem,
-    PendingBookingsResponse,
-)
+from app.schemas.booking import BookingRead
 from app.services import booking as booking_service
 
 router = APIRouter(prefix="/bookings", tags=["bookings"])
 
 
-@router.get("/pending", response_model=PendingBookingsResponse)
-async def list_pending(
-    db: DbSession, _user: CurrentUser
-) -> PendingBookingsResponse:
-    rows = await booking_service.list_pending_bookings(db)
-    items = [
-        PendingBookingItem(
-            id=booking.id,
-            lead_id=lead.id,
-            lead_name=lead.full_name,
-            lead_phone=lead.phone,
-            service_category=lead.service_category,
-            service_subtype=lead.service_subtype,
-            requested_slot_start=booking.requested_slot_start,
-            requested_slot_end=booking.requested_slot_end,
-            created_at=booking.created_at,
-        )
-        for booking, lead in rows
-    ]
-    return PendingBookingsResponse(items=items)
-
-
-@router.get("/lead/{lead_id}/active", response_model=BookingRead | None)
-async def get_active_for_lead(
+@router.get("/lead/{lead_id}", response_model=list[BookingRead])
+async def list_for_lead(
     lead_id: UUID, db: DbSession, _user: CurrentUser
-) -> BookingRead | None:
-    """ה-booking הפעיל (pending_approval/approved, slot בעתיד) של ליד —
-    משמש את דף הליד להציג כרטיס אישור."""
-    b = await booking_service.get_active_booking_for_lead(db, lead_id)
-    if b is None:
-        return None
-    return BookingRead.model_validate(b, from_attributes=True)
+) -> list[BookingRead]:
+    """הפגישות של הליד שכרטיס הליד מציג — עתידיות + אחת שהסתיימה זה עתה
+    (כדי שכפתור "סמני שהפגישה התקיימה" יישאר זמין). מוין בסדר עולה."""
+    rows = await booking_service.get_bookings_for_lead(db, lead_id)
+    return [BookingRead.model_validate(b, from_attributes=True) for b in rows]
 
 
-@router.post("/{booking_id}/approve", response_model=BookingRead)
-async def approve(
+@router.post("/{booking_id}/cancel", response_model=BookingRead)
+async def cancel(
     booking_id: UUID, db: DbSession, user: CurrentUser
 ) -> BookingRead:
-    b = await booking_service.approve_booking(
-        db, booking_id=booking_id, performed_by_id=user.id
-    )
-    return BookingRead.model_validate(b, from_attributes=True)
-
-
-@router.post("/{booking_id}/reject", response_model=BookingRead)
-async def reject(
-    booking_id: UUID, db: DbSession, user: CurrentUser
-) -> BookingRead:
-    b = await booking_service.reject_booking(
+    """מבטל פגישה ומוחק את האירוע מיומן Google."""
+    b = await booking_service.cancel_booking(
         db, booking_id=booking_id, performed_by_id=user.id
     )
     return BookingRead.model_validate(b, from_attributes=True)

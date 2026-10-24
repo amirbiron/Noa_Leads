@@ -51,6 +51,7 @@ export type SourceChannel =
   | "facebook"
   | "instagram"
   | "whatsapp"
+  | "phone"
   | "other";
 
 export type ClosureReason =
@@ -102,6 +103,10 @@ export interface Lead {
   organization_name: string | null;
   service_category: string | null;  // F-04: אופציונלי
   service_subtype: string | null;
+  // הצעת AI לסיווג, ממתינה לאישור (Gmail intake). UI מציג banner כל
+  // עוד `suggested_service_category` קיים ו-`service_category` עוד null.
+  suggested_service_category: string | null;
+  suggested_service_subtype: string | null;
   status: string;
   waiting_on: string;
   priority_level: string;
@@ -137,16 +142,28 @@ export interface Lead {
 
 // ===== Booking page (ציבורי) =====
 
+export interface UpcomingBooking {
+  start: string;
+  end: string;
+  status: BookingStatus;
+}
+
 export interface BookingPageInfo {
   lead_name: string;
   service_category: string | null;  // F-04: אופציונלי
   service_subtype: string | null;
   default_duration_minutes: number;
   timezone: string;
-  has_active_booking: boolean;
-  active_booking_at: string | null;
-  active_booking_end: string | null;
-  active_booking_status: string | null;
+  // הפגישות שכבר קבועות ללקוח. עד לשינוי הזה פגישה קיימת *חסמה* את
+  // הדף; עכשיו היא באנר מעל בורר המועדים, והלקוח יכול לקבוע עוד אחת.
+  upcoming_bookings: UpcomingBooking[];
+  // false כשהלקוח הגיע לתקרה — הבורר מוסתר.
+  can_book_more: boolean;
+  max_bookings: number;
+  // גבולות בחירת התאריך — YYYY-MM-DD בשעון ישראל, מחושבים בשרת.
+  // `booking_horizon_end` = היום האחרון שאפשר לקבוע בו (סוף החודש הבא).
+  today: string;
+  booking_horizon_end: string;
 }
 
 export interface TimeSlot {
@@ -171,8 +188,10 @@ export interface CreateBookingResponse {
   slot_end: string;
 }
 
-// ===== Booking admin (אישור/דחייה ע"י נועה/עוזרת) =====
+// ===== Booking admin (צפייה וביטול ע"י נועה/עוזרת) =====
 
+// `pending_approval` ו-`rejected` נשארים בטיפוס עבור שורות שנוצרו לפני
+// ביטול שלב האישור. המערכת לא מייצרת אותם יותר.
 export type BookingStatus =
   | "pending_approval"
   | "approved"
@@ -186,25 +205,12 @@ export interface BookingRead {
   requested_slot_end: string;
   status: BookingStatus;
   google_calendar_event_id: string | null;
+  // מה שהליד הזין בדף קביעת הפגישה. null בפגישות ישנות.
+  contact_phone: string | null;
+  notes: string | null;
   created_at: string;
   approved_at: string | null;
   rejected_at: string | null;
-}
-
-export interface PendingBookingItem {
-  id: string;
-  lead_id: string;
-  lead_name: string;
-  lead_phone: string | null;
-  service_category: string | null;  // F-04: אופציונלי
-  service_subtype: string | null;
-  requested_slot_start: string;
-  requested_slot_end: string;
-  created_at: string;
-}
-
-export interface PendingBookingsResponse {
-  items: PendingBookingItem[];
 }
 
 export interface LeadCreate {
@@ -218,6 +224,7 @@ export interface LeadCreate {
   source_detail?: string | null;
   preferred_contact?: PreferredContact;
   priority_level?: PriorityLevel;
+  is_returning_customer?: boolean;  // §7.2 — default false ב-backend
   personal_note?: string | null;
   lead_message: string;  // תוכן הפנייה — חובה בטופס הידני
 }
@@ -306,6 +313,22 @@ export interface QuickActionChipUpdate {
   auto_followup_days?: number | null;
   sort_order?: number;
   is_active?: boolean;
+}
+
+// תוצאת POST /leads/{id}/apply-chip/{chip_id} — Spec v2.1 §16.4 +
+// "אין סיגה אחורה" (ראה ApplyChipResponse ב-backend).
+// status_preserved=True כש-chip ניסה להציב סטטוס מוקדם יותר בזרימה
+// (PROPOSAL_SENT/BOOKING_PENDING/BOOKED → IN_PROGRESS). ה-frontend
+// מציג toast רך ב-booking_pending/booked, ושקט ב-proposal_sent.
+export type ChipPreservedReason =
+  | "proposal_sent"
+  | "booking_pending"
+  | "booked";
+
+export interface ApplyChipResponse {
+  lead: Lead;
+  status_preserved: boolean;
+  preserved_reason: ChipPreservedReason | null;
 }
 
 export interface StuckTaskItem {
@@ -405,12 +428,53 @@ export interface DailySummary {
   generated_at: string;
 }
 
+// C.1/C.2 §6.8: סיכומי AI נרטיביים. ה-output הוא JSON מבני עם סקציות
+// קבועות + רשימת סקציות מושמטות (omitted_sections). לפי האפיון, סקציה
+// שהושמטה לא מוצגת ב-UI.
+
+export interface AiSummaryOutputDaily {
+  bottom_line: string;
+  highlights: string[];
+  needs_attention: string[];
+  tomorrow: string | null;
+  omitted_sections: ("highlights" | "needs_attention" | "tomorrow")[];
+}
+
+export interface AiSummaryOutputWeekly {
+  bottom_line: string;
+  week_overview: string;
+  trends_vs_last_week: string | null;
+  what_worked: string[];
+  what_stuck: string[];
+  next_week_focus: string | null;
+  omitted_sections: (
+    | "trends_vs_last_week"
+    | "what_worked"
+    | "what_stuck"
+    | "next_week_focus"
+  )[];
+}
+
+export interface AiSummary {
+  id: string;
+  type: "daily" | "weekly";
+  date_range_start: string; // YYYY-MM-DD
+  date_range_end: string; // YYYY-MM-DD
+  output: AiSummaryOutputDaily | AiSummaryOutputWeekly;
+  inaccurate_count: number;
+  created_at: string;
+}
+
 export interface HomeDashboard {
-  today_actions: TodayActionItem[];
-  new_leads: LeadCard[];
-  pending: LeadCard[];
+  // "לוח בוקר" — מונים לבלוקי הסטטוס; הרשימות המלאות בדפים הייעודיים
+  // (/today, /pending, /leads).
+  new_leads_24h_count: number;
+  urgent_no_first_response_count: number;
   weekly_insights: WeeklyInsights;
   daily_summary: DailySummary | null;
+  // C.1/C.2 §6.8 — null אם ה-cron של אותו טווח עוד לא רץ או נכשל ב-AI.
+  ai_daily_summary: AiSummary | null;
+  ai_weekly_summary: AiSummary | null;
 }
 
 // תוצאת GET /dashboard/poll — delta מאז ה-poll הקודם.
@@ -541,4 +605,73 @@ export interface PaginatedResponse<T> {
   total: number;
   page: number;
   page_size: number;
+}
+
+// ===== Followup rules (§17.1) =====
+// rule_key מתאים ל-TaskType value (first_response/lecture_inquiry/
+// warm_followup/proposal_followup/dormant_check). הוספה/מחיקה אסורה
+// דרך ה-API — רק עריכת ערכים.
+
+export type FollowupTimeUnit = "hours" | "days";
+
+export interface FollowupRule {
+  rule_key: string;
+  interval_value: number;
+  interval_unit: FollowupTimeUnit;
+  repeat_count: number;
+  repeat_interval_value: number;
+  repeat_interval_unit: FollowupTimeUnit;
+}
+
+export interface FollowupRuleUpdate {
+  interval_value?: number;
+  interval_unit?: FollowupTimeUnit;
+  repeat_count?: number;
+  repeat_interval_value?: number;
+  repeat_interval_unit?: FollowupTimeUnit;
+}
+
+// ===== Google Calendar — חיבור ובחירת יומנים =====
+
+export interface GoogleCalendarStatus {
+  connected: boolean;
+  google_account_email?: string | null;
+  // יומן היעד — היומן שאליו נכתבות הפגישות ושעליו רשום ה-watch.
+  calendar_id?: string | null;
+  // יומנים *נוספים* שנחשבים "תפוס" בחישוב הזמינות בלבד.
+  busy_calendar_ids: string[];
+  timezone?: string | null;
+  connected_at?: string | null;
+  auth_invalid: boolean;
+}
+
+// accessRole של Google: freeBusyReader רואה רק פנוי/תפוס; רק writer
+// ו-owner מאפשרים ליצור אירוע, ולכן רק הם יכולים לשמש כיומן יעד.
+export type GoogleCalendarAccessRole =
+  | "freeBusyReader"
+  | "reader"
+  | "writer"
+  | "owner";
+
+export interface GoogleCalendarListItem {
+  id: string;
+  summary: string;
+  primary: boolean;
+  access_role: GoogleCalendarAccessRole | string;
+}
+
+/** מה שהדף הפתוח צריך לפני שהוא טוען זמינות. אין כאן שם, קטגוריה או
+ *  פגישות קיימות — אין ליד שממנו הם היו נלקחים. `today` ו-
+ *  `booking_horizon_end` הם YYYY-MM-DD בשעון ישראל, מחושבים בשרת. */
+export interface OpenBookingPageInfo {
+  default_duration_minutes: number;
+  timezone: string;
+  today: string;
+  booking_horizon_end: string;
+}
+
+/** תשובת הקישור הפתוח. בלי מזהה — אין ללקוח מה לעשות איתו. */
+export interface OpenBookingResponse {
+  slot_start: string;
+  slot_end: string;
 }

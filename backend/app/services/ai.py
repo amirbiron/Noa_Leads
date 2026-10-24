@@ -384,10 +384,13 @@ class DormantSuggestionResult(BaseModel):
 class DailySummaryResult(BaseModel):
     """תוצאת סיכום יומי (C.1, §5.3). max_length + item constraints + enum של
     omitted_sections — תואמים 1:1 ל-output schema באפיון. ערך מחוץ לסכמה (typo /
-    סקציה לא מוכרת / מחרוזת ארוכה מדי) נכשל ב-Pydantic → regen (§6.6)."""
+    סקציה לא מוכרת / מחרוזת ארוכה מדי) נכשל ב-Pydantic → regen (§6.6).
+
+    הערה: סקציית "today" הוסרה (החלטת מוצר — הסיכום מתחיל ישר ב-bottom_line
+    + לידים בולטים + תשומת לב). סיכומים ישנים בDB עם השדה ימשיכו להיטען
+    דרך `AiSummaryRead.output: dict` — Pydantic לא מתערב שם."""
 
     bottom_line: str = Field(min_length=1, max_length=280)
-    today: str = Field(min_length=1, max_length=560)
     highlights: list[Annotated[str, Field(min_length=1, max_length=280)]] = Field(
         default_factory=list, max_length=3
     )

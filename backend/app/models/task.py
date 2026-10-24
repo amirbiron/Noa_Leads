@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
-from sqlalchemy import DateTime, ForeignKey, Index, String, func
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -66,6 +66,14 @@ class Task(UUIDPrimaryKeyMixin, Base):
     )
     completed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+
+    # §17.1 — מונה תזכורות פולואפ שנשלחו עד עכשיו ב-mark_overdue cron.
+    # 0 = טרם הוצגה. מוגבל ע"י FollowupRule.repeat_count של ה-rule_key
+    # המתאים ל-task.type (live lookup ב-cron, בלי snapshot). ערך מחדל
+    # שומר על התנהגות נוכחית של tasks ישנים.
+    current_iteration: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
     )
 
     lead: Mapped["Lead"] = relationship(back_populates="tasks")

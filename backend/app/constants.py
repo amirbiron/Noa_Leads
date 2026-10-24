@@ -109,6 +109,7 @@ class SourceChannel(StrEnum):
     FACEBOOK = "facebook"
     INSTAGRAM = "instagram"
     WHATSAPP = "whatsapp"
+    PHONE = "phone"  # נוסף לטופס הזנה ידנית — שיחת טלפון נכנסת/יוצאת
     OTHER = "other"
 
 
@@ -121,6 +122,38 @@ class ClosureReason(StrEnum):
     WENT_WITH_OTHER = "went_with_other"
     DUPLICATE = "duplicate"
     OTHER = "other"
+
+
+# ===== מקורות ביטול פגישה =====
+class BookingCancelSource(StrEnum):
+    """מי ביטל את הפגישה — נכתב ל-`metadata.source` של MEETING_CANCELED.
+
+    ההבחנה אינה תיעוד בלבד: `jobs/post_meeting_tasks.py` מחליט לפיה אם
+    הפגישה **התקיימה**. ביטול שקרה *לפני* המועד אומר שלא — ולכן אסור
+    ליצור משימת "עדכני מה היה בפגישה".
+
+    הערכים חיים ב-enum ולא כמחרוזות מפוזרות כדי שמסלול ביטול חדש לא
+    יישכח מהרשימה למטה. זה כבר קרה: `lead_closed` נוסף ולא נכלל, מה
+    שהיה מייצר משימה מיותרת לליד שנסגר עם פגישה עתידית ואז נפתח מחדש.
+    """
+
+    # נועה מחקה את האירוע ביומן Google (סנכרון הפוך).
+    GOOGLE_SYNC = "google_calendar_sync"
+    # נועה לחצה "ביטול פגישה" בממשק.
+    MANUAL = "manual_cancel"
+    # הליד נסגר (WON/LOST/ARCHIVED) ופגישות עתידיות בוטלו יחד איתו.
+    LEAD_CLOSED = "lead_closed"
+    # ה-cron ניקה פגישה שמועדה **עבר** ולא נסגרה ידנית. כאן הפגישה כן
+    # התקיימה — רק לא עודכנה — ולכן המקור הזה *אינו* ברשימה שמתחתיו.
+    EXPIRE_STALE_CRON = "expire_stale_cron"
+
+
+# מקורות שמשמעותם "הפגישה לא התקיימה" — כל ביטול שמתרחש לפני המועד.
+BOOKING_CANCEL_SOURCES_MEETING_NOT_HELD: tuple[str, ...] = (
+    BookingCancelSource.GOOGLE_SYNC.value,
+    BookingCancelSource.MANUAL.value,
+    BookingCancelSource.LEAD_CLOSED.value,
+)
 
 
 # ===== סוגי activities (audit log) =====

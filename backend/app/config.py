@@ -40,6 +40,10 @@ class Settings(BaseSettings):
 
     # ===== Anthropic =====
     anthropic_api_key: str | None = None
+    # OpenAI — ספק AI שני, בלעדי לתמלול קולי (§13.3, gpt-4o-transcribe).
+    # נפרד מ-Anthropic. אם לא מוגדר → ה-endpoint של תמלול יחזיר 503
+    # והפיצ'ר מושבת בלי לשבור את ה-app.
+    openai_api_key: str | None = None
     # Phase 3 Stage 16: model resolution. defaults לפי spec §19.1.
     # ה-overrides per use case nullable — אם None יורש מ-FAST/QUALITY.
     # שינוי מודל בעתיד = env var ב-Render, בלי deploy.

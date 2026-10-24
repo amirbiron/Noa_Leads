@@ -121,3 +121,43 @@ def normalize_for_storage(phone: str | None) -> str | None:
 
     # לא ישראלי — מקבלים כפי שהוא אחרי ניקוי
     return _clean(s)
+
+
+# ----- ולידציית קלט משותפת לכל שדה טלפון שמגיע מבחוץ -----
+
+# תווים מותרים בקלט טלפון. הרשימה הלבנה חוסמת תווי בקרה וסינטקס פעיל
+# (HTML, SQL, ANSI) לפני שהערך מגיע ל-normalize_for_storage או ל-output
+# כלשהו — הטלפון מוצג גם בתיאור אירוע ביומן Google ובהודעות Telegram.
+_PHONE_ALLOWED_CHARS = set("0123456789+-() .*")
+
+# תקרה שמרנית לקלט גולמי, *לפני* נרמול. מגנה מפני מחרוזת ענק שתגיע
+# ל-regex, ומשאירה מרווח מעל אורך העמודה הצרה ביותר (leads.phone = 20)
+# כדי שהשגיאה תהיה הודעה בעברית ולא StringDataRightTruncation מה-DB.
+MAX_PHONE_INPUT_LENGTH = 32
+
+
+def normalize_phone_input(v: str | None) -> str | None:
+    """ולידציה + נרמול של טלפון שהתקבל מהמשתמש.
+
+    זו הנקודה היחידה שבה כללי הטלפון נאכפים על קלט חיצוני — גם ליצירה
+    ועדכון של ליד (`app/schemas/lead.py`) וגם לדף קביעת הפגישה הציבורי
+    (`app/schemas/booking_page.py`). שכפול הלוגיקה בין השניים היה מבטיח
+    שהם יסטו זה מזה עם הזמן.
+
+    נקראת מתוך field_validator של Pydantic, ולכן `ValueError` שנזרק כאן
+    הופך ל-422 עם ההודעה בעברית — ולא ל-500 (CLAUDE.md כלל 3).
+
+    ראה: docs/Skills/israeli-phone-formatter/SKILL.md
+    """
+    if v is None:
+        return None
+    cleaned = v.strip()
+    if not cleaned:
+        return None
+    if len(cleaned) > MAX_PHONE_INPUT_LENGTH:
+        raise ValueError("מספר הטלפון ארוך מדי.")
+    if not all(c in _PHONE_ALLOWED_CHARS for c in cleaned):
+        raise ValueError("מספר טלפון מכיל תווים לא חוקיים")
+    # אימות תבנית ישראלית מלאה + פורמטינג אחיד. ValueError עם הסבר
+    # בעברית אם נראה ישראלי אבל לא תקין.
+    return normalize_for_storage(cleaned)

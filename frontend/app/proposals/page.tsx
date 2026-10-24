@@ -28,7 +28,7 @@ export default function ProposalsPage() {
   }, []);
 
   return (
-    <AppShell title="הצעות פתוחות">
+    <AppShell title="הצעות פתוחות" titleTermKey="page_proposals">
       {loading && (
         <div className="text-center text-gray-400 py-10 text-sm">טוען…</div>
       )}

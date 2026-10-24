@@ -42,7 +42,6 @@ _ONE_DAY = timedelta(days=1)
 # ולעולם לא חותכת טקסט. ערכי list הם מכסה *לכל פריט* ברשימה.
 _DAILY_WORD_CAPS: dict[str, int] = {
     "bottom_line": 40,
-    "today": 80,
     "highlights": 40,
     "needs_attention": 30,
     "tomorrow": 50,
@@ -90,10 +89,16 @@ def _section_grossly_over_limit(
 # לכן מזהים את קבוצת השמות שהוזרקו לקלט (מהבלוקים) ובודקים שכל שם שמופיע
 # בפלט קיים גם בה. שמרני בכוונה — עדיף לא לחסום (false-negative) על regen מיותר.
 # מחלצים מהקלט את הערכים שאחרי "שם:", "ליד:", ו-"ליד שדורש פוקוס:".
+#
+# pattern 3 (`ליד שדורש פוקוס:`) עוצר ב-`|` *או* `(`, defense-in-depth:
+# `lead_id:` של פיצ'ר ההיפר-קישור מתווסף עם separator `|` ולא היה עוצר את
+# pattern 3 הישן שעצר רק ב-`(`. ה-format ב-summary_inputs.py מציב כעת את
+# ה-`(kind)` לפני ה-`| lead_id:`, אז גם ה-regex *וגם* ה-format שלוחים את
+# התלות, ולא רק אחד מהם.
 _INPUT_NAME_PATTERNS = (
     re.compile(r"שם:\s*([^|\n]+?)\s*(?:\||$)", re.MULTILINE),
     re.compile(r"ליד:\s*([^|\n]+?)\s*(?:\||$)", re.MULTILINE),
-    re.compile(r"ליד שדורש פוקוס:\s*([^(\n]+?)\s*(?:\(|$)", re.MULTILINE),
+    re.compile(r"ליד שדורש פוקוס:\s*([^(|\n]+?)\s*(?:[(|]|$)", re.MULTILINE),
 )
 
 

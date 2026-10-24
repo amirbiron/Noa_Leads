@@ -28,14 +28,19 @@ export function LeadCardRow({
   // (ברירת מחדל) = אין סימון, כי רוב הלידים בכל מקרה אצל נועה.
   // האייקון מופיע אחרי הלייבל ("הלקוח ⏳") — סדר קריאה טבעי ב-RTL.
   const waitingOnClient = lead.waiting_on === "CLIENT";
-  // has_recent_reply נדלק גם על create_booking_request (booking.py קובע
-  // reply_boost_until). הלייבל מותאם לפי המקור — last_activity_type
-  // מבחין בין בקשת תור (meeting_requested) להודעה אמיתית. status בלבד
-  // לא מספיק: ליד BOOKING_PENDING עם הודעה אמיתית מהלקוח (inbound) צריך
-  // עדיין "תגובה חדשה", לא "בקשת תור חדשה".
+  // has_recent_reply נדלק גם כשליד קובע פגישה (booking.py קובע
+  // reply_boost_until). הלייבל מותאם לפי המקור דרך last_activity_type.
+  //
+  // `meeting_approved` הוא המקרה השכיח מאז שהפגישה נקבעת מיד — זה מה
+  // ש-`create_booking_request` כותב. `meeting_requested` נשאר עבור
+  // לידים שקבעו לפני השינוי, כדי שכרטיסים ישנים לא יאבדו את ההקשר.
+  // status בלבד לא מספיק: ליד BOOKED עם הודעה אמיתית מהלקוח (inbound)
+  // צריך עדיין "תגובה חדשה", לא "פגישה נקבעה".
   const recentReplyLabel =
-    lead.last_activity_type === "meeting_requested"
-      ? "בקשת תור חדשה"
+    lead.last_activity_type === "meeting_approved"
+      ? "פגישה נקבעה"
+      : lead.last_activity_type === "meeting_requested"
+      ? "בקשת פגישה חדשה"
       : "תגובה חדשה";
   return (
     <Link

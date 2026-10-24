@@ -27,7 +27,8 @@ from app.db.session import AsyncSessionLocal
 from app.models.daily_summary import DailySummary
 from app.models.lead import Lead
 from app.models.task import Task
-from app.utils.work_hours import ISRAEL_TZ, to_israel_tz
+from app.services import summaries as summaries_service
+from app.utils.work_hours import ISRAEL_TZ, should_skip_daily_summary, to_israel_tz
 from jobs._runner import run_job
 
 logger = logging.getLogger("jobs.daily_summary")
@@ -125,18 +126,31 @@ async def _gather_stats(db: AsyncSession) -> dict[str, int]:
 
 async def daily_summary() -> None:
     """
-    מחשב את ה-stats ושומר row חדש ב-`daily_summaries` לתאריך הנוכחי בישראל.
+    שני סיכומים יומיים שמחושבים זה אחר זה ב-cron של 19:00 ישראל:
 
-    first-write-wins: ON CONFLICT (summary_date) DO NOTHING — אם כבר קיים
-    snapshot של היום, הוא *לא* משוכתב, כך שהסיכום קבוע אחרי הריצה הראשונה.
-    אם ריצת 19:00 נכשלה ואין עדיין row — ריצה מאוחרת יותר באותו יום תכתוב
-    (אין conflict), עם חלון 24h מאותו רגע (recovery). בטוח גם אם שתי ריצות
-    מתנגשות — ה-DO NOTHING על summary_date UNIQUE הוא אטומי ברמת ה-DB.
+    1. **סטטיסטי (F-07):** ספירות יבשות → `daily_summaries`. snapshot
+       קבוע ל-bubble בדשבורד. first-write-wins (`ON CONFLICT DO NOTHING`)
+       על `summary_date` — re-run לא דורס.
+
+    2. **נרטיבי (C.1 §6.5):** טקסט מבוסס-AI → `ai_summaries`. נצרך
+       ע"י כרטיס ה-AI בדשבורד (טוגל מול הסטטיסטי). יקר ויכול להיכשל,
+       אז רץ ב-session נפרד אחרי שהסטטיסטי כבר committed — כשל ב-AI
+       לא יבטל את הסטטיסטי.
+
+    שני המסלולים מותנים ב-`should_skip_daily_summary` (§6.7) — שבת/חג
+    בישראל = אין עבודה, אין סיכום (כדי שלא יראה "0 פעולות" כאילו המערכת
+    מושבתת).
     """
+    now_utc = datetime.now(timezone.utc)
+    if should_skip_daily_summary(now_utc):
+        logger.info("Daily summary skipped (Saturday/holiday/eve in Israel)")
+        return
+
+    today_israel = to_israel_tz(now_utc).date()
+
+    # שלב 1 — הסטטיסטי (F-07). session נפרד שמסתיים ב-commit לפני שלב 2.
     async with AsyncSessionLocal() as db:
         stats = await _gather_stats(db)
-        today_israel = to_israel_tz(datetime.now(timezone.utc)).date()
-
         stmt = pg_insert(DailySummary).values(
             summary_date=today_israel,
             new_leads_today=stats["new_leads_today"],
@@ -148,8 +162,24 @@ async def daily_summary() -> None:
         insert_stmt = stmt.on_conflict_do_nothing(index_elements=["summary_date"])
         await db.execute(insert_stmt)
         await db.commit()
+    logger.info("Daily statistical summary for %s: %s", today_israel, stats)
 
-    logger.info("Daily summary snapshot for %s: %s", today_israel, stats)
+    # שלב 2 — הנרטיבי (C.1 §6.5). session חדש; כשל לא מבטל את הסטטיסטי.
+    async with AsyncSessionLocal() as db:
+        ai_summary = await summaries_service.generate_and_store_daily_summary(
+            db, now_utc=now_utc
+        )
+        # ה-service עושה flush בלבד (כלל 15) — caller commit.
+        if ai_summary is not None:
+            await db.commit()
+
+    if ai_summary is not None:
+        logger.info("Daily AI summary generated for %s", today_israel)
+    else:
+        logger.warning(
+            "Daily AI summary not generated for %s (AI unavailable)",
+            today_israel,
+        )
 
 
 if __name__ == "__main__":

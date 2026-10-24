@@ -151,6 +151,13 @@
 
 **שינוי ב-`create_calendar_event`:** to lookup `service_subtype` ל-עברית דרך המיפוי הקיים.
 
+> **עודכן ספטמבר 2026 — ההגדרה עברה ל-Spec.** תוכן האירוע מוגדר עכשיו
+> ב-`docs/SpecV2.1.md §10.2` (טבלה מלאה של `summary` / `description` /
+> `colorId` / `extendedProperties`), והוא כולל שני שדות שלא היו כאן:
+> **טלפון מהפגישה** ו**הערה מהלקוח**. הבנייה עצמה חולצה לפונקציה
+> טהורה `build_event_description` ב-`app/services/booking.py`, כדי
+> שתהיה ניתנת לבדיקה בלי חשבון Google חי.
+
 ---
 
 ## 4. באג: ליד חדש מסומן "נתקע ללא צעד הבא"

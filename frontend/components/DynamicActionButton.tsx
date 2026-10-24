@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ArrowLeft } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import type { BookingRead, Lead } from "@/lib/types";
@@ -21,9 +21,23 @@ type NextAction =
   | { kind: "template"; role: "opening" | "proposal" | "proposal_followup"; label: string; description?: string }
   | { kind: "direct"; action: string; label: string; description?: string };
 
+// הפגישה שכבר הסתיימה, אם יש כזו. `bookings` מגיע ממוין בסדר עולה,
+// ולכן `findLast` מחזיר את האחרונה שהסתיימה — לא את הראשונה. הגרסה
+// הקודמת קיבלה פגישה *אחת* מהשרת, והשרת החזיר את הרחוקה ביותר; לליד
+// עם פגישה שהסתיימה ועוד אחת עתידית הכפתור פשוט לא הופיע.
+function lastFinished(bookings: BookingRead[]): BookingRead | null {
+  const now = Date.now();
+  for (let i = bookings.length - 1; i >= 0; i--) {
+    if (new Date(bookings[i].requested_slot_end).getTime() <= now) {
+      return bookings[i];
+    }
+  }
+  return null;
+}
+
 function nextAction(
   lead: Lead,
-  activeBooking: BookingRead | null,
+  bookings: BookingRead[],
 ): NextAction | null {
   // לידים סגורים: לא מציגים פעולה ראשית.
   if (lead.status === "WON" || lead.status === "LOST" || lead.status === "ARCHIVED") {
@@ -54,15 +68,15 @@ function nextAction(
       return { kind: "template", role: "proposal", label: proposalLabel };
     case "PROPOSAL_SENT":
       return { kind: "template", role: "proposal_followup", label: followupLabel };
-    case "BOOKING_PENDING":
-      return { kind: "direct", action: "approve_meeting", label: "אשרי פגישה" };
+    // BOOKING_PENDING נשאר רק לשורות legacy — פגישה נקבעת מאושרת
+    // מיד, ואין יותר פעולת "אשרי פגישה". הפעולה הישנה הועברה את הליד
+    // ל-BOOKED **בלי** ליצור אירוע ביומן ובלי לגעת בשורת ה-Booking,
+    // ולכן היא נמחקה גם מה-state machine בשרת.
     case "BOOKED": {
       // מציע "סמני שהפגישה התקיימה" רק אחרי שהפגישה הסתיימה (slot_end).
       // ה-backend ממשיך להחזיר APPROVED past-end booking כל עוד הליד
       // עדיין BOOKED — פגישות קצרות (<30 דק') ופגישות שעבר זמנן עובדות.
-      if (!activeBooking) return null;
-      const end = new Date(activeBooking.requested_slot_end).getTime();
-      if (Date.now() < end) return null;
+      if (!lastFinished(bookings)) return null;
       return {
         kind: "direct",
         action: "log_call_completed",
@@ -87,35 +101,40 @@ interface SheetState {
 
 export function DynamicActionButton({
   lead,
-  activeBooking,
+  bookings,
   onActionDone,
 }: {
   lead: Lead;
-  activeBooking: BookingRead | null;
+  bookings: BookingRead[];
   onActionDone: () => void;
 }) {
-  // Tick לרענון UI כשעובר ה-slot_end בזמן שהמסך פתוח.
+  // Tick לרענון UI כשעוברת הפגישה **הקרובה ביותר** בזמן שהמסך פתוח.
+  // עם כמה פגישות, טיימר על האחרונה היה מפספס את הרגע שבו הראשונה
+  // מסתיימת והכפתור אמור להופיע.
   const [, forceRender] = useState(0);
+  const nextEndMs = useMemo(() => {
+    if (lead.status !== "BOOKED") return null;
+    const now = Date.now();
+    const future = bookings
+      .filter((b) => b.status === "approved")
+      .map((b) => new Date(b.requested_slot_end).getTime())
+      .filter((t) => t > now);
+    return future.length > 0 ? Math.min(...future) : null;
+  }, [lead.status, bookings]);
+
   useEffect(() => {
-    if (
-      lead.status !== "BOOKED" ||
-      !activeBooking ||
-      activeBooking.status !== "approved"
-    ) {
-      return;
-    }
-    const end = new Date(activeBooking.requested_slot_end).getTime();
-    const msUntilEnd = end - Date.now();
+    if (nextEndMs === null) return;
+    const msUntilEnd = nextEndMs - Date.now();
     if (msUntilEnd <= 0) return;
     const t = setTimeout(() => forceRender((n) => n + 1), msUntilEnd + 1000);
     return () => clearTimeout(t);
-  }, [lead.status, activeBooking]);
+  }, [nextEndMs]);
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sheet, setSheet] = useState<SheetState | null>(null);
 
-  const next = nextAction(lead, activeBooking);
+  const next = nextAction(lead, bookings);
   if (!next) return null;
 
   async function openTemplateSheet(
@@ -168,7 +187,7 @@ export function DynamicActionButton({
     // capture next locally — TS לא שומר narrowing של ה-outer scope בתוך
     // async closure שמופעלת ע"י React handler. הקריאה ל-nextAction
     // דטרמיניסטית באותו render, אז זה זהה ל-next שנבדק למעלה.
-    const n = nextAction(lead, activeBooking);
+    const n = nextAction(lead, bookings);
     if (!n) return;
     if (n.kind === "template") {
       await openTemplateSheet(n.role);

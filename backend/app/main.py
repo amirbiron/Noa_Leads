@@ -15,6 +15,7 @@ from app.api.routes import auth as auth_routes
 from app.api.routes import booking_page as booking_routes
 from app.api.routes import bookings as bookings_routes
 from app.api.routes import dashboard as dashboard_routes
+from app.api.routes import followup_rules as followup_rules_routes
 from app.api.routes import quick_action_chips as chips_routes
 from app.api.routes import google_calendar as google_routes
 from app.api.routes import gmail_webhook as gmail_webhook_routes
@@ -27,6 +28,7 @@ from app.api.routes import settings as settings_routes
 from app.api.routes import setup as setup_routes
 from app.api.routes import tasks as tasks_routes
 from app.api.routes import templates as templates_routes
+from app.api.routes import transcription as transcription_routes
 from app.api.routes import users as users_routes
 from app.config import get_settings
 from app.core.exceptions import AppException
@@ -36,7 +38,14 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # מקום עתידי ל-init של חיבורי DB / clients חיצוניים
+    # eager validation: encryption חייב להיות תקין לפני שנותנים traffic.
+    # אם SECRETS_ENCRYPTION_KEY חסר/invalid או APP_ENV != "development",
+    # זה זורק RuntimeError והservice לא יעלה. בלי זה, deploy "מצליח"
+    # ו-OAuth flow ראשון נופל שעות מאוחר יותר עם stack trace שקשה
+    # לקריאה. ראה: docs/recurring-bug-patterns.md Pattern 5 Variant 5c.
+    from app.utils.encryption import assert_encryption_ready
+
+    assert_encryption_ready()
     yield
 
 
@@ -45,7 +54,7 @@ async def lifespan(app: FastAPI):
 _FIELD_FRIENDLY_MESSAGES: dict[str, str] = {
     "phone": "מספר הטלפון שהוזן לא תקין.",
     "email": "כתובת המייל שהוזנה לא תקינה.",
-    "full_name": "שם הליד נדרש.",
+    "full_name": "יש להזין שם.",
     "service_category": "יש לבחור קטגוריית שירות.",
     "service_subtype": "יש לבחור תת-קטגוריית שירות.",
     "source_channel": "יש לבחור מקור פנייה.",
@@ -77,6 +86,29 @@ def _humanize_validation_error(exc: RequestValidationError) -> str:
     # מדלגים על "body"/"query"/"path" שמופיע ראשון, ולוקחים את השדה
     field_parts = [str(p) for p in loc if p not in ("body", "query", "path")]
     field = field_parts[-1] if field_parts else ""
+
+    # **סוג השגיאה קודם לשם השדה.** המיפוי למטה הוא פר-שדה בלבד, ולכן
+    # הוא מוחץ שלוש תקלות שונות לאותה הודעה: שדה חסר, ערך שנדחה
+    # בוולידטור, וערך ארוך מדי. התוצאה היא סירוב שלא נוקב בסיבתו —
+    # שם באורך 201 תווים קיבל "שם הליד נדרש", כלומר נאמר למשתמש
+    # שהשדה *חסר* בזמן שהוא *ארוך מדי*, והוא שולח לחפש במקום הלא נכון.
+    error_type = first.get("type", "")
+    raw_msg = str(first.get("msg", ""))
+
+    # ולידטור שלנו שזרק ValueError כבר כתב הודעה בעברית למשתמש —
+    # מעבירים אותה כמות שהיא במקום לבלוע אותה. הבדיקה על תו עברי היא
+    # מה שמבטיח שלא נדליף הודעת ברירת מחדל באנגלית של Pydantic
+    # (כלל 3 ב-CLAUDE.md).
+    if error_type == "value_error":
+        own = raw_msg.removeprefix("Value error, ").strip()
+        if any("\u0590" <= ch <= "\u05ea" for ch in own):
+            return own
+
+    if error_type in ("string_too_long", "too_long"):
+        limit = (first.get("ctx") or {}).get("max_length")
+        if limit:
+            return f"הערך שהוזן ארוך מדי. מותרים עד {limit} תווים."
+        return "הערך שהוזן ארוך מדי."
 
     if field in _FIELD_FRIENDLY_MESSAGES:
         return _FIELD_FRIENDLY_MESSAGES[field]
@@ -169,6 +201,7 @@ def create_app() -> FastAPI:
     app.include_router(users_routes.router)
     app.include_router(programs_routes.router)
     app.include_router(settings_routes.router)
+    app.include_router(followup_rules_routes.router)
     app.include_router(setup_routes.router)
     app.include_router(chips_routes.router)
     app.include_router(google_routes.router)
@@ -177,6 +210,7 @@ def create_app() -> FastAPI:
     app.include_router(gmail_webhook_routes.router)
     app.include_router(booking_routes.router)
     app.include_router(bookings_routes.router)
+    app.include_router(transcription_routes.router)
     app.include_router(admin_routes.router)
 
     return app
