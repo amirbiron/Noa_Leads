@@ -23,10 +23,22 @@ bcrypt>=4.1.0,<5.0
 
 # ===== HTTP & external APIs =====
 httpx==0.28.1
+# נעול לגרסה מדויקת בכוונה — לא להעלות בלי תכנון:
+# 1. מגרסה 1.0.0 ה-SDK הסיר את temperature מ-messages.create, והסיכום היומי
+#    והשבועי שולחים temperature=0.5 (services/ai.py). מ-1.x ומעלה הם נופלים
+#    על TypeError עוד לפני שהבקשה יוצאת, ו-summaries.py תופס רק AIError — כך
+#    שריצת ה-cron נכשלת (exit 1) במקום לרשום "הסיכום לא נוצר".
+# 2. גרסה 2.0.0 עוברת לגרסת ה-API 2026-10-21, שבה temperature נדחה עם 400
+#    גם כשנשלח דרך extra_body. המעבר דורש החלטת מוצר על ה-0.5 שנקבע באפיון
+#    (docs/c1-c2-summaries-spec.md, שורת ה-temperature).
+# מדריך המעבר הרשמי: https://platform.claude.com/docs/en/api/migration-2026-10-21
 anthropic==0.42.0
 # OpenAI — ספק AI שני, בלעדי לתמלול קולי (§13.3, gpt-4o-transcribe).
 # נפרד מ-anthropic — שני מפתחות, שני לוגי עלות.
-openai>=1.0
+# נעול לגרסה מדויקת מאותה סיבה: עם ">=" כל דיפלוי מתקין את הגרסה האחרונה
+# שיצאה, ושינוי שובר נכנס לפרודקשן בלי שהתכוונו. 3.19.0 היא הגרסה שהייתה
+# האחרונה ב-PyPI כשנבנה הדיפלוי החי (23.9.2026).
+openai==3.19.0
 
 # ===== Phase 3 Stage 16: ניקוי תוכן מייל לפני AI =====
 # beautifulsoup4 לפרסור HTML. lxml = parser מהיר; fallback ל-html.parser
